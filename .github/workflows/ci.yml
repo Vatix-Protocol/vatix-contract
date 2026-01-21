@@ -5,6 +5,7 @@ on:
     branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,7 +30,7 @@ jobs:
           workspaces: contracts/market
       
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli --features opt
+        run: cargo install --locked stellar-cli
       
       - name: Format check
         run: cd contracts/market && cargo fmt --check
