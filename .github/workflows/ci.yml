@@ -5,7 +5,6 @@ on:
     branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
-  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,9 +28,6 @@ jobs:
         with:
           workspaces: contracts/market
       
-      - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli
-      
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
@@ -42,4 +38,4 @@ jobs:
         run: cd contracts/market && cargo test
       
       - name: Build
-        run: cd contracts/market && make build
+        run: cd contracts/market && cargo build --target wasm32-unknown-unknown
