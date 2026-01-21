@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String, BytesN};
+use soroban_sdk::{contracttype, Address, BytesN, String};
 
 /// Represents the possible states of a prediction market.
 #[derive(Clone, Debug, Eq, PartialEq)]

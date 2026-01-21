@@ -1,16 +1,16 @@
 #![no_std]
 
-mod storage;
-mod types;
 mod error;
-mod validation;
 mod events;
+mod oracle;
 mod positions;
 mod settlement;
-mod oracle;
+mod storage;
 mod test;
+mod types;
+mod validation;
 
-use soroban_sdk::{contract, contractimpl, /*Address, Env, String, BytesN */};
+use soroban_sdk::{contract, contractimpl /*Address, Env, String, BytesN */};
 
 #[contract]
 pub struct MarketContract;
