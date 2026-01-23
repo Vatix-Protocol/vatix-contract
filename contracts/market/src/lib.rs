@@ -15,7 +15,6 @@ mod types;
 #[allow(dead_code)]
 mod validation;
 #[allow(deprecated)]
-
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
