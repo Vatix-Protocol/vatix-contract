@@ -9,6 +9,7 @@ mod settlement;
 
 #[allow(dead_code)]
 mod storage;
+#[cfg(test)]
 mod test;
 mod types;
 #[allow(dead_code)]
