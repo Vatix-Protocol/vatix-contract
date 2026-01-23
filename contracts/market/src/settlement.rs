@@ -44,10 +44,7 @@ pub fn validate_settlement_eligibility(
 /// 2. Calculates payout
 /// 3. Marks position as settled
 /// 4. Returns payout amount
-pub fn execute_settlement(
-    position: &mut Position,
-    market: &Market,
-) -> Result<i128, ContractError> {
+pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i128, ContractError> {
     validate_settlement_eligibility(position, market)?;
 
     let outcome = market.result.ok_or(ContractError::MarketNotResolved)?;
@@ -63,11 +60,10 @@ pub fn execute_settlement(
 /// # Arguments
 /// * `position` - User's position
 /// * `market` - Market (may or may not be resolved)
-pub fn calculate_potential_payout(
-    position: &Position,
-    market: &Market,
-) -> Option<i128> {
-    market.result.map(|outcome| calculate_payout(position, outcome))
+pub fn calculate_potential_payout(position: &Position, market: &Market) -> Option<i128> {
+    market
+        .result
+        .map(|outcome| calculate_payout(position, outcome))
 }
 
 /// Calculate statistics about settlements
@@ -150,7 +146,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Active, None);
         let pos = create_test_position(&env, 100, 0, false);
-        
+
         let result = validate_settlement_eligibility(&pos, &market);
         assert_eq!(result, Err(ContractError::MarketNotResolved));
     }
@@ -160,7 +156,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let pos = create_test_position(&env, 100, 0, true);
-        
+
         let result = validate_settlement_eligibility(&pos, &market);
         assert_eq!(result, Err(ContractError::PositionAlreadySettled));
     }
@@ -170,7 +166,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let mut pos = create_test_position(&env, 100, 0, false);
-        
+
         let payout = execute_settlement(&mut pos, &market).unwrap();
         assert_eq!(payout, 100);
         assert!(pos.is_settled);
@@ -181,7 +177,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Resolved, Some(false));
         let mut pos = create_test_position(&env, 100, 30, false);
-        
+
         let payout = execute_settlement(&mut pos, &market).unwrap();
         assert_eq!(payout, 30);
     }
@@ -191,7 +187,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Active, None);
         let pos = create_test_position(&env, 100, 0, false);
-        
+
         assert_eq!(calculate_potential_payout(&pos, &market), None);
     }
 
@@ -200,7 +196,7 @@ mod tests {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let pos = create_test_position(&env, 100, 30, false);
-        
+
         assert_eq!(calculate_potential_payout(&pos, &market), Some(100));
     }
 

@@ -1,5 +1,5 @@
-use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 use crate::types::{Market, Position};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 
 const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
 const POSITIONS_KEY: Symbol = symbol_short!("POSITIONS");
@@ -81,7 +81,7 @@ mod test {
         let env = Env::default();
         let admin = Address::generate(&env);
         let contract_id = env.register(crate::MarketContract, ());
-        
+
         env.as_contract(&contract_id, || {
             set_admin(&env, &admin);
             assert_eq!(get_admin(&env), admin);
@@ -125,7 +125,7 @@ mod test {
             assert!(!has_market(&env, &market_id));
             set_market(&env, &market_id, &market);
             assert!(has_market(&env, &market_id));
-            
+
             let saved_market = get_market(&env, &market_id).unwrap();
             assert_eq!(saved_market.id, market.id);
             assert_eq!(saved_market.question, market.question);
