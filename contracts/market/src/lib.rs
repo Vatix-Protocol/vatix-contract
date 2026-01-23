@@ -3,6 +3,7 @@
 mod error;
 mod events;
 mod oracle;
+#[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
 mod settlement;

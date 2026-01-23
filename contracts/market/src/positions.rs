@@ -2,9 +2,7 @@ use crate::error::ContractError;
 use crate::types::{Market, Position};
 use soroban_sdk::{Address, Env, String};
 
-#[allow(dead_code)]
 const BASIS_POINTS: i128 = 10_000;
-#[allow(dead_code)]
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
 
 /// Calculate required locked collateral based on net position
@@ -13,7 +11,6 @@ pub const STROOPS_PER_USDC: i128 = 10_000_000;
 /// - Net YES  => lock net_yes * price
 /// - Net NO   => lock net_no * (1 - price)
 /// - Hedged   => lock 0
-#[allow(dead_code)]
 pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_price: i128) -> i128 {
     if yes_shares == no_shares {
         return 0;
@@ -38,7 +35,6 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
 }
 
 /// Validate whether a proposed position change is allowed
-#[allow(dead_code)]
 pub fn validate_position_change(
     current_position: &Position,
     yes_delta: i128,
@@ -59,13 +55,11 @@ pub fn validate_position_change(
 /// Positive  => net long YES
 /// Negative  => net long NO
 /// Zero      => hedged
-#[allow(dead_code)]
 pub fn calculate_net_position(yes_shares: i128, no_shares: i128) -> i128 {
     yes_shares - no_shares
 }
 
 /// Check if a position is eligible for settlement
-#[allow(dead_code)]
 pub fn can_settle(position: &Position, market: &Market) -> bool {
     use crate::types::MarketStatus;
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
@@ -86,7 +80,6 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
 ///
 /// # Errors
 /// - InvalidShareAmount if deltas would make shares negative
-#[allow(dead_code)]
 pub fn update_position(
     env: &Env,
     market_id: &String,
