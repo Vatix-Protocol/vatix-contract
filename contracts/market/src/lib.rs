@@ -23,6 +23,7 @@ use crate::{
 };
 
 const BASIS_POINTS: i128 = 10_000;
+const STROOPS_PER_USDC: i128 = 10_000_000;
 
 #[contract]
 pub struct MarketContract;
