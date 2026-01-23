@@ -75,10 +75,11 @@ mod tests {
     #[test]
     fn test_update_position_new_user() {
         let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
         let user = sample_user(&env, 1);
         let market_id = String::from_str(&env, "market1");
 
-        let pos = env.as_contract(&user, || {
+        let pos = env.as_contract(&contract_id, || {
             MarketContract::update_position(
                 &env,
                 &market_id,
@@ -99,11 +100,12 @@ mod tests {
     #[test]
     fn test_update_position_existing_user() {
         let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
         let user = sample_user(&env, 2);
         let market_id = String::from_str(&env, "market2");
 
         // First update - buy YES
-        let _ = env.as_contract(&user, || {
+        let _ = env.as_contract(&contract_id, || {
             MarketContract::update_position(
                 &env,
                 &market_id,
@@ -116,7 +118,7 @@ mod tests {
         });
 
         // Second update - buy some NO
-        let pos = env.as_contract(&user, || {
+        let pos = env.as_contract(&contract_id, || {
             MarketContract::update_position(
                 &env,
                 &market_id,
@@ -176,10 +178,11 @@ mod tests {
     #[test]
     fn test_update_position_smoke() {
         let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
         let user = <Address as TestAddress>::generate(&env);
         let market_id = String::from_str(&env, "smoke-market");
 
-        let pos = env.as_contract(&user, || {
+        let pos = env.as_contract(&contract_id, || {
             MarketContract::update_position(
                 &env,
                 &market_id,

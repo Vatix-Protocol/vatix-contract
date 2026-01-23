@@ -89,7 +89,7 @@ impl MarketContract {
 ) -> Result<Position, ContractError> {
     // 1. Load or initialize position safely
     let mut position = crate::storage::get_position(env, market_id, user)
-        .unwrap_or_else(|_| Position {
+        .unwrap_or_else(|| Position {
             market_id: market_id.clone(),
             user: user.clone(),
             yes_shares: 0,
