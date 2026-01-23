@@ -14,6 +14,7 @@ mod test;
 mod types;
 #[allow(dead_code)]
 mod validation;
+#[allow(deprecated)]
 
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus};
@@ -47,8 +48,8 @@ impl MarketContract {
         // 3. Generate market ID: "market_" + market number
         let market_num = storage::increment_market_id(&env);
 
-        let mut market_id = String::from_slice(&env, "market_");
-        let num_str = unsafe { core::str::from_utf8_unchecked(&market_num.to_le_bytes()) };
+        let market_id = String::from_slice(&env, "market_");
+        let _num_str = unsafe { core::str::from_utf8_unchecked(&market_num.to_le_bytes()) };
         // 4. Create Market struct
         let market = Market {
             id: market_id.clone(),
