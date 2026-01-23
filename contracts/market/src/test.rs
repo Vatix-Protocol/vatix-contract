@@ -3,8 +3,8 @@
 // Tests for contract functions
 #[cfg(test)]
 mod tests {
-    use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
     use crate::types::MarketStatus;
+    use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
 
     #[test]
     fn test_initialize_market_success() {
@@ -33,8 +33,8 @@ mod tests {
             .expect("should initialize market");
 
             // Verify market was stored
-            let stored_market = crate::storage::get_market(&env, &market_id)
-                .expect("market should be stored");
+            let stored_market =
+                crate::storage::get_market(&env, &market_id).expect("market should be stored");
 
             assert_eq!(stored_market.id, market_id);
             assert_eq!(stored_market.question, question);
@@ -86,7 +86,12 @@ mod tests {
             crate::storage::set_admin(&env, &admin);
 
             let current_time = env.ledger().timestamp();
-            let end_time = current_time - 100; // In the past
+            // Use current_time if it's non-zero, otherwise use a small end_time
+            let end_time = if current_time > 100 {
+                current_time - 100 // In the past
+            } else {
+                0 // Well in the past (epoch)
+            };
             let question = String::from_str(&env, "Will BTC hit $100k?");
             let oracle_pubkey = BytesN::from_array(&env, &[0u8; 32]);
 

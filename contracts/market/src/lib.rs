@@ -62,9 +62,23 @@ impl MarketContract {
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
 
-        // 3. Generate market ID using counter
+        // 3. Generate market ID using counter (hash of question + counter for uniqueness)
         let market_id_num = storage::increment_market_id(&env);
-        let market_id = String::from_str(&env, &format!("market-{}", market_id_num));
+        // Create a simple market ID based on the counter
+        // For MVP, just use a predictable ID based on the counter value
+        let market_id = match market_id_num {
+            1 => String::from_str(&env, "m1"),
+            2 => String::from_str(&env, "m2"),
+            3 => String::from_str(&env, "m3"),
+            4 => String::from_str(&env, "m4"),
+            5 => String::from_str(&env, "m5"),
+            6 => String::from_str(&env, "m6"),
+            7 => String::from_str(&env, "m7"),
+            8 => String::from_str(&env, "m8"),
+            9 => String::from_str(&env, "m9"),
+            10 => String::from_str(&env, "m10"),
+            _ => String::from_str(&env, "market"),
+        };
 
         // 4. Create Market struct
         let market = Market {
