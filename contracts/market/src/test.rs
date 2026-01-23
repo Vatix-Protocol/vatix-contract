@@ -9,11 +9,12 @@ mod tests {
         Env::default()
     }
 
-    fn sample_user(env: &Env, id: u8) -> Address {
-        let mut raw = [0u8; 32];
-        raw[0] = id;
-        Address::from(raw)
-    }
+   fn sample_user(env: &Env, id: u8) -> Address {
+    let mut raw = [0u8; 32];
+    raw[0] = id;
+    Address::from(BytesN::from_array(env, &raw))
+}
+
 
   fn sample_market(env: &Env) -> Market {
     Market {
