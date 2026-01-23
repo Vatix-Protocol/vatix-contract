@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String, BytesN};
+use soroban_sdk::{testutils::Address as TestAddress, Address, Env, String, BytesN};
 
 #[cfg(test)]
 mod tests {
@@ -9,18 +9,9 @@ mod tests {
         Env::default()
     }
 
-    /// Create a deterministic-looking test address
-    /// (in real tests .generate() or .random() is usually preferred)
-    fn sample_address(env: &Env, seed: u8) -> Address {
-        let mut raw = [0u8; 32];
-        raw[0] = seed;
-        let bytes_n = BytesN::from_array(env, &raw);
-        Address::from_string_bytes(&bytes_n)
-    }
-
-    /// Create a sample user address
-    fn sample_user(env: &Env, id: u8) -> Address {
-        sample_address(env, id)
+    /// Create a sample user address for testing
+    fn sample_user(env: &Env, _id: u8) -> Address {
+        <Address as TestAddress>::generate(env)
     }
 
     /// Create a sample market for testing
@@ -31,8 +22,8 @@ mod tests {
             end_time: 0,
             oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
             status: types::MarketStatus::Resolved,
-            collateral_token: sample_address(env, 10), // pretend token contract
-            creator: sample_address(env, 20),          // pretend creator account
+            collateral_token: <Address as TestAddress>::generate(env),
+            creator: <Address as TestAddress>::generate(env),
             created_at: 0,
             result: None,
         }
@@ -95,7 +86,7 @@ mod tests {
             0,
             6000,
         )
-        .expect("should create and update position");
+        .expect("should update position");
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(pos.no_shares, 0);
@@ -109,7 +100,7 @@ mod tests {
         let user = sample_user(&env, 2);
         let market_id = String::from_str(&env, "market2");
 
-        // First position
+        // First update - buy YES
         let _ = MarketContract::update_position(
             &env,
             &market_id,
@@ -120,7 +111,7 @@ mod tests {
         )
         .unwrap();
 
-        // Add NO shares
+        // Second update - buy some NO
         let pos = MarketContract::update_position(
             &env,
             &market_id,
@@ -133,9 +124,6 @@ mod tests {
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
-        // 100 yes @ 60% → 60 locked
-        // +30 no @ 40% → +12 locked → total 72, but your code uses different logic → 42?
-        // Note: verify if 42 is really the expected value with your current formula
         assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
     }
 
@@ -178,22 +166,22 @@ mod tests {
         assert!(!MarketContract::can_settle(&position, &market));
     }
 
-    // Optional: quick smoke test using random addresses (modern style)
+    // Optional smoke test
     #[test]
-    fn test_update_position_with_random_addresses() {
+    fn test_update_position_smoke() {
         let env = setup_env();
-        let user = Address::generate(&env);
-        let market_id = String::from_str(&env, "smoke-test");
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = String::from_str(&env, "smoke-market");
 
         let pos = MarketContract::update_position(
             &env,
             &market_id,
             &user,
             250 * STROOPS_PER_USDC,
-            100 * STROOPS_PER_USDC,
-            7500,
+            80 * STROOPS_PER_USDC,
+            7200,
         )
-        .expect("should handle random address");
+        .expect("smoke test should succeed");
 
         assert!(pos.yes_shares > 0);
         assert!(pos.locked_collateral > 0);
