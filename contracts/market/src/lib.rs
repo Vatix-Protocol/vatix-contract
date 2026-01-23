@@ -5,6 +5,8 @@ mod events;
 mod oracle;
 mod positions;
 mod settlement;
+
+#[allow(dead_code)]
 mod storage;
 mod test;
 mod types;
