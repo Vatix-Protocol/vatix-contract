@@ -16,6 +16,4 @@ mod tests {
 
         Address::from_str(env, strkey)
     }
-
-   
 }
