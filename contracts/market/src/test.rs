@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as TestAddress, Address, Env, String, BytesN};
+use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
 
 #[cfg(test)]
 mod tests {
@@ -50,8 +50,11 @@ mod tests {
 
     #[test]
     fn test_calculate_locked_collateral_hedged() {
-        let locked =
-            MarketContract::calculate_locked_collateral(100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000);
+        let locked = MarketContract::calculate_locked_collateral(
+            100 * STROOPS_PER_USDC,
+            100 * STROOPS_PER_USDC,
+            6000,
+        );
         assert_eq!(locked, 0);
     }
 
@@ -119,15 +122,8 @@ mod tests {
 
         // Second update - buy some NO
         let pos = env.as_contract(&contract_id, || {
-            MarketContract::update_position(
-                &env,
-                &market_id,
-                &user,
-                0,
-                30 * STROOPS_PER_USDC,
-                6000,
-            )
-            .unwrap()
+            MarketContract::update_position(&env, &market_id, &user, 0, 30 * STROOPS_PER_USDC, 6000)
+                .unwrap()
         });
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);

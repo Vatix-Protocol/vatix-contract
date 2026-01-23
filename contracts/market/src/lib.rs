@@ -18,7 +18,7 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
 use crate::{
     error::ContractError,
-    types::{Position, Market},
+    types::{Market, Position},
 };
 
 const BASIS_POINTS: i128 = 10_000;
@@ -79,46 +79,46 @@ impl MarketContract {
     }
 
     /// Update a user's position with new share deltas
-  pub fn update_position(
-    env: &Env,
-    market_id: &String,
-    user: &Address,
-    yes_delta: i128,
-    no_delta: i128,
-    market_price: i128,
-) -> Result<Position, ContractError> {
-    // 1. Load or initialize position safely
-    let mut position = crate::storage::get_position(env, market_id, user)
-        .unwrap_or_else(|| Position {
-            market_id: market_id.clone(),
-            user: user.clone(),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            is_settled: false,
-        });
+    pub fn update_position(
+        env: &Env,
+        market_id: &String,
+        user: &Address,
+        yes_delta: i128,
+        no_delta: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        // 1. Load or initialize position safely
+        let mut position =
+            crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
+                market_id: market_id.clone(),
+                user: user.clone(),
+                yes_shares: 0,
+                no_shares: 0,
+                locked_collateral: 0,
+                is_settled: false,
+            });
 
-    // 2. Validate deltas
-    Self::validate_position_change(&position, yes_delta, no_delta)?;
+        // 2. Validate deltas
+        Self::validate_position_change(&position, yes_delta, no_delta)?;
 
-    // 3. Apply deltas
-    position.yes_shares += yes_delta;
-    position.no_shares += no_delta;
+        // 3. Apply deltas
+        position.yes_shares += yes_delta;
+        position.no_shares += no_delta;
 
-    // 4. Recalculate locked collateral
-    let new_locked = Self::calculate_locked_collateral(
-        position.yes_shares,
-        position.no_shares,
-        market_price,
-    );
+        // 4. Recalculate locked collateral
+        let new_locked = Self::calculate_locked_collateral(
+            position.yes_shares,
+            position.no_shares,
+            market_price,
+        );
 
-    position.locked_collateral = new_locked;
+        position.locked_collateral = new_locked;
 
-    // 5. Persist
-    crate::storage::set_position(env, market_id, user, &position);
+        // 5. Persist
+        crate::storage::set_position(env, market_id, user, &position);
 
-    Ok(position)
-}
+        Ok(position)
+    }
 
     /// Calculate net position from YES and NO shares
     ///
