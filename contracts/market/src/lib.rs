@@ -120,33 +120,6 @@ impl MarketContract {
     Ok(position)
 }
 
-
-
-
-        // 2. Validate deltas
-        Self::validate_position_change(&position, yes_delta, no_delta)?;
-
-        // 3. Apply deltas
-        position.yes_shares += yes_delta;
-        position.no_shares += no_delta;
-
-        // 4. Recalculate locked collateral
-        let new_locked = Self::calculate_locked_collateral(
-            position.yes_shares,
-            position.no_shares,
-            market_price,
-        );
-
-        // 5. Temporarily skipping collateral check (implement later if needed)
-
-        position.locked_collateral = new_locked;
-
-        // 6. Persist
-        crate::storage::set_position(env, market_id, user, &position);
-
-        Ok(position)
-    }
-
     /// Calculate net position from YES and NO shares
     ///
     /// Positive  => net long YES
@@ -157,11 +130,8 @@ impl MarketContract {
     }
 
     /// Check if a position is eligible for settlement
-/// Check if a position is eligible for settlement
-pub fn can_settle(position: &Position, market: &Market) -> bool {
-    use crate::types::MarketStatus;
-    matches!(market.status, MarketStatus::Resolved) && !position.is_settled
-}
-
-
+    pub fn can_settle(position: &Position, market: &Market) -> bool {
+        use crate::types::MarketStatus;
+        matches!(market.status, MarketStatus::Resolved) && !position.is_settled
+    }
 }
