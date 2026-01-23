@@ -24,7 +24,6 @@ pub struct MarketContract;
 #[contractimpl]
 impl MarketContract {
     /// Initialize a new market
-
     pub fn initialize_market(
         env: Env,
         creator: Address,
