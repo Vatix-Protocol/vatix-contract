@@ -1,5 +1,6 @@
 use crate::error::ContractError;
 use crate::types::{Market, Position};
+use soroban_sdk::{Address, Env, String};
 
 #[allow(dead_code)]
 const BASIS_POINTS: i128 = 10_000;
@@ -13,11 +14,7 @@ pub const STROOPS_PER_USDC: i128 = 10_000_000;
 /// - Net NO   => lock net_no * (1 - price)
 /// - Hedged   => lock 0
 #[allow(dead_code)]
-pub fn calculate_locked_collateral(
-    yes_shares: i128,
-    no_shares: i128,
-    market_price: i128,
-) -> i128 {
+pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_price: i128) -> i128 {
     if yes_shares == no_shares {
         return 0;
     }
@@ -74,11 +71,64 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
 }
 
+/// Update a user's position with new share deltas
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `market_id` - Market identifier
+/// * `user` - User address
+/// * `yes_delta` - Change in YES shares (can be negative)
+/// * `no_delta` - Change in NO shares (can be negative)
+/// * `market_price` - Current market price for collateral calculation
+///
+/// # Returns
+/// Updated Position struct
+///
+/// # Errors
+/// - InvalidShareAmount if deltas would make shares negative
+#[allow(dead_code)]
+pub fn update_position(
+    env: &Env,
+    market_id: &String,
+    user: &Address,
+    yes_delta: i128,
+    no_delta: i128,
+    market_price: i128,
+) -> Result<Position, ContractError> {
+    // 1. Load or initialize position
+    let mut position =
+        crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
+            market_id: market_id.clone(),
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            is_settled: false,
+        });
+
+    // 2. Validate deltas
+    validate_position_change(&position, yes_delta, no_delta)?;
+
+    // 3. Apply deltas
+    position.yes_shares += yes_delta;
+    position.no_shares += no_delta;
+
+    // 4. Recalculate locked collateral
+    let new_locked =
+        calculate_locked_collateral(position.yes_shares, position.no_shares, market_price);
+    position.locked_collateral = new_locked;
+
+    // 5. Persist
+    crate::storage::set_position(env, market_id, user, &position);
+
+    Ok(position)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
     use crate::types;
+    use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
 
     fn setup_env() -> Env {
         Env::default()
@@ -109,11 +159,8 @@ mod tests {
         let locked = calculate_locked_collateral(100 * STROOPS_PER_USDC, 0, 6000);
         assert_eq!(locked, 60 * STROOPS_PER_USDC);
 
-        let locked = calculate_locked_collateral(
-            100 * STROOPS_PER_USDC,
-            30 * STROOPS_PER_USDC,
-            5000,
-        );
+        let locked =
+            calculate_locked_collateral(100 * STROOPS_PER_USDC, 30 * STROOPS_PER_USDC, 5000);
         assert_eq!(locked, 35 * STROOPS_PER_USDC);
     }
 
@@ -125,11 +172,8 @@ mod tests {
 
     #[test]
     fn test_calculate_locked_collateral_hedged() {
-        let locked = calculate_locked_collateral(
-            100 * STROOPS_PER_USDC,
-            100 * STROOPS_PER_USDC,
-            6000,
-        );
+        let locked =
+            calculate_locked_collateral(100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000);
         assert_eq!(locked, 0);
     }
 
@@ -188,5 +232,44 @@ mod tests {
 
         assert!(!can_settle(&position, &market));
     }
-}
 
+    #[test]
+    fn test_update_position_new_user() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 1);
+        let market_id = String::from_str(&env, "market1");
+
+        let pos = env.as_contract(&contract_id, || {
+            update_position(&env, &market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
+                .expect("should update position")
+        });
+
+        assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(pos.no_shares, 0);
+        assert_eq!(pos.locked_collateral, 60 * STROOPS_PER_USDC);
+        assert!(!pos.is_settled);
+    }
+
+    #[test]
+    fn test_update_position_existing_user() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 2);
+        let market_id = String::from_str(&env, "market2");
+
+        // First update - buy YES
+        let _ = env.as_contract(&contract_id, || {
+            update_position(&env, &market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
+        });
+
+        // Second update - buy some NO
+        let pos = env.as_contract(&contract_id, || {
+            update_position(&env, &market_id, &user, 0, 30 * STROOPS_PER_USDC, 6000).unwrap()
+        });
+
+        assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
+        assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
+    }
+}
