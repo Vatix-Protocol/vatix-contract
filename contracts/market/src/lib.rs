@@ -14,7 +14,6 @@ mod test;
 mod types;
 #[allow(dead_code)]
 mod validation;
-#[allow(deprecated)]
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
@@ -25,6 +24,8 @@ pub struct MarketContract;
 #[contractimpl]
 impl MarketContract {
     /// Initialize a new market
+
+    #[allow(deprecated)]
     pub fn initialize_market(
         env: Env,
         creator: Address,
