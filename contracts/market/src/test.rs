@@ -78,15 +78,17 @@ mod tests {
         let user = sample_user(&env, 1);
         let market_id = String::from_str(&env, "market1");
 
-        let pos = MarketContract::update_position(
-            &env,
-            &market_id,
-            &user,
-            100 * STROOPS_PER_USDC,
-            0,
-            6000,
-        )
-        .expect("should update position");
+        let pos = env.as_contract(&user, || {
+            MarketContract::update_position(
+                &env,
+                &market_id,
+                &user,
+                100 * STROOPS_PER_USDC,
+                0,
+                6000,
+            )
+            .expect("should update position")
+        });
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(pos.no_shares, 0);
@@ -101,26 +103,30 @@ mod tests {
         let market_id = String::from_str(&env, "market2");
 
         // First update - buy YES
-        let _ = MarketContract::update_position(
-            &env,
-            &market_id,
-            &user,
-            100 * STROOPS_PER_USDC,
-            0,
-            6000,
-        )
-        .unwrap();
+        let _ = env.as_contract(&user, || {
+            MarketContract::update_position(
+                &env,
+                &market_id,
+                &user,
+                100 * STROOPS_PER_USDC,
+                0,
+                6000,
+            )
+            .unwrap()
+        });
 
         // Second update - buy some NO
-        let pos = MarketContract::update_position(
-            &env,
-            &market_id,
-            &user,
-            0,
-            30 * STROOPS_PER_USDC,
-            6000,
-        )
-        .unwrap();
+        let pos = env.as_contract(&user, || {
+            MarketContract::update_position(
+                &env,
+                &market_id,
+                &user,
+                0,
+                30 * STROOPS_PER_USDC,
+                6000,
+            )
+            .unwrap()
+        });
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
@@ -173,15 +179,17 @@ mod tests {
         let user = <Address as TestAddress>::generate(&env);
         let market_id = String::from_str(&env, "smoke-market");
 
-        let pos = MarketContract::update_position(
-            &env,
-            &market_id,
-            &user,
-            250 * STROOPS_PER_USDC,
-            80 * STROOPS_PER_USDC,
-            7200,
-        )
-        .expect("smoke test should succeed");
+        let pos = env.as_contract(&user, || {
+            MarketContract::update_position(
+                &env,
+                &market_id,
+                &user,
+                250 * STROOPS_PER_USDC,
+                80 * STROOPS_PER_USDC,
+                7200,
+            )
+            .expect("smoke test should succeed")
+        });
 
         assert!(pos.yes_shares > 0);
         assert!(pos.locked_collateral > 0);
