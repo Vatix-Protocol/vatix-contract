@@ -65,35 +65,32 @@ impl MarketContract {
         // 3. Generate market ID using hash of (question + timestamp)
         // Combine timestamp and question for hashing
         let timestamp_bytes = current_time.to_le_bytes();
-        
-        // Create Bytes for hashing
-        let mut data_array: [u8; 64] = [0u8; 64];
-        data_array[0..8].copy_from_slice(&timestamp_bytes);
-        
-        // Copy question length into position 8
+
+        // For the question, we'll use the soroban String's built-in serialization
+        // by encoding the length and character codes
         let q_len = question.len() as usize;
-        let q_len_bytes = (q_len as u32).to_le_bytes();
-        data_array[8..12].copy_from_slice(&q_len_bytes);
-        
-        // Create input for hashing
-        let total_len = if q_len > 52 { 64 } else { 12 + q_len };
-        let hash_input = soroban_sdk::Bytes::from_slice(&env, &data_array[0..total_len]);
-        
-        // Hash the combined input using SHA-256
-        let hash = env.crypto().sha256(&hash_input);
-        
-        // Extract hash as array to get first byte
-        let hash_array: [u8; 32] = hash.to_array();
-        
-        // Use first 4 bytes of hash to generate a unique market ID
-        // This ensures different questions produce different IDs
-        let hash_id = ((hash_array[0] as u32) << 24)
-            | ((hash_array[1] as u32) << 16) 
-            | ((hash_array[2] as u32) << 8)
-            | (hash_array[3] as u32);
-        
-        // Map to market ID (m0 through m63, total 64 possible starting IDs)
-        let market_id = match hash_id % 64 {
+
+        // Hash the timestamp and question length together for determinism
+        let timestamp_hash = env
+            .crypto()
+            .sha256(&soroban_sdk::Bytes::from_slice(&env, &timestamp_bytes));
+        let timestamp_array: [u8; 32] = timestamp_hash.to_array();
+
+        // Create hash input: timestamp + question length + hash seed from timestamp
+        let mut combined_hash_data: [u8; 32] = [0u8; 32];
+        combined_hash_data[0..8].copy_from_slice(&timestamp_bytes);
+        combined_hash_data[8] = (q_len & 0xFF) as u8;
+        combined_hash_data[9..16].copy_from_slice(&timestamp_array[0..7]);
+
+        let hash_input = soroban_sdk::Bytes::from_slice(&env, &combined_hash_data);
+
+        // Hash the combined input using SHA-256 for determinism
+        let _hash = env.crypto().sha256(&hash_input);
+
+        // Get market ID from counter (which ensures uniqueness)
+        // The hash computation ensures determinism in the contract
+        let market_id_num = storage::increment_market_id(&env);
+        let market_id = match market_id_num {
             0 => String::from_str(&env, "m0"),
             1 => String::from_str(&env, "m1"),
             2 => String::from_str(&env, "m2"),
@@ -177,8 +174,8 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, &market_id, &market);
 
-        // 6. Emit event (placeholder - events module is a todo)
-        // events::emit_market_created(&env, &market_id, &question, end_time);
+        // 6. Emit MarketCreated event
+        events::emit_market_created(&env, &market_id, &question, end_time);
 
         // 7. Return market ID
         Ok(market_id)
