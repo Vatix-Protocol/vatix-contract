@@ -11,8 +11,7 @@ use soroban_sdk::{Env, String, Symbol};
 pub fn emit_market_created(env: &Env, market_id: &String, question: &String, end_time: u64) {
     // Create event topics
     let topics = (Symbol::new(env, "MarketCreated"), market_id.clone());
-    
+
     // Publish the event with topics and data
-    env.events()
-        .publish(topics, (question.clone(), end_time));
+    env.events().publish(topics, (question.clone(), end_time));
 }
