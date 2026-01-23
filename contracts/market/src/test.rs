@@ -15,19 +15,20 @@ mod tests {
         Address::from(raw)
     }
 
-    fn sample_market(env: &Env) -> Market {
-        Market {
-            id: String::from_slice(env, b"market1"),
-            question: String::from_slice(env, b"Will it rain tomorrow?"),
-            end_time: 0,
-            oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
-            status: types::MarketStatus::Resolved,
-            collateral_token: Address::from([0u8; 32]),
-            creator: Address::from([0u8; 32]),
-            created_at: 0,
-            resolved_outcome: None,
-        }
+  fn sample_market(env: &Env) -> Market {
+    Market {
+        id: String::from_slice(env, "market1"),
+        question: String::from_slice(env, "Will it rain tomorrow?"),
+        end_time: 0,
+        oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
+        status: types::MarketStatus::Resolved,
+        collateral_token: Address::from(BytesN::from_array(env, &[0u8; 32])),
+        creator: Address::from(BytesN::from_array(env, &[0u8; 32])),
+        created_at: 0,
+        result: None, // instead of resolved_outcome
     }
+}
+
 
     #[test]
     fn test_calculate_locked_collateral_net_yes() {
