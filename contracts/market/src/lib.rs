@@ -7,15 +7,14 @@ mod oracle;
 mod positions;
 #[allow(dead_code)]
 mod settlement;
-
-#[allow(dead_code)]
 mod storage;
 mod test;
 mod types;
-#[allow(dead_code)]
 mod validation;
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, Address, Bytes, BytesN, Env, String,
+};
 
 use crate::{
     error::ContractError,
@@ -28,22 +27,6 @@ pub struct MarketContract;
 #[contractimpl]
 impl MarketContract {
     /// Initialize a new prediction market
-    ///
-    /// # Arguments
-    /// * `env` - Contract environment
-    /// * `creator` - Address creating the market (must be admin for MVP)
-    /// * `question` - Market question (e.g., "Will BTC hit $100k by March?")
-    /// * `end_time` - Unix timestamp when market closes for trading
-    /// * `oracle_pubkey` - Ed25519 public key of authorized oracle (32 bytes)
-    /// * `collateral_token` - USDC token contract address
-    ///
-    /// # Returns
-    /// Market ID (String)
-    ///
-    /// # Errors
-    /// - Unauthorized: If creator is not admin
-    /// - InvalidTimestamp: If end_time is in the past
-    /// - InvalidQuestion: If question is empty or too long
     pub fn initialize_market(
         env: Env,
         creator: Address,
@@ -62,23 +45,16 @@ impl MarketContract {
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
 
-        // 3. Generate market ID using counter (hash of question + counter for uniqueness)
-        let market_id_num = storage::increment_market_id(&env);
-        // Create a simple market ID based on the counter
-        // For MVP, just use a predictable ID based on the counter value
-        let market_id = match market_id_num {
-            1 => String::from_str(&env, "m1"),
-            2 => String::from_str(&env, "m2"),
-            3 => String::from_str(&env, "m3"),
-            4 => String::from_str(&env, "m4"),
-            5 => String::from_str(&env, "m5"),
-            6 => String::from_str(&env, "m6"),
-            7 => String::from_str(&env, "m7"),
-            8 => String::from_str(&env, "m8"),
-            9 => String::from_str(&env, "m9"),
-            10 => String::from_str(&env, "m10"),
-            _ => String::from_str(&env, "market"),
-        };
+        // 3. Generate deterministic market ID: hash(question + end_time)
+        let mut input = Bytes::new(&env);
+        input.append(&question.clone().into_bytes());
+        input.append(&end_time.to_be_bytes());
+
+        let hash = env.crypto().sha256(&input);
+        let market_id = String::from_str(
+            &env,
+            &hex::encode(&hash.to_array()[..16]), // shorten for readability
+        );
 
         // 4. Create Market struct
         let market = Market {
@@ -96,8 +72,14 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, &market_id, &market);
 
-        // 6. Emit event (placeholder - events module is a todo)
-        // events::emit_market_created(&env, &market_id, &question, end_time);
+        // 6. Emit event
+        events::emit_market_created(
+            &env,
+            &market_id,
+            &question,
+            end_time,
+            &creator,
+        );
 
         // 7. Return market ID
         Ok(market_id)
