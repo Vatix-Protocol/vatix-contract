@@ -22,9 +22,7 @@ pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> Byt
 
     // Append market_id bytes (4 bytes for u32)
     let market_id_bytes = market_id.to_be_bytes();
-    for byte in market_id_bytes.iter() {
-        message.append(&Bytes::from_slice(env, &[*byte]));
-    }
+    message.append(&Bytes::from_slice(env, &market_id_bytes));
 
     // 2. Append outcome as single byte (0x01 for YES/true, 0x00 for NO/false)
     let outcome_byte: u8 = if outcome { 0x01 } else { 0x00 };
