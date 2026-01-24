@@ -1,6 +1,6 @@
 use crate::error::ContractError;
 use crate::types::{Market, Position};
-use soroban_sdk::{Address, Env, String};
+use soroban_sdk::{Address, Env};
 
 const BASIS_POINTS: i128 = 10_000;
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
@@ -82,7 +82,7 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
 /// - InvalidShareAmount if deltas would make shares negative
 pub fn update_position(
     env: &Env,
-    market_id: &String,
+    market_id: u32,
     user: &Address,
     yes_delta: i128,
     no_delta: i128,
@@ -91,7 +91,7 @@ pub fn update_position(
     // 1. Load or initialize position
     let mut position =
         crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
-            market_id: market_id.clone(),
+            market_id: market_id,
             user: user.clone(),
             yes_shares: 0,
             no_shares: 0,
@@ -135,7 +135,7 @@ mod tests {
     /// Create a sample market for testing
     fn sample_market(env: &Env) -> Market {
         Market {
-            id: String::from_str(env, "market1"),
+            id: 1,
             question: String::from_str(env, "Will it rain tomorrow?"),
             end_time: 0,
             oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
@@ -174,7 +174,7 @@ mod tests {
     fn test_validate_position_change() {
         let env = setup_env();
         let position = Position {
-            market_id: String::from_str(&env, "m1"),
+            market_id: 1,
             user: sample_user(&env, 1),
             yes_shares: 50,
             no_shares: 50,
@@ -199,7 +199,7 @@ mod tests {
         let env = setup_env();
         let market = sample_market(&env);
         let position = Position {
-            market_id: String::from_str(&env, "m1"),
+            market_id: 1,
             user: sample_user(&env, 1),
             yes_shares: 0,
             no_shares: 0,
@@ -215,7 +215,7 @@ mod tests {
         let env = setup_env();
         let market = sample_market(&env);
         let position = Position {
-            market_id: String::from_str(&env, "m1"),
+            market_id: 1,
             user: sample_user(&env, 1),
             yes_shares: 0,
             no_shares: 0,
@@ -231,10 +231,10 @@ mod tests {
         let env = setup_env();
         let contract_id = env.register(crate::MarketContract, ());
         let user = sample_user(&env, 1);
-        let market_id = String::from_str(&env, "market1");
+        let market_id = 1;
 
         let pos = env.as_contract(&contract_id, || {
-            update_position(&env, &market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
+            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
                 .expect("should update position")
         });
 
@@ -249,16 +249,16 @@ mod tests {
         let env = setup_env();
         let contract_id = env.register(crate::MarketContract, ());
         let user = sample_user(&env, 2);
-        let market_id = String::from_str(&env, "market2");
+        let market_id = 2;
 
         // First update - buy YES
         let _ = env.as_contract(&contract_id, || {
-            update_position(&env, &market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
+            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
         });
 
         // Second update - buy some NO
         let pos = env.as_contract(&contract_id, || {
-            update_position(&env, &market_id, &user, 0, 30 * STROOPS_PER_USDC, 6000).unwrap()
+            update_position(&env, market_id, &user, 0, 30 * STROOPS_PER_USDC, 6000).unwrap()
         });
 
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);

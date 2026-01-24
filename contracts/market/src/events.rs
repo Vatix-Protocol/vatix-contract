@@ -8,9 +8,9 @@ use soroban_sdk::{Env, String, Symbol};
 /// * `question` - The market question
 /// * `end_time` - Unix timestamp when market closes for trading
 #[allow(deprecated)]
-pub fn emit_market_created(env: &Env, market_id: &String, question: &String, end_time: u64) {
+pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_time: u64) {
     // Create event topics
-    let topics = (Symbol::new(env, "MarketCreated"), market_id.clone());
+    let topics = (Symbol::new(env, "MarketCreated"), market_id);
 
     // Publish the event with topics and data
     env.events().publish(topics, (question.clone(), end_time));

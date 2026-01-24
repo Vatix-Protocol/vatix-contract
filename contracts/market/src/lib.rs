@@ -3,6 +3,7 @@
 mod error;
 mod events;
 mod oracle;
+#[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
 mod settlement;
@@ -31,7 +32,7 @@ impl MarketContract {
         end_time: u64,
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
-    ) -> Result<String, ContractError> {
+    ) -> Result<u32, ContractError> {
         // 1. Verify creator is admin
         creator.require_auth();
         let admin = storage::get_admin(&env);
@@ -44,14 +45,11 @@ impl MarketContract {
         validation::validate_market_creation(&question, end_time, current_time)?;
 
         // 3. Generate market ID: "market_" + market number
-        let market_num = storage::increment_market_id(&env);
+        let market_id = storage::increment_market_id(&env);
 
-        #[allow(deprecated)]
-        let market_id = String::from_slice(&env, "market_");
-        let _num_str = unsafe { core::str::from_utf8_unchecked(&market_num.to_le_bytes()) };
         // 4. Create Market struct
         let market = Market {
-            id: market_id.clone(),
+            id: market_id,
             question: question.clone(),
             end_time,
             oracle_pubkey,
@@ -63,10 +61,10 @@ impl MarketContract {
         };
 
         // 5. Store market
-        storage::set_market(&env, &market_id, &market);
+        storage::set_market(&env, market_id, &market);
 
         // 6. Emit event
-        events::emit_market_created(&env, &market_id, &question, end_time);
+        events::emit_market_created(&env, market_id, &question, end_time);
 
         // 7. Return market ID
         Ok(market_id)
