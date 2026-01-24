@@ -1,62 +1,45 @@
 use crate::types::{Market, Position};
-use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
+use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
+pub const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
 const POSITIONS_KEY: Symbol = symbol_short!("POSITIONS");
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
 const COUNTER_KEY: Symbol = symbol_short!("COUNTER");
 
-// TTL Management Constants
-const LEDGER_TTL_THRESHOLD: u32 = 10;     // Extend when < 10 ledgers left
-const LEDGER_TTL_EXTEND: u32 = 17_280;    // Extend by ~1 day (17,280 ledgers at 5s each)
-
-/// Extend TTL for all storage entries to prevent data expiration
-/// CRITICAL: Soroban data expires! Must call this on every operation
-pub fn extend_ttl(env: &Env) {
-    env.storage().instance().extend_ttl(
-        LEDGER_TTL_THRESHOLD,
-        LEDGER_TTL_EXTEND,
-    );
-}
-
 // --- Market Storage ---
 
-pub fn get_market(env: &Env, market_id: &String) -> Option<Market> {
-    env.storage()
-        .persistent()
-        .get(&(MARKETS_KEY, market_id.clone()))
+pub fn get_market(env: &Env, market_id: u32) -> Option<Market> {
+    env.storage().persistent().get(&(MARKETS_KEY, market_id))
 }
 
-pub fn set_market(env: &Env, market_id: &String, market: &Market) {
+pub fn set_market(env: &Env, market_id: u32, market: &Market) {
     env.storage()
         .persistent()
-        .set(&(MARKETS_KEY, market_id.clone()), market);
+        .set(&(MARKETS_KEY, market_id), market);
 }
 
-pub fn has_market(env: &Env, market_id: &String) -> bool {
-    env.storage()
-        .persistent()
-        .has(&(MARKETS_KEY, market_id.clone()))
+pub fn has_market(env: &Env, market_id: u32) -> bool {
+    env.storage().persistent().has(&(MARKETS_KEY, market_id))
 }
 
 // --- Position Storage ---
 
-pub fn get_position(env: &Env, market_id: &String, user: &Address) -> Option<Position> {
+pub fn get_position(env: &Env, market_id: u32, user: &Address) -> Option<Position> {
     env.storage()
         .persistent()
-        .get(&(POSITIONS_KEY, market_id.clone(), user.clone()))
+        .get(&(POSITIONS_KEY, market_id, user.clone()))
 }
 
-pub fn set_position(env: &Env, market_id: &String, user: &Address, position: &Position) {
+pub fn set_position(env: &Env, market_id: u32, user: &Address, position: &Position) {
     env.storage()
         .persistent()
-        .set(&(POSITIONS_KEY, market_id.clone(), user.clone()), position);
+        .set(&(POSITIONS_KEY, market_id, user.clone()), position);
 }
 
-pub fn has_position(env: &Env, market_id: &String, user: &Address) -> bool {
+pub fn has_position(env: &Env, market_id: u32, user: &Address) -> bool {
     env.storage()
         .persistent()
-        .has(&(POSITIONS_KEY, market_id.clone(), user.clone()))
+        .has(&(POSITIONS_KEY, market_id, user.clone()))
 }
 
 // --- Configuration Storage ---
@@ -118,12 +101,12 @@ mod test {
     fn test_market_storage() {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
-        let market_id = String::from_str(&env, "market-1");
+        let market_id = 1;
         let creator = Address::generate(&env);
         let collateral_token = Address::generate(&env);
 
         let market = Market {
-            id: market_id.clone(),
+            id: market_id,
             question: String::from_str(&env, "Will it rain?"),
             end_time: 1000,
             oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
@@ -132,15 +115,14 @@ mod test {
             creator,
             created_at: 0,
             collateral_token,
-            total_collateral: 0,
         };
 
         env.as_contract(&contract_id, || {
-            assert!(!has_market(&env, &market_id));
-            set_market(&env, &market_id, &market);
-            assert!(has_market(&env, &market_id));
+            assert!(!has_market(&env, market_id));
+            set_market(&env, market_id, &market);
+            assert!(has_market(&env, market_id));
 
-            let saved_market = get_market(&env, &market_id).unwrap();
+            let saved_market = get_market(&env, market_id).unwrap();
             assert_eq!(saved_market.id, market.id);
             assert_eq!(saved_market.question, market.question);
         });
@@ -150,11 +132,11 @@ mod test {
     fn test_position_storage() {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
-        let market_id = String::from_str(&env, "market-1");
+        let market_id = 1;
         let user = Address::generate(&env);
 
         let position = Position {
-            market_id: market_id.clone(),
+            market_id: market_id,
             user: user.clone(),
             yes_shares: 100,
             no_shares: 0,
@@ -163,11 +145,11 @@ mod test {
         };
 
         env.as_contract(&contract_id, || {
-            assert!(!has_position(&env, &market_id, &user));
-            set_position(&env, &market_id, &user, &position);
-            assert!(has_position(&env, &market_id, &user));
+            assert!(!has_position(&env, market_id, &user));
+            set_position(&env, market_id, &user, &position);
+            assert!(has_position(&env, market_id, &user));
 
-            let saved_position = get_position(&env, &market_id, &user).unwrap();
+            let saved_position = get_position(&env, market_id, &user).unwrap();
             assert_eq!(saved_position.yes_shares, 100);
             assert_eq!(saved_position.market_id, market_id);
         });

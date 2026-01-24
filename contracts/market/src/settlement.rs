@@ -89,7 +89,7 @@ mod tests {
 
     fn create_test_market(env: &Env, status: MarketStatus, result: Option<bool>) -> Market {
         Market {
-            id: String::from_str(env, "market-1"),
+            id: 1,
             question: String::from_str(env, "Test?"),
             end_time: 1000,
             oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
@@ -98,13 +98,12 @@ mod tests {
             creator: Address::generate(env),
             created_at: 0,
             collateral_token: Address::generate(env),
-            total_collateral: 0,
         }
     }
 
     fn create_test_position(env: &Env, yes: i128, no: i128, settled: bool) -> Position {
         Position {
-            market_id: String::from_str(env, "market-1"),
+            market_id: 1,
             user: Address::generate(env),
             yes_shares: yes,
             no_shares: no,
