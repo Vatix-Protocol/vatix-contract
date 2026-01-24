@@ -15,6 +15,7 @@ use soroban_sdk::{Bytes, BytesN, Env};
 ///
 /// # Returns
 /// 32-byte hash of the message
+#[allow(dead_code)]
 pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> BytesN<32> {
     // 1. Convert market_id to bytes (big-endian encoding)
     let mut message = Bytes::new(env);
@@ -53,6 +54,7 @@ pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> Byt
 ///
 /// # Security
 /// Uses Ed25519 signature verification via Soroban crypto module
+#[allow(dead_code)]
 pub fn verify_oracle_signature(
     env: &Env,
     market_id: u32,
@@ -87,6 +89,7 @@ pub fn verify_oracle_signature(
 ///
 /// # Errors
 /// - UnauthorizedOracle if pubkey doesn't match
+#[allow(dead_code)]
 pub fn validate_oracle_authorization(
     market: &Market,
     oracle_pubkey: &BytesN<32>,
