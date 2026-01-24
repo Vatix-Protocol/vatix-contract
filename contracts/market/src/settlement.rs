@@ -98,6 +98,7 @@ mod tests {
             creator: Address::generate(env),
             created_at: 0,
             collateral_token: Address::generate(env),
+            total_collateral: 0,
         }
     }
 

@@ -6,6 +6,19 @@ const POSITIONS_KEY: Symbol = symbol_short!("POSITIONS");
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
 const COUNTER_KEY: Symbol = symbol_short!("COUNTER");
 
+// TTL Management Constants
+const LEDGER_TTL_THRESHOLD: u32 = 10;     // Extend when < 10 ledgers left
+const LEDGER_TTL_EXTEND: u32 = 17_280;    // Extend by ~1 day (17,280 ledgers at 5s each)
+
+/// Extend TTL for all storage entries to prevent data expiration
+/// CRITICAL: Soroban data expires! Must call this on every operation
+pub fn extend_ttl(env: &Env) {
+    env.storage().instance().extend_ttl(
+        LEDGER_TTL_THRESHOLD,
+        LEDGER_TTL_EXTEND,
+    );
+}
+
 // --- Market Storage ---
 
 pub fn get_market(env: &Env, market_id: &String) -> Option<Market> {
@@ -119,6 +132,7 @@ mod test {
             creator,
             created_at: 0,
             collateral_token,
+            total_collateral: 0,
         };
 
         env.as_contract(&contract_id, || {

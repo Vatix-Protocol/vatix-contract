@@ -22,6 +22,7 @@ pub struct Market {
     pub creator: Address,
     pub created_at: u64,
     pub collateral_token: Address,
+    pub total_collateral: i128,
 }
 
 /// Tracks the position and shares of a specific user in a market.
