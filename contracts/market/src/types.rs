@@ -13,7 +13,7 @@ pub enum MarketStatus {
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct Market {
-    pub id: String,
+    pub id: u32,
     pub question: String,
     pub end_time: u64,
     pub oracle_pubkey: BytesN<32>,
@@ -28,7 +28,7 @@ pub struct Market {
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct Position {
-    pub market_id: String,
+    pub market_id: u32,
     pub user: Address,
     pub yes_shares: i128,
     pub no_shares: i128,
