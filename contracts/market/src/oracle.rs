@@ -64,8 +64,8 @@ pub fn verify_oracle_signature(
     let message = construct_oracle_message(env, market_id, outcome);
     
     // 2. Verify signature using env.crypto().ed25519_verify()
-    // Note: ed25519_verify panics if signature is invalid
-    // We need to catch this and return an error instead
+// TODO: ed25519_verify panics on invalid signatures. Consider secp256k1_recover 
+//  for proper error handling
     env.crypto()
         .ed25519_verify(oracle_pubkey, &message.into(), signature);
     
