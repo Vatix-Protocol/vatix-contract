@@ -44,7 +44,7 @@ impl MarketContract {
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
 
-        // 3. Generate market ID: "market_" + market number
+        // 3. Generate market ID
         let market_id = storage::increment_market_id(&env);
 
         // 4. Create Market struct
