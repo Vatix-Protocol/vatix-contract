@@ -1,37 +1,37 @@
 use crate::error::ContractError;
 use crate::types::Market;
-use soroban_sdk::{Bytes, BytesN, Env, String};
+use soroban_sdk::{Bytes, BytesN, Env};
 
 /// Construct the message that the oracle signs
 ///
 /// The message format is: keccak256(market_id || outcome_byte)
-/// - market_id: UTF-8 encoded string
+/// - market_id: u32 encoded as bytes
 /// - outcome_byte: 0x01 for YES, 0x00 for NO
 ///
 /// # Arguments
 /// * `env` - Contract environment
-/// * `market_id` - Market identifier
+/// * `market_id` - Market identifier (u32)
 /// * `outcome` - Market outcome
 ///
 /// # Returns
 /// 32-byte hash of the message
 pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> BytesN<32> {
-    // 1. Convert market_id to bytes (UTF-8 encoded)
+    // 1. Convert market_id to bytes (big-endian encoding)
     let mut message = Bytes::new(env);
-    
-    // Append market_id bytes
-    let market_id_bytes = market_id.to_bytes();
-    for i in 0..market_id_bytes.len() {
-        message.append(&Bytes::from_slice(env, &[market_id_bytes.get(i).unwrap()]));
+
+    // Append market_id bytes (4 bytes for u32)
+    let market_id_bytes = market_id.to_be_bytes();
+    for byte in market_id_bytes.iter() {
+        message.append(&Bytes::from_slice(env, &[*byte]));
     }
-    
+
     // 2. Append outcome as single byte (0x01 for YES/true, 0x00 for NO/false)
     let outcome_byte: u8 = if outcome { 0x01 } else { 0x00 };
     message.append(&Bytes::from_slice(env, &[outcome_byte]));
-    
+
     // 3. Hash the combined bytes using keccak256
     let hash = env.crypto().keccak256(&message);
-    
+
     // 4. Return 32-byte hash (convert from Hash to BytesN)
     hash.into()
 }
@@ -40,7 +40,7 @@ pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> Byt
 ///
 /// # Arguments
 /// * `env` - Contract environment (provides crypto functions)
-/// * `market_id` - Market being resolved
+/// * `market_id` - Market being resolved (u32)
 /// * `outcome` - Proposed outcome (true = YES won, false = NO won)
 /// * `signature` - Ed25519 signature (64 bytes)
 /// * `oracle_pubkey` - Oracle's public key (32 bytes)
@@ -55,20 +55,20 @@ pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> Byt
 /// Uses Ed25519 signature verification via Soroban crypto module
 pub fn verify_oracle_signature(
     env: &Env,
-    market_id: &String,
+    market_id: u32,
     outcome: bool,
     signature: &BytesN<64>,
     oracle_pubkey: &BytesN<32>,
 ) -> Result<(), ContractError> {
     // 1. Construct message to verify (market_id + outcome)
     let message = construct_oracle_message(env, market_id, outcome);
-    
+
     // 2. Verify signature using env.crypto().ed25519_verify()
-// TODO: ed25519_verify panics on invalid signatures. Consider secp256k1_recover 
-//  for proper error handling
+    // TODO: ed25519_verify panics on invalid signatures. Consider secp256k1_recover
+    //  for proper error handling
     env.crypto()
         .ed25519_verify(oracle_pubkey, &message.into(), signature);
-    
+
     // 3. If we reach here, signature is valid
     Ok(())
 }
@@ -105,16 +105,16 @@ mod tests {
     use crate::types::MarketStatus;
     use soroban_sdk::{
         testutils::{Address as _, BytesN as _},
-        Address, Env,
+        Address, Env, String,
     };
 
     #[test]
     fn test_construct_oracle_message_yes() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market_123");
+        let market_id = 1u32;
         let outcome = true;
 
-        let message = construct_oracle_message(&env, &market_id, outcome);
+        let message = construct_oracle_message(&env, market_id, outcome);
 
         // Message should be 32 bytes (keccak256 output)
         assert_eq!(message.len(), 32);
@@ -123,10 +123,10 @@ mod tests {
     #[test]
     fn test_construct_oracle_message_no() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market_123");
+        let market_id = 1u32;
         let outcome = false;
 
-        let message = construct_oracle_message(&env, &market_id, outcome);
+        let message = construct_oracle_message(&env, market_id, outcome);
 
         // Message should be 32 bytes (keccak256 output)
         assert_eq!(message.len(), 32);
@@ -135,11 +135,11 @@ mod tests {
     #[test]
     fn test_different_outcomes_different_messages() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market_123");
+        let market_id = 1u32;
 
         // Same market_id, different outcome = different message
-        let msg_yes = construct_oracle_message(&env, &market_id, true);
-        let msg_no = construct_oracle_message(&env, &market_id, false);
+        let msg_yes = construct_oracle_message(&env, market_id, true);
+        let msg_no = construct_oracle_message(&env, market_id, false);
 
         assert_ne!(msg_yes, msg_no);
     }
@@ -147,12 +147,12 @@ mod tests {
     #[test]
     fn test_construct_oracle_message_deterministic() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market_456");
+        let market_id = 456u32;
         let outcome = true;
 
         // Same inputs should produce same hash
-        let msg1 = construct_oracle_message(&env, &market_id, outcome);
-        let msg2 = construct_oracle_message(&env, &market_id, outcome);
+        let msg1 = construct_oracle_message(&env, market_id, outcome);
+        let msg2 = construct_oracle_message(&env, market_id, outcome);
 
         assert_eq!(msg1, msg2);
     }
@@ -160,12 +160,12 @@ mod tests {
     #[test]
     fn test_different_market_ids_different_messages() {
         let env = Env::default();
-        let market_id_1 = String::from_str(&env, "market_1");
-        let market_id_2 = String::from_str(&env, "market_2");
+        let market_id_1 = 1u32;
+        let market_id_2 = 2u32;
         let outcome = true;
 
-        let msg1 = construct_oracle_message(&env, &market_id_1, outcome);
-        let msg2 = construct_oracle_message(&env, &market_id_2, outcome);
+        let msg1 = construct_oracle_message(&env, market_id_1, outcome);
+        let msg2 = construct_oracle_message(&env, market_id_2, outcome);
 
         assert_ne!(msg1, msg2);
     }
@@ -224,7 +224,7 @@ mod tests {
     #[should_panic]
     fn test_verify_invalid_signature() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market_123");
+        let market_id = 123u32;
         let outcome = true;
 
         // Generate random keypair components for testing
@@ -232,7 +232,7 @@ mod tests {
         let invalid_signature = BytesN::random(&env);
 
         // This should panic because signature is invalid
-        verify_oracle_signature(&env, &market_id, outcome, &invalid_signature, &oracle_pubkey)
+        verify_oracle_signature(&env, market_id, outcome, &invalid_signature, &oracle_pubkey)
             .unwrap();
     }
 
@@ -248,11 +248,11 @@ mod tests {
         // and generate test data that would work in practice
 
         let env = Env::default();
-        let market_id = String::from_str(&env, "test_market");
+        let market_id = 1u32;
         let outcome = true;
 
         // Construct the message that would be signed
-        let message = construct_oracle_message(&env, &market_id, outcome);
+        let message = construct_oracle_message(&env, market_id, outcome);
 
         // In practice, the oracle backend would:
         // 1. Generate this same message
@@ -267,36 +267,42 @@ mod tests {
     }
 
     #[test]
-    fn test_construct_oracle_message_empty_market_id() {
+    fn test_construct_oracle_message_zero_id() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "");
+        let market_id = 0u32;
         let outcome = true;
 
-        // Should still produce a valid hash even with empty market_id
-        let message = construct_oracle_message(&env, &market_id, outcome);
+        // Should still produce a valid hash even with zero market_id
+        let message = construct_oracle_message(&env, market_id, outcome);
         assert_eq!(message.len(), 32);
     }
 
     #[test]
-    fn test_construct_oracle_message_long_market_id() {
+    fn test_construct_oracle_message_large_id() {
         let env = Env::default();
-        let market_id = String::from_str(
-            &env,
-            "this_is_a_very_long_market_identifier_to_test_edge_cases_123456789",
-        );
+        let market_id = u32::MAX;
         let outcome = false;
 
-        let message = construct_oracle_message(&env, &market_id, outcome);
+        let message = construct_oracle_message(&env, market_id, outcome);
         assert_eq!(message.len(), 32);
     }
 
     #[test]
-    fn test_construct_oracle_message_special_characters() {
+    fn test_construct_oracle_message_various_ids() {
         let env = Env::default();
-        let market_id = String::from_str(&env, "market!@#$%^&*()_+-=[]{}");
+        let market_id_1 = 100u32;
+        let market_id_2 = 1000u32;
+        let market_id_3 = 10000u32;
         let outcome = true;
 
-        let message = construct_oracle_message(&env, &market_id, outcome);
-        assert_eq!(message.len(), 32);
+        let msg1 = construct_oracle_message(&env, market_id_1, outcome);
+        let msg2 = construct_oracle_message(&env, market_id_2, outcome);
+        let msg3 = construct_oracle_message(&env, market_id_3, outcome);
+
+        // All different IDs should produce different messages
+        assert_ne!(msg1, msg2);
+        assert_ne!(msg2, msg3);
+        assert_ne!(msg1, msg3);
+        assert_eq!(msg1.len(), 32);
     }
 }
