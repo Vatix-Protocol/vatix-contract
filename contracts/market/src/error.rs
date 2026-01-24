@@ -70,4 +70,12 @@ pub enum ContractError {
 
     /// Caller is not the admin for this operation
     NotAdmin = 41,
+
+    // ========== Token Errors (50-59) ==========
+    /// Token transfer failed (insufficient balance, approval, etc.)
+    TokenTransferFailed = 50,
+
+    // ========== Arithmetic Errors (60-69) ==========
+    /// Arithmetic operation overflowed
+    ArithmeticOverflow = 60,
 }
