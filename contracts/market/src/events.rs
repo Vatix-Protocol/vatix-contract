@@ -23,5 +23,5 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
         question: question.clone(),
         end_time,
     }
-    .publish(&env);
+    .publish(env);
 }

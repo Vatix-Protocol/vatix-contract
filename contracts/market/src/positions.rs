@@ -91,7 +91,7 @@ pub fn update_position(
     // 1. Load or initialize position
     let mut position =
         crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
-            market_id: market_id,
+            market_id,
             user: user.clone(),
             yes_shares: 0,
             no_shares: 0,
