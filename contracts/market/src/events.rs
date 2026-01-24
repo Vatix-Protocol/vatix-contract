@@ -50,7 +50,7 @@ pub fn emit_collateral_deposited(
 ) {
     CollateralDepositedEvent {
         user: user.clone(),
-        market_id: market_id,
+        market_id,
         amount,
         new_total,
     }
@@ -75,7 +75,7 @@ pub fn emit_collateral_withdrawn(
 ) {
     CollateralWithdrawnEvent {
         user: user.clone(),
-        market_id: market_id,
+        market_id,
         amount,
         new_total,
     }
