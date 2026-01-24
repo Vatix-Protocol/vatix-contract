@@ -15,7 +15,7 @@ use soroban_sdk::{Bytes, BytesN, Env, String};
 ///
 /// # Returns
 /// 32-byte hash of the message
-pub fn construct_oracle_message(env: &Env, market_id: &String, outcome: bool) -> BytesN<32> {
+pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> BytesN<32> {
     // 1. Convert market_id to bytes (UTF-8 encoded)
     let mut message = Bytes::new(env);
     
