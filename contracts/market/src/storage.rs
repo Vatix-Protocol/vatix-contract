@@ -1,7 +1,7 @@
 use crate::types::{Market, Position};
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
-const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
+pub const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
 const POSITIONS_KEY: Symbol = symbol_short!("POSITIONS");
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
 const COUNTER_KEY: Symbol = symbol_short!("COUNTER");
