@@ -222,6 +222,10 @@ mod test {
         );
 
         let events = env.events().all();
-        assert!(events.len() > 0);
+        assert!(events.len() > 0, "Market creation should emit an event");
+        
+        // Verify the event contains the expected data structure
+        let event = &events[0];
+        assert!(event.topics.len() >= 2, "Event should have at least 2 topics");
     }
 }

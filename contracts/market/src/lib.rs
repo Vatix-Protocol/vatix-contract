@@ -12,6 +12,8 @@ mod settlement;
 mod storage;
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod events_test;
 mod types;
 #[allow(dead_code)]
 mod validation;
@@ -64,7 +66,8 @@ impl MarketContract {
         storage::set_market(&env, market_id, &market);
 
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &question, end_time);
+        let market_id_str = String::from_str(&env, &market_id.to_string());
+        events::emit_market_created(&env, &market_id_str, &question, end_time, &creator);
 
         // 7. Return market ID
         Ok(market_id)
