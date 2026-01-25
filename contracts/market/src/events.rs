@@ -98,3 +98,28 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
     }
     .publish(env);
 }
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketResolvedEvent {
+    #[topic]
+    pub market_id: u32,
+    pub outcome: bool,
+    pub resolved_at: u64,
+}
+
+/// Emit a MarketResolved event
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `market_id` - Unique identifier of the resolved market
+/// * `outcome` - Market outcome (true = YES won, false = NO won)
+/// * `resolved_at` - Unix timestamp when market was resolved
+pub fn emit_market_resolved(env: &Env, market_id: u32, outcome: bool, resolved_at: u64) {
+    MarketResolvedEvent {
+        market_id,
+        outcome,
+        resolved_at,
+    }
+    .publish(env);
+}

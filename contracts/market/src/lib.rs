@@ -92,4 +92,63 @@ impl MarketContract {
     ) -> Result<(), ContractError> {
         deposit::deposit_collateral(env, user, market_id, amount)
     }
+
+    /// Resolve a market with oracle-signed outcome
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `market_id` - Market to resolve
+    /// * `outcome` - Outcome (true = YES won, false = NO won)
+    /// * `signature` - Oracle's Ed25519 signature (64 bytes)
+    ///
+    /// # Returns
+    /// Unit (success)
+    ///
+    /// # Errors
+    /// - MarketNotFound
+    /// - MarketAlreadyResolved
+    /// - InvalidSignature: Signature verification failed
+    /// - UnauthorizedOracle: Wrong oracle pubkey
+    ///
+    /// # Events
+    /// Emits MarketResolved event
+    pub fn resolve_market(
+        env: Env,
+        market_id: u32,
+        outcome: bool,
+        signature: BytesN<64>,
+    ) -> Result<(), ContractError> {
+        // 1. Load and validate market
+        let mut market =
+            storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+
+        // 2. Check market is not already resolved
+        if market.status == MarketStatus::Resolved {
+            return Err(ContractError::MarketAlreadyResolved);
+        }
+
+        // 3. Verify oracle signature
+        // Note: verify_oracle_signature may panic on invalid signatures, which will
+        // be caught as a contract error. We use the market's stored oracle_pubkey.
+        oracle::verify_oracle_signature(
+            &env,
+            market_id,
+            outcome,
+            &signature,
+            &market.oracle_pubkey,
+        )?;
+
+        // 4. Update market status and store outcome
+        market.status = MarketStatus::Resolved;
+        market.result = Some(outcome);
+
+        // 5. Store updated market
+        storage::set_market(&env, market_id, &market);
+
+        // 6. Record resolution time and emit event
+        let resolved_at = env.ledger().timestamp();
+        events::emit_market_resolved(&env, market_id, outcome, resolved_at);
+
+        Ok(())
+    }
 }
