@@ -119,8 +119,8 @@ impl MarketContract {
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
         // 1. Load and validate market
-        let mut market = storage::get_market(&env, market_id)
-            .ok_or(ContractError::MarketNotFound)?;
+        let mut market =
+            storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
 
         // 2. Check market is not already resolved
         if market.status == MarketStatus::Resolved {
