@@ -8,6 +8,7 @@ mod oracle;
 mod positions;
 #[allow(dead_code)]
 mod settlement;
+mod withdraw;
 
 #[allow(dead_code)]
 mod storage;
@@ -91,6 +92,33 @@ impl MarketContract {
         amount: i128,
     ) -> Result<(), ContractError> {
         deposit::deposit_collateral(env, user, market_id, amount)
+    }
+
+    /// Withdraw unused collateral from a market
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User withdrawing
+    /// * `market_id` - Market to withdraw from
+    /// * `amount` - Amount to withdraw in stroops
+    ///
+    /// # Returns
+    /// Unit (success)
+    ///
+    /// # Errors
+    /// - MarketNotFound
+    /// - InsufficientCollateral: Trying to withdraw locked collateral
+    /// - InvalidQuantity: Amount <= 0
+    ///
+    /// # Events
+    /// Emits CollateralWithdrawn event
+    pub fn withdraw_unused_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        withdraw::withdraw_unused_collateral(env, user, market_id, amount)
     }
 
     /// Resolve a market with oracle-signed outcome

@@ -82,11 +82,16 @@ pub fn deposit_collateral(
         yes_shares: 0,
         no_shares: 0,
         locked_collateral: 0,
+        total_deposited: 0,
         is_settled: false,
     });
 
-    // Add to locked_collateral (represents total deposited)
-    // This is available for buying shares
+    // Add to total_deposited (total collateral user has in this market)
+    position.total_deposited = position
+        .total_deposited
+        .checked_add(amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    // Add to locked_collateral (available for buying shares until they trade)
     position.locked_collateral = position
         .locked_collateral
         .checked_add(amount)
@@ -96,7 +101,7 @@ pub fn deposit_collateral(
     storage::set_position(&env, market_id, &user, &position);
 
     // Emit event
-    emit_collateral_deposited(&env, &user, market_id, amount, position.locked_collateral);
+    emit_collateral_deposited(&env, &user, market_id, amount, position.total_deposited);
 
     Ok(())
 }
