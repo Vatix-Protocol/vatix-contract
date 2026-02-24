@@ -208,10 +208,10 @@ mod tests {
         let position = Position {
             market_id,
             user: user.clone(),
-            yes_shares: 100,  // net YES
+            yes_shares: 100, // net YES
             no_shares: 0,
-            locked_collateral: 50,   // required at 50/50 = 50
-            total_deposited: 100,    // available = 100 - 50 = 50
+            locked_collateral: 50, // required at 50/50 = 50
+            total_deposited: 100,  // available = 100 - 50 = 50
             is_settled: false,
         };
 
@@ -268,7 +268,7 @@ mod tests {
             user: user.clone(),
             yes_shares: 120,
             no_shares: 0,
-            locked_collateral: 60,   // 120 * 5000/10000 = 60
+            locked_collateral: 60, // 120 * 5000/10000 = 60
             total_deposited: 100,
             is_settled: false,
         };

@@ -4,11 +4,11 @@ mod deposit;
 mod error;
 mod events;
 mod oracle;
-mod withdraw;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
 mod settlement;
+mod withdraw;
 
 #[allow(dead_code)]
 mod storage;
