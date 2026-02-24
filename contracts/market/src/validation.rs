@@ -73,6 +73,29 @@ pub fn validate_outcome(outcome: bool) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Parse a decimal market_id string to u32 (e.g. "1", "42").
+/// Returns InvalidQuantity if empty, non-digit, or overflow.
+pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
+    let len = market_id.len();
+    if len == 0 || len > 10 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    let mut buf = [0u8; 10];
+    let slice = &mut buf[..len as usize];
+    market_id.copy_into_slice(slice);
+    let mut n: u32 = 0;
+    for b in slice.iter() {
+        if *b < b'0' || *b > b'9' {
+            return Err(ContractError::InvalidQuantity);
+        }
+        n = n
+            .checked_mul(10)
+            .and_then(|n| n.checked_add((*b - b'0') as u32))
+            .ok_or(ContractError::InvalidQuantity)?;
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +220,33 @@ mod tests {
     fn test_valid_outcome() {
         assert!(validate_outcome(true).is_ok());
         assert!(validate_outcome(false).is_ok());
+    }
+
+    #[test]
+    fn test_parse_market_id_valid() {
+        let env = soroban_sdk::Env::default();
+        assert_eq!(parse_market_id(&String::from_str(&env, "1")).unwrap(), 1);
+        assert_eq!(parse_market_id(&String::from_str(&env, "42")).unwrap(), 42);
+        assert_eq!(
+            parse_market_id(&String::from_str(&env, "999")).unwrap(),
+            999
+        );
+    }
+
+    #[test]
+    fn test_parse_market_id_invalid() {
+        let env = soroban_sdk::Env::default();
+        assert_eq!(
+            parse_market_id(&String::from_str(&env, "")),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            parse_market_id(&String::from_str(&env, "abc")),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            parse_market_id(&String::from_str(&env, "12a")),
+            Err(ContractError::InvalidQuantity)
+        );
     }
 }

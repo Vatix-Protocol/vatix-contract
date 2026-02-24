@@ -97,7 +97,7 @@ impl MarketContract {
     ///
     /// # Arguments
     /// * `env` - Contract environment
-    /// * `market_id` - Market to resolve
+    /// * `market_id` - Market to resolve (decimal string, e.g. "1")
     /// * `outcome` - Outcome (true = YES won, false = NO won)
     /// * `signature` - Oracle's Ed25519 signature (64 bytes)
     ///
@@ -114,10 +114,11 @@ impl MarketContract {
     /// Emits MarketResolved event
     pub fn resolve_market(
         env: Env,
-        market_id: u32,
+        market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
             storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
