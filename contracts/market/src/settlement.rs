@@ -108,6 +108,7 @@ mod tests {
             yes_shares: yes,
             no_shares: no,
             locked_collateral: yes + no, // simplified
+            total_deposited: yes + no,
             is_settled: settled,
         }
     }
