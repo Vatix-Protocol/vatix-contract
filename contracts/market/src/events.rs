@@ -65,7 +65,6 @@ pub fn emit_collateral_deposited(
 /// * market_id - Market identifier
 /// * amount - Amount withdrawn in stroops
 /// * new_total - User's total collateral in this market after withdrawal
-#[allow(dead_code)]
 pub fn emit_collateral_withdrawn(
     env: &Env,
     user: &Address,

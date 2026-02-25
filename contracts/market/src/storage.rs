@@ -141,6 +141,7 @@ mod test {
             yes_shares: 100,
             no_shares: 0,
             locked_collateral: 100,
+            total_deposited: 100,
             is_settled: false,
         };
 

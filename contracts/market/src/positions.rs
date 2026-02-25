@@ -96,6 +96,7 @@ pub fn update_position(
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         });
 
@@ -179,6 +180,7 @@ mod tests {
             yes_shares: 50,
             no_shares: 50,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         };
 
@@ -204,6 +206,7 @@ mod tests {
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         };
 
@@ -220,6 +223,7 @@ mod tests {
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: true,
         };
 
