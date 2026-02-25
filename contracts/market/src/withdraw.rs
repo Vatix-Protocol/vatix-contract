@@ -40,8 +40,8 @@ pub fn withdraw_unused_collateral(
     market_id: u32,
     amount: i128,
 ) -> Result<(), ContractError> {
-    // Step 1: Validate
     user.require_auth();
+
     validation::validate_collateral_amount(amount)?;
 
     let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
@@ -60,7 +60,6 @@ pub fn withdraw_unused_collateral(
         is_settled: false,
     });
 
-    // Step 2: Check available collateral
     let required_lock =
         calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
     let available = position
@@ -80,12 +79,10 @@ pub fn withdraw_unused_collateral(
 
     storage::set_position(&env, market_id, &user, &position);
 
-    // Step 3: Transfer tokens back
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
     token_client.transfer(&contract_address, &user, &amount);
 
-    // Step 4: Emit event
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
 
     Ok(())
@@ -244,6 +241,7 @@ mod tests {
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
             storage::set_market(&env, market_id, &market);
+            // No position - available = 0
         });
 
         env.mock_all_auths();
@@ -257,6 +255,7 @@ mod tests {
 
     #[test]
     fn test_withdraw_available_vs_locked() {
+        // total_deposited 100, required_lock 60 (e.g. net YES 120 at 50%) -> available 40
         let env = setup_env();
         let user = Address::generate(&env);
         let market_id = 1u32;
