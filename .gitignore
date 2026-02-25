@@ -21,3 +21,5 @@ Thumbs.db
 *.so
 *.dylib
 *.dll
+
+contracts/*/test_snapshots

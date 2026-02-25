@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/market
+      
+      - name: Format check
+        run: cd contracts/market && cargo fmt --check
+      
+      - name: Clippy
+        run: cd contracts/market && cargo clippy -- -D warnings
+      
+      - name: Tests
+        run: cd contracts/market && cargo test
+      
+      - name: Build
+        run: cd contracts/market && cargo build --target wasm32-unknown-unknown
