@@ -125,7 +125,7 @@ impl MarketContract {
     ///
     /// # Arguments
     /// * `env` - Contract environment
-    /// * `market_id` - Market to resolve
+    /// * `market_id` - Market to resolve (decimal string, e.g. "1")
     /// * `outcome` - Outcome (true = YES won, false = NO won)
     /// * `signature` - Oracle's Ed25519 signature (64 bytes)
     ///
@@ -142,22 +142,19 @@ impl MarketContract {
     /// Emits MarketResolved event
     pub fn resolve_market(
         env: Env,
-        market_id: u32,
+        market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
-        // 1. Load and validate market
+        let market_id = validation::parse_market_id(&market_id)?;
+        // Step 1: Load and validate market
         let mut market =
             storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
-
-        // 2. Check market is not already resolved
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // 3. Verify oracle signature
-        // Note: verify_oracle_signature may panic on invalid signatures, which will
-        // be caught as a contract error. We use the market's stored oracle_pubkey.
+        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
         oracle::verify_oracle_signature(
             &env,
             market_id,
@@ -166,14 +163,12 @@ impl MarketContract {
             &market.oracle_pubkey,
         )?;
 
-        // 4. Update market status and store outcome
+        // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-
-        // 5. Store updated market
         storage::set_market(&env, market_id, &market);
 
-        // 6. Record resolution time and emit event
+        // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
