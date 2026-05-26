@@ -18,6 +18,7 @@ pub fn validate_market_creation(
     }
 
     // End time must be in future (> current_time)
+    // TODO(#71): Reject post-expiration trading with MarketExpired, not only at creation
     if end_time <= current_time {
         return Err(ContractError::InvalidTimestamp);
     }
