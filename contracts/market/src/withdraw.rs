@@ -16,24 +16,36 @@ use soroban_sdk::{Address, Env};
 /// Market price used for locked collateral calculation (50/50 = 5000 basis points).
 const MARKET_PRICE_BPS: i128 = 5_000;
 
-/// Withdraw unused collateral from a market
+/// Withdraw unused collateral from a market.
+///
+/// Computes how much collateral is locked by the user's YES/NO shares at the
+/// current 50/50 market price, then allows withdrawing any remaining balance.
 ///
 /// # Arguments
 /// * `env` - Contract environment
-/// * `user` - User withdrawing
+/// * `user` - User withdrawing (must authorize the call)
 /// * `market_id` - Market to withdraw from
-/// * `amount` - Amount to withdraw in stroops
+/// * `amount` - Amount to withdraw in stroops (1 USDC = 10^7 stroops)
 ///
 /// # Returns
-/// Unit (success)
+/// `Ok(())` on success.
 ///
 /// # Errors
-/// - MarketNotFound
-/// - InsufficientCollateral: Trying to withdraw locked collateral
-/// - InvalidQuantity: Amount <= 0
+/// - `MarketNotFound`: The market does not exist
+/// - `MarketNotActive`: The market is resolved or canceled
+/// - `InsufficientCollateral`: `amount` exceeds unlocked collateral
+/// - `InvalidQuantity`: `amount` is zero or negative
+/// - `ArithmeticOverflow`: Subtracting `amount` would overflow
 ///
 /// # Events
-/// Emits CollateralWithdrawn event
+/// Emits `CollateralWithdrawn` with the user, market, amount, and new total.
+///
+/// # Examples
+/// ```
+/// // Withdraw 0.1 USDC (1_000_000 stroops) from an active market when the user
+/// // has at least that much unlocked collateral:
+/// withdraw_unused_collateral(env, user, market_id, 1_000_000)?;
+/// ```
 pub fn withdraw_unused_collateral(
     env: Env,
     user: Address,
