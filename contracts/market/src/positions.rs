@@ -1,9 +1,17 @@
-use crate::error::ContractError;
 use crate::types::{Market, Position};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{contracterror, Address, Env};
 
 const BASIS_POINTS: i128 = 10_000;
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
+
+/// Errors returned by position validation and update operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum PositionError {
+    /// Proposed YES or NO share change would reduce that side below zero
+    ShareBalanceBelowZero = 1,
+}
 
 /// Calculate required locked collateral based on net position
 ///
@@ -34,17 +42,21 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
     }
 }
 
-/// Validate whether a proposed position change is allowed
+/// Validate whether a proposed position change is allowed.
+///
+/// # Errors
+/// Returns [`PositionError::ShareBalanceBelowZero`] when `yes_delta` or
+/// `no_delta` would leave either share balance negative.
 pub fn validate_position_change(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
-) -> Result<(), ContractError> {
+) -> Result<(), PositionError> {
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
     if new_yes < 0 || new_no < 0 {
-        return Err(ContractError::InvalidShareAmount);
+        return Err(PositionError::ShareBalanceBelowZero);
     }
 
     Ok(())
@@ -79,7 +91,7 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
 /// Updated Position struct
 ///
 /// # Errors
-/// - InvalidShareAmount if deltas would make shares negative
+/// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
 pub fn update_position(
     env: &Env,
     market_id: u32,
@@ -87,7 +99,7 @@ pub fn update_position(
     yes_delta: i128,
     no_delta: i128,
     market_price: i128,
-) -> Result<Position, ContractError> {
+) -> Result<Position, PositionError> {
     // 1. Load or initialize position
     let mut position =
         crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
@@ -185,8 +197,14 @@ mod tests {
         };
 
         assert!(validate_position_change(&position, 10, -20).is_ok());
-        assert!(validate_position_change(&position, -60, 0).is_err());
-        assert!(validate_position_change(&position, 0, -60).is_err());
+        assert_eq!(
+            validate_position_change(&position, -60, 0),
+            Err(PositionError::ShareBalanceBelowZero)
+        );
+        assert_eq!(
+            validate_position_change(&position, 0, -60),
+            Err(PositionError::ShareBalanceBelowZero)
+        );
     }
 
     #[test]
