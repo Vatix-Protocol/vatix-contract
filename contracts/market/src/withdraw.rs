@@ -72,6 +72,10 @@ pub fn withdraw_unused_collateral(
         is_settled: false,
     });
 
+    if position.total_deposited == 0 {
+        return Err(ContractError::InsufficientCollateral);
+    }
+
     let required_lock =
         calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
     let available = position
@@ -237,6 +241,38 @@ mod tests {
         // Try to withdraw 60 when only 50 is available
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 60)
+        });
+
+        assert_eq!(result, Err(ContractError::InsufficientCollateral));
+    }
+
+    #[test]
+    fn test_withdraw_zero_deposited_rejected() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 0,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+        });
+
+        env.mock_all_auths();
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 1)
         });
 
         assert_eq!(result, Err(ContractError::InsufficientCollateral));
