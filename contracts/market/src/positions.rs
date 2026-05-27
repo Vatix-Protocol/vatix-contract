@@ -13,12 +13,27 @@ pub enum PositionError {
     ShareBalanceBelowZero = 1,
 }
 
-/// Calculate required locked collateral based on net position
+/// Calculate required locked collateral based on net position.
 ///
-/// Logic:
-/// - Net YES  => lock net_yes * price
-/// - Net NO   => lock net_no * (1 - price)
-/// - Hedged   => lock 0
+/// # Arguments
+/// * `yes_shares` - Number of YES shares held
+/// * `no_shares` - Number of NO shares held
+/// * `market_price` - Current market price in basis points (0–10_000)
+///
+/// # Returns
+/// Collateral that must remain locked, in the same unit as the share values.
+///
+/// # Logic
+/// - Net YES  => lock `net_yes * price / 10_000`
+/// - Net NO   => lock `net_no * (10_000 - price) / 10_000`
+/// - Hedged   => lock `0`
+///
+/// # Example
+/// ```
+/// // 100 YES shares at a 60% price => 60 units locked
+/// let locked = calculate_locked_collateral(100, 0, 6_000);
+/// assert_eq!(locked, 60);
+/// ```
 pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_price: i128) -> i128 {
     if yes_shares == no_shares {
         return 0;
@@ -62,16 +77,38 @@ pub fn validate_position_change(
     Ok(())
 }
 
-/// Calculate net position from YES and NO shares
+/// Calculate net position from YES and NO shares.
 ///
-/// Positive  => net long YES
-/// Negative  => net long NO
-/// Zero      => hedged
+/// # Arguments
+/// * `yes_shares` - Number of YES shares held
+/// * `no_shares` - Number of NO shares held
+///
+/// # Returns
+/// Positive value => net long YES, negative => net long NO, zero => hedged.
+///
+/// # Example
+/// ```
+/// assert_eq!(calculate_net_position(100, 30), 70);  // net long YES
+/// assert_eq!(calculate_net_position(30, 100), -70); // net long NO
+/// ```
 pub fn calculate_net_position(yes_shares: i128, no_shares: i128) -> i128 {
     yes_shares - no_shares
 }
 
-/// Check if a position is eligible for settlement
+/// Check if a position is eligible for settlement.
+///
+/// Returns `true` only when the market is `Resolved` and the position has not
+/// already been settled.
+///
+/// # Arguments
+/// * `position` - The user's position to check
+/// * `market` - The market the position belongs to
+///
+/// # Example
+/// ```
+/// // Returns false if position.is_settled == true, even on a resolved market.
+/// assert!(!can_settle(&settled_position, &resolved_market));
+/// ```
 pub fn can_settle(position: &Position, market: &Market) -> bool {
     use crate::types::MarketStatus;
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
