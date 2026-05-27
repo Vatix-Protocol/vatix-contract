@@ -110,6 +110,7 @@ pub fn deposit_collateral(
 mod tests {
     use super::*;
     use crate::types::Market;
+    use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
 
     fn setup_env() -> Env {
@@ -277,5 +278,37 @@ mod tests {
         });
 
         assert_eq!(result, Err(ContractError::InvalidQuantity));
+    }
+
+    #[test]
+    fn test_deposit_updates_position_collateral() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+        });
+
+        env.mock_all_auths();
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &10_000);
+
+        let deposit_amount = 5_000i128;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, deposit_amount)
+        });
+        assert!(result.is_ok());
+
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(position.total_deposited, deposit_amount);
+        assert_eq!(position.locked_collateral, deposit_amount);
     }
 }
