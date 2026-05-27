@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useWallet } from "@/context/WalletContext";
+import { WalletConnectButton } from "./WalletConnectButton";
 
 export function Navbar() {
   const { address, isConnecting, connect, disconnect } = useWallet();
@@ -16,33 +17,14 @@ export function Navbar() {
           <Link href="/markets" className="hover:text-indigo-600">
             Markets
           </Link>
-          {address ? (
-            <button
-              type="button"
-              onClick={disconnect}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 dark:border-slate-600"
-              aria-label="Disconnect wallet"
-            >
-              {truncateAddress(address)}
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={isConnecting}
-              onClick={() => void connect()}
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-500 disabled:opacity-60"
-              aria-label={isConnecting ? "Connecting wallet" : "Connect wallet"}
-            >
-              {isConnecting ? "Connecting…" : "Connect wallet"}
-            </button>
-          )}
+          <WalletConnectButton
+            address={address}
+            isConnecting={isConnecting}
+            onConnect={connect}
+            onDisconnect={disconnect}
+          />
         </nav>
       </div>
     </header>
   );
-}
-
-function truncateAddress(addr: string): string {
-  if (addr.length <= 12) return addr;
-  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
 }
