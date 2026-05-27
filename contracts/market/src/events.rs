@@ -157,6 +157,22 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct ValidationFailedEvent {
+    #[topic]
+    pub context: soroban_sdk::Symbol,
+    pub error_code: u32,
+}
+
+pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
+    ValidationFailedEvent {
+        context,
+        error_code,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct PositionSettledEvent {
     #[topic]
@@ -414,6 +430,38 @@ mod tests {
             .into_val(&env);
         assert_eq!(amount_val, amount);
         assert_eq!(new_total_val, new_total);
+    }
+
+    #[test]
+    fn test_emit_validation_failed() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let context = Symbol::new(&env, "validate_collateral");
+        let error_code = 31u32;
+
+        env.as_contract(&contract_id, || {
+            emit_validation_failed(&env, context.clone(), error_code);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "validation_failed_event"));
+
+        let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, context);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let code: u32 = data
+            .get(Symbol::new(&env, "error_code"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(code, error_code);
     }
 
     #[test]
