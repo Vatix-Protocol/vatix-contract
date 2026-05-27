@@ -58,6 +58,11 @@ pub fn verify_oracle_signature(
     signature: &BytesN<64>,
     oracle_pubkey: &BytesN<32>,
 ) -> Result<(), ContractError> {
+    // Reject the all-zero pubkey — it is not a valid Ed25519 public key
+    if oracle_pubkey == &BytesN::from_array(env, &[0u8; 32]) {
+        return Err(ContractError::UnauthorizedOracle);
+    }
+
     // 1. Construct message to verify (market_id + outcome)
     let message = construct_oracle_message(env, market_id, outcome);
 
@@ -217,6 +222,19 @@ mod tests {
         let result = validate_oracle_authorization(&market, &wrong_pubkey);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), ContractError::UnauthorizedOracle);
+    }
+
+    #[test]
+    fn test_verify_signature_rejects_zero_pubkey() {
+        let env = Env::default();
+        let market_id = 1u32;
+        let outcome = true;
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let signature = BytesN::from_array(&env, &[0u8; 64]);
+
+        let result =
+            verify_oracle_signature(&env, market_id, outcome, &signature, &zero_pubkey);
+        assert_eq!(result, Err(ContractError::UnauthorizedOracle));
     }
 
     #[test]
