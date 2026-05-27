@@ -32,17 +32,42 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 - Fee distribution
 - Market expiration and settlement
 
+## Frontend (`apps/web`)
+
+Next.js 16 app for prediction-market UI (mock data + Freighter wallet stub).
+
+```bash
+pnpm install
+pnpm dev          # http://localhost:3002
+pnpm build:web
+```
+
 ## Getting Started
 
-Coming soon
+### Contracts
+
+```bash
+# Prerequisites: Rust toolchain, Soroban CLI
+cd contracts/market && cargo build
+```
+
+### Contributor issues
+
+Generate **375** onboarding issues (125 per repo) — see [`scripts/issues/README.md`](scripts/issues/README.md).
+
+```bash
+pnpm issues:generate
+pnpm issues:publish   # requires gh auth
+```
 
 ## Development
 ```bash
 # Prerequisites
 - Rust toolchain
 - Soroban CLI
+- Node 20+ and pnpm 8+ (for apps/web and issue scripts)
 
-# Build
+# Build contracts
 cargo build 
 ```
 

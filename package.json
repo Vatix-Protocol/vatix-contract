@@ -1,0 +1,20 @@
+{
+  "name": "vatix-contract",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build:web": "pnpm --filter web build",
+    "lint:web": "pnpm --filter web lint",
+    "issues:generate": "tsx scripts/generate-issues.ts",
+    "issues:publish": "tsx scripts/generate-issues.ts --publish"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=8"
+  },
+  "packageManager": "pnpm@8.15.0"
+}
