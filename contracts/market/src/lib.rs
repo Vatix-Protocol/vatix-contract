@@ -104,6 +104,7 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, market_id, &market);
 
+        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
         events::emit_market_created(&env, market_id, &question, end_time);
 
@@ -209,6 +210,7 @@ impl MarketContract {
 
         // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
+        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
         Ok(())

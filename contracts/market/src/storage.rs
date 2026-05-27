@@ -1,25 +1,34 @@
 use crate::types::{Market, Position};
-use soroban_sdk::{symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env};
 
-pub const MARKETS_KEY: Symbol = symbol_short!("MARKETS");
-const POSITIONS_KEY: Symbol = symbol_short!("POSITIONS");
-const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
-const COUNTER_KEY: Symbol = symbol_short!("COUNTER");
+// --- Storage Keys ---
+
+#[contracttype]
+pub enum StorageKey {
+    Market(u32),
+    Position(u32, Address),
+    Admin,
+    MarketCounter,
+}
 
 // --- Market Storage ---
 
 pub fn get_market(env: &Env, market_id: u32) -> Option<Market> {
-    env.storage().persistent().get(&(MARKETS_KEY, market_id))
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Market(market_id))
 }
 
 pub fn set_market(env: &Env, market_id: u32, market: &Market) {
     env.storage()
         .persistent()
-        .set(&(MARKETS_KEY, market_id), market);
+        .set(&StorageKey::Market(market_id), market);
 }
 
 pub fn has_market(env: &Env, market_id: u32) -> bool {
-    env.storage().persistent().has(&(MARKETS_KEY, market_id))
+    env.storage()
+        .persistent()
+        .has(&StorageKey::Market(market_id))
 }
 
 // --- Position Storage ---
@@ -27,19 +36,19 @@ pub fn has_market(env: &Env, market_id: u32) -> bool {
 pub fn get_position(env: &Env, market_id: u32, user: &Address) -> Option<Position> {
     env.storage()
         .persistent()
-        .get(&(POSITIONS_KEY, market_id, user.clone()))
+        .get(&StorageKey::Position(market_id, user.clone()))
 }
 
 pub fn set_position(env: &Env, market_id: u32, user: &Address, position: &Position) {
     env.storage()
         .persistent()
-        .set(&(POSITIONS_KEY, market_id, user.clone()), position);
+        .set(&StorageKey::Position(market_id, user.clone()), position);
 }
 
 pub fn has_position(env: &Env, market_id: u32, user: &Address) -> bool {
     env.storage()
         .persistent()
-        .has(&(POSITIONS_KEY, market_id, user.clone()))
+        .has(&StorageKey::Position(market_id, user.clone()))
 }
 
 // --- Configuration Storage ---
@@ -47,21 +56,28 @@ pub fn has_position(env: &Env, market_id: u32, user: &Address) -> bool {
 pub fn get_admin(env: &Env) -> Address {
     env.storage()
         .persistent()
-        .get(&ADMIN_KEY)
+        .get(&StorageKey::Admin)
         .expect("Admin not set")
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {
-    env.storage().persistent().set(&ADMIN_KEY, admin);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Admin, admin);
 }
 
 pub fn get_next_market_id(env: &Env) -> u32 {
-    env.storage().persistent().get(&COUNTER_KEY).unwrap_or(0)
+    env.storage()
+        .persistent()
+        .get(&StorageKey::MarketCounter)
+        .unwrap_or(0)
 }
 
 pub fn increment_market_id(env: &Env) -> u32 {
     let next_id = get_next_market_id(env) + 1;
-    env.storage().persistent().set(&COUNTER_KEY, &next_id);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::MarketCounter, &next_id);
     next_id
 }
 
@@ -136,7 +152,7 @@ mod test {
         let user = Address::generate(&env);
 
         let position = Position {
-            market_id: market_id,
+            market_id,
             user: user.clone(),
             yes_shares: 100,
             no_shares: 0,

@@ -79,3 +79,45 @@ pub enum ContractError {
     /// Arithmetic operation overflowed
     ArithmeticOverflow = 60,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ContractError;
+
+    #[test]
+    fn test_error_discriminants() {
+        assert_eq!(ContractError::MarketNotFound as u32, 1);
+        assert_eq!(ContractError::MarketAlreadyResolved as u32, 2);
+        assert_eq!(ContractError::MarketNotResolved as u32, 3);
+        assert_eq!(ContractError::MarketExpired as u32, 4);
+        assert_eq!(ContractError::MarketNotActive as u32, 5);
+        assert_eq!(ContractError::InsufficientCollateral as u32, 10);
+        assert_eq!(ContractError::PositionAlreadySettled as u32, 11);
+        assert_eq!(ContractError::NoPositionFound as u32, 12);
+        assert_eq!(ContractError::InvalidShareAmount as u32, 13);
+        assert_eq!(ContractError::InvalidSignature as u32, 20);
+        assert_eq!(ContractError::UnauthorizedOracle as u32, 21);
+        assert_eq!(ContractError::InvalidOutcome as u32, 22);
+        assert_eq!(ContractError::InvalidPrice as u32, 30);
+        assert_eq!(ContractError::InvalidQuantity as u32, 31);
+        assert_eq!(ContractError::InvalidTimestamp as u32, 32);
+        assert_eq!(ContractError::InvalidQuestion as u32, 33);
+        assert_eq!(ContractError::Unauthorized as u32, 40);
+        assert_eq!(ContractError::NotAdmin as u32, 41);
+        assert_eq!(ContractError::TokenTransferFailed as u32, 50);
+        assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
+    }
+
+    #[test]
+    fn test_error_equality() {
+        assert_eq!(ContractError::MarketNotFound, ContractError::MarketNotFound);
+        assert_ne!(ContractError::MarketNotFound, ContractError::MarketNotActive);
+    }
+
+    #[test]
+    fn test_error_ordering() {
+        assert!(ContractError::MarketNotFound < ContractError::InsufficientCollateral);
+        assert!(ContractError::InvalidSignature < ContractError::InvalidPrice);
+        assert!(ContractError::Unauthorized < ContractError::TokenTransferFailed);
+    }
+}
