@@ -78,6 +78,17 @@ pub fn validate_position_change(
     Ok(())
 }
 
+/// Determine which side exceeded the allowed position limits.
+///
+/// Returns `true` when the YES side would underflow, or `false` when the NO
+/// side would underflow.
+fn position_limit_exceeded_side(current_position: &Position, yes_delta: i128, no_delta: i128) -> bool {
+    let new_yes = current_position.yes_shares + yes_delta;
+    let new_no = current_position.no_shares + no_delta;
+
+    new_yes < 0 || (new_no < 0 && new_yes >= 0)
+}
+
 /// Calculate net position from YES and NO shares.
 ///
 /// # Arguments
@@ -151,8 +162,8 @@ pub fn update_position(
         });
 
     // 2. Validate deltas
+    let side_yes = position_limit_exceeded_side(&position, yes_delta, no_delta);
     if let Err(e) = validate_position_change(&position, yes_delta, no_delta) {
-        let side_yes = position.yes_shares + yes_delta < 0;
         emit_position_limit_exceeded(env, market_id, user, side_yes);
         return Err(e);
     }
@@ -293,6 +304,7 @@ mod tests {
     #[test]
     fn test_update_position_limit_exceeded_emits_event() {
         use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
 
         let env = setup_env();
         let contract_id = env.register(crate::MarketContract, ());
@@ -304,7 +316,7 @@ mod tests {
             update_position(&env, market_id, &user, -50, 0, 5000)
         });
 
-        assert_eq!(result, Err(PositionError::ShareBalanceBelowZero));
+        assert_eq!(result.unwrap_err(), PositionError::ShareBalanceBelowZero);
 
         let events = env.events().all();
         assert_eq!(events.len(), 1);
