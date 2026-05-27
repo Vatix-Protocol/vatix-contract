@@ -95,6 +95,7 @@ pub fn withdraw_unused_collateral(
     let token_client = TokenClient::new(&env, &market.collateral_token);
     token_client.transfer(&contract_address, &user, &amount);
 
+    // TODO(#issue): consider batching withdrawal events for gas efficiency
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
 
     Ok(())
