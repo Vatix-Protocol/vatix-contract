@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { MarketCard } from "@/components/MarketCard";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { PositionPanel } from "@/components/PositionPanel";
 import { MOCK_MARKETS } from "@/lib/markets";
 
 export default function HomePage() {
@@ -29,6 +31,13 @@ export default function HomePage() {
           </li>
         ))}
       </ul>
+
+      <div className="mt-10">
+        <h2 className="mb-4 text-lg font-medium">Your positions</h2>
+        <ErrorBoundary>
+          <PositionPanel />
+        </ErrorBoundary>
+      </div>
     </div>
   );
 }
