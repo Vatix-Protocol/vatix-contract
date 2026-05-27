@@ -1,3 +1,4 @@
+use crate::events::emit_position_limit_exceeded;
 use crate::types::{Market, Position};
 use soroban_sdk::{contracterror, Address, Env};
 
@@ -113,7 +114,11 @@ pub fn update_position(
         });
 
     // 2. Validate deltas
-    validate_position_change(&position, yes_delta, no_delta)?;
+    if let Err(e) = validate_position_change(&position, yes_delta, no_delta) {
+        let side_yes = position.yes_shares + yes_delta < 0;
+        emit_position_limit_exceeded(env, market_id, user, side_yes);
+        return Err(e);
+    }
 
     // 3. Apply deltas
     position.yes_shares += yes_delta;
@@ -246,6 +251,38 @@ mod tests {
         };
 
         assert!(!can_settle(&position, &market));
+    }
+
+    #[test]
+    fn test_update_position_limit_exceeded_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 3);
+        let market_id = 3;
+
+        let result = env.as_contract(&contract_id, || {
+            // Try to sell 50 YES shares the user doesn't have
+            update_position(&env, market_id, &user, -50, 0, 5000)
+        });
+
+        assert_eq!(result, Err(PositionError::ShareBalanceBelowZero));
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let topic0: soroban_sdk::Symbol = events
+            .first()
+            .unwrap()
+            .1
+            .get(0)
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
+        );
     }
 
     #[test]

@@ -26,7 +26,46 @@ pub struct MarketContract;
 
 #[contractimpl]
 impl MarketContract {
-    /// Initialize a new market
+    /// Create a new prediction market and return its unique identifier.
+    ///
+    /// Only the stored admin may call this function. The market starts in
+    /// [`MarketStatus::Active`] and accepts collateral deposits immediately.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `creator` - Admin address that authorizes market creation
+    /// * `question` - Human-readable market question (1–499 characters)
+    /// * `end_time` - Unix timestamp after which trading closes (must be
+    ///   within one year of the current ledger time)
+    /// * `oracle_pubkey` - Ed25519 public key of the oracle that will sign
+    ///   the resolution outcome
+    /// * `collateral_token` - Address of the SAC token used as collateral
+    ///   (e.g. USDC)
+    ///
+    /// # Returns
+    /// The `u32` market ID assigned to the new market (auto-incremented).
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] – `creator` is not the admin
+    /// - [`ContractError::InvalidQuestion`] – question is empty or ≥ 500 chars
+    /// - [`ContractError::InvalidTimestamp`] – `end_time` is in the past or
+    ///   more than one year in the future
+    ///
+    /// # Events
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
+    /// `end_time` as payload.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let market_id = client.initialize_market(
+    ///     &admin,
+    ///     &String::from_str(&env, "Will BTC reach $100k by end of year?"),
+    ///     &(env.ledger().timestamp() + 86_400),
+    ///     &oracle_pubkey,
+    ///     &usdc_token,
+    /// );
+    /// assert_eq!(market_id, 1);
+    /// ```
     pub fn initialize_market(
         env: Env,
         creator: Address,
