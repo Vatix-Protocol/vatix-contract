@@ -125,6 +125,27 @@ pub fn emit_market_resolved(env: &Env, market_id: u32, outcome: bool, resolved_a
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct PositionLimitExceededEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    /// The share side that would go negative: true = YES, false = NO
+    pub side_yes: bool,
+}
+
+/// Emit an event when a position change is rejected due to share balance going below zero.
+pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
+    PositionLimitExceededEvent {
+        market_id,
+        user: user.clone(),
+        side_yes,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct PositionUpdatedEvent {
     #[topic]
