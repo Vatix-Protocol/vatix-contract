@@ -19,7 +19,8 @@ pub enum ContractError {
     /// Attempted to resolve a market that has already been resolved
     MarketAlreadyResolved = 2,
 
-    /// Attempted to settle positions before market resolution
+    /// Settlement was attempted but the market has not been resolved yet;
+    /// wait for the oracle to submit a valid resolution before settling
     MarketNotResolved = 3,
 
     /// Market has passed its end_time and is no longer active for trading
@@ -32,7 +33,8 @@ pub enum ContractError {
     /// User does not have enough collateral locked to perform this operation
     InsufficientCollateral = 10,
 
-    /// Attempted to settle a position that has already been settled
+    /// Settlement was attempted on a position that has already been paid out;
+    /// each position can only be settled once
     PositionAlreadySettled = 11,
 
     /// No position exists for this user in this market
