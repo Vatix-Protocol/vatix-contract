@@ -1,8 +1,35 @@
 use crate::error::ContractError;
 use soroban_sdk::String;
 
-/// Validates that a question is non-empty and within length limits
-fn validate_question_format(question: &String) -> Result<(), ContractError> {
+/// Guard function to validate input before processing.
+///
+/// This is a general-purpose validation guard that can be used in integration tests
+/// and contract entry points to ensure invalid inputs are rejected early.
+///
+/// # Arguments
+/// * `input` - The input value to validate
+///
+/// # Returns
+/// `Ok(())` if input is valid, `Err(ContractError::InvalidQuantity)` if invalid
+///
+/// # Example
+/// ```ignore
+/// validation::validate_input_guard(amount)?;
+/// ```
+pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
+    if input <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    Ok(())
+}
+
+/// Validates market creation parameters
+pub fn validate_market_creation(
+    question: &String,
+    end_time: u64,
+    current_time: u64,
+) -> Result<(), ContractError> {
+    // Question must not be empty
     if question.is_empty() {
         return Err(ContractError::InvalidQuestion);
     }
@@ -268,6 +295,29 @@ mod tests {
         );
         assert_eq!(
             parse_market_id(&String::from_str(&env, "12a")),
+            Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_validate_input_guard_valid() {
+        assert!(validate_input_guard(1).is_ok());
+        assert!(validate_input_guard(100).is_ok());
+        assert!(validate_input_guard(i128::MAX / 2).is_ok());
+    }
+
+    #[test]
+    fn test_validate_input_guard_invalid() {
+        assert_eq!(
+            validate_input_guard(0),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_input_guard(-1),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_input_guard(-100),
             Err(ContractError::InvalidQuantity)
         );
     }

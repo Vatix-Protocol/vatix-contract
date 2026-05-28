@@ -78,7 +78,7 @@ impl MarketContract {
         creator.require_auth();
         let admin = storage::get_admin(&env);
         if creator != admin {
-            return Err(ContractError::Unauthorized);
+            return Err(ContractError::NotAdmin);
         }
 
         // 2. Validate inputs

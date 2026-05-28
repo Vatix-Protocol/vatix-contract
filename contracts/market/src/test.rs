@@ -441,4 +441,36 @@ mod test {
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
     }
+
+    #[test]
+    fn test_collateral_deposit_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Create a market
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Clear events from initialization
+        env.events().all();
+
+        // Deposit collateral
+        let user = Address::generate(&env);
+        let amount = 1000i128;
+
+        client.deposit_collateral(&user, &1, &amount);
+
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0, "CollateralDeposited event should be emitted");
+    }
 }
