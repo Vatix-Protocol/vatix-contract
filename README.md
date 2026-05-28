@@ -60,6 +60,19 @@ pnpm issues:generate
 pnpm issues:publish   # requires gh auth
 ```
 
+## Deployment
+
+### deploy.sh
+
+Deploys the compiled contract to the configured network.
+
+```bash
+# Deploy to testnet
+bash scripts/deploy.sh
+```
+
+> Requires Soroban CLI and a funded testnet account. Set `SOROBAN_NETWORK` and `SOROBAN_ACCOUNT` env vars before running.
+
 ## Development
 ```bash
 # Prerequisites
@@ -69,6 +82,31 @@ pnpm issues:publish   # requires gh auth
 
 # Build contracts
 cargo build 
+```
+
+## CI Workflow
+
+Defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Runs on every push and pull request to `main` or `dev`.
+
+| Job | Steps |
+|-----|-------|
+| **ci** | fmt check → clippy → tests → wasm build |
+| **frontend** | pnpm install → lint → Next.js build |
+
+To replicate CI locally:
+
+```bash
+# Contracts
+cd contracts/market
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
+cargo build --target wasm32-unknown-unknown
+
+# Frontend
+pnpm install
+pnpm --filter web lint
+pnpm --filter web build
 ```
 
 ## Security

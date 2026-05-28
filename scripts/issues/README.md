@@ -1,3 +1,13 @@
+# Scripts
+
+## Deployment
+
+- [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID).
+- [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
+
+---
+
 # Contributor issue generator
 
 Generates **375** onboarding issues (**125** per repo) for:
