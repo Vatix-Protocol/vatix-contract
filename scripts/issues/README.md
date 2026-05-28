@@ -39,3 +39,7 @@ pnpm issues:generate -- --publish --delay-ms 500
 | `generated/manifest.json` | summary |
 
 Generated JSON is gitignored; re-run anytime for a fresh local export.
+
+## Tooling config
+
+- **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.

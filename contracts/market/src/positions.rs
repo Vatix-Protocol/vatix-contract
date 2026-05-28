@@ -1,4 +1,4 @@
-use crate::events::emit_position_limit_exceeded;
+use crate::events::{emit_position_limit_exceeded, emit_position_updated};
 use crate::types::{Market, Position};
 use soroban_sdk::{contracterror, Address, Env};
 
@@ -180,6 +180,16 @@ pub fn update_position(
     // 5. Persist
     crate::storage::set_position(env, market_id, user, &position);
 
+    // 6. Emit event
+    emit_position_updated(
+        env,
+        market_id,
+        user,
+        position.yes_shares,
+        position.no_shares,
+        position.locked_collateral,
+    );
+
     Ok(position)
 }
 
@@ -331,6 +341,37 @@ mod tests {
         assert_eq!(
             topic0,
             soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
+        );
+    }
+
+    #[test]
+    fn test_update_position_emits_position_updated_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 5);
+        let market_id = 5;
+
+        env.as_contract(&contract_id, || {
+            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
+                .expect("position update should succeed");
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let topic0: soroban_sdk::Symbol = events
+            .first()
+            .unwrap()
+            .1
+            .get(0)
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_updated_event")
         );
     }
 
