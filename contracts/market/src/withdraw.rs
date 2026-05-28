@@ -4,7 +4,7 @@
 //! Locked collateral is computed from YES/NO shares using a 50/50 market price.
 
 use crate::error::ContractError;
-use crate::events::emit_collateral_withdrawn;
+use crate::events::{emit_collateral_withdrawn, emit_withdraw_edge_case};
 use crate::positions::calculate_locked_collateral;
 use crate::storage;
 use crate::types::{MarketStatus, Position};
@@ -73,6 +73,7 @@ pub fn withdraw_unused_collateral(
     });
 
     if position.total_deposited == 0 {
+        emit_withdraw_edge_case(&env, &user, market_id, amount);
         return Err(ContractError::InsufficientCollateral);
     }
 
@@ -382,4 +383,51 @@ mod tests {
         });
         assert_eq!(updated.total_deposited, 60);
     }
+
+    #[test]
+    fn test_withdraw_edge_case_emits_event() {
+        use soroban_sdk::testutils::Events;
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 0,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+        });
+
+        env.mock_all_auths();
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 100)
+        });
+
+        assert_eq!(result, Err(ContractError::InsufficientCollateral));
+
+        let events = env.events().all();
+        let withdraw_edge_case_events: Vec<_> = events
+            .iter()
+            .filter(|(event, _)| {
+                // Check for WithdrawEdgeCaseEvent
+                event.topics.len() == 2
+                    && event.contract_id == contract_id
+            })
+            .collect();
+
+        assert_eq!(withdraw_edge_case_events.len(), 1);
+    }
 }
+

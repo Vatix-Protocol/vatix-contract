@@ -33,6 +33,16 @@ pub struct CollateralWithdrawnEvent {
     pub new_total: i128,
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct WithdrawEdgeCaseEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub market_id: u32,
+    pub amount: i128,
+}
+
 /// Emit event when collateral is deposited
 ///
 /// # Arguments
@@ -94,6 +104,27 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
         market_id,
         question: question.clone(),
         end_time,
+    }
+    .publish(env);
+}
+
+/// Emit event for withdraw edge case when user has zero collateral deposited
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * user - User's address
+/// * market_id - Market identifier
+/// * amount - Amount attempted to withdraw in stroops
+pub fn emit_withdraw_edge_case(
+    env: &Env,
+    user: &Address,
+    market_id: u32,
+    amount: i128,
+) {
+    WithdrawEdgeCaseEvent {
+        user: user.clone(),
+        market_id,
+        amount,
     }
     .publish(env);
 }
