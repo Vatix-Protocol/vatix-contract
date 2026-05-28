@@ -33,6 +33,16 @@ pub struct CollateralWithdrawnEvent {
     pub new_total: i128,
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PositionSettledEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub market_id: u32,
+    pub payout: i128,
+}
+
 /// Emit event when collateral is deposited
 ///
 /// # Arguments
@@ -94,6 +104,22 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
         market_id,
         question: question.clone(),
         end_time,
+    }
+    .publish(env);
+}
+
+/// Emit event when a position is settled
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * user - User's address
+/// * market_id - Market identifier
+/// * payout - Amount paid out to the user in stroops
+pub fn emit_position_settled(env: &Env, user: &Address, market_id: u32, payout: i128) {
+    PositionSettledEvent {
+        user: user.clone(),
+        market_id,
+        payout,
     }
     .publish(env);
 }
@@ -192,34 +218,6 @@ pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_cod
     .publish(env);
 }
 
-#[contractevent]
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct PositionSettledEvent {
-    #[topic]
-    pub market_id: u32,
-    #[topic]
-    pub user: Address,
-    pub payout: i128,
-    pub settled_at: u64,
-}
-
-#[allow(dead_code)]
-pub fn emit_position_settled(
-    env: &Env,
-    market_id: u32,
-    user: &Address,
-    payout: i128,
-    settled_at: u64,
-) {
-    PositionSettledEvent {
-        market_id,
-        user: user.clone(),
-        payout,
-        settled_at,
-    }
-    .publish(env);
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,10 +375,9 @@ mod tests {
         let market_id = 1u32;
         let user = Address::generate(&env);
         let payout = 100i128;
-        let settled_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_position_settled(&env, market_id, &user, payout, settled_at);
+            emit_position_settled(&env, &user, market_id, payout);
         });
 
         let events = env.events().all();
@@ -392,23 +389,18 @@ mod tests {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "position_settled_event"));
 
-        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
-        assert_eq!(topic1, market_id);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, user);
 
-        let topic2: Address = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, user);
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let payout_val: i128 = data
             .get(Symbol::new(&env, "payout"))
             .unwrap()
             .into_val(&env);
-        let settled_at_val: u64 = data
-            .get(Symbol::new(&env, "settled_at"))
-            .unwrap()
-            .into_val(&env);
         assert_eq!(payout_val, payout);
-        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]
