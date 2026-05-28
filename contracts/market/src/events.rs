@@ -220,6 +220,36 @@ pub fn emit_position_settled(
     }
     .publish(env);
 }
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct OracleSignatureVerifiedEvent {
+    #[topic]
+    pub market_id: u32,
+    pub outcome: bool,
+    pub verified_at: u64,
+}
+
+/// Emit event when oracle signature is verified
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * market_id - Market identifier
+/// * outcome - Verified outcome (true = YES, false = NO)
+/// * verified_at - Unix timestamp when verification occurred
+pub fn emit_oracle_signature_verified(
+    env: &Env,
+    market_id: u32,
+    outcome: bool,
+    verified_at: u64,
+) {
+    OracleSignatureVerifiedEvent {
+        market_id,
+        outcome,
+        verified_at,
+    }
+    .publish(env);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +555,43 @@ mod tests {
             .into_val(&env);
         assert_eq!(amount_val, amount);
         assert_eq!(new_total_val, new_total);
+    }
+
+    #[test]
+    fn test_emit_oracle_signature_verified() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let outcome = true;
+        let verified_at = 1234567890u64;
+
+        env.as_contract(&contract_id, || {
+            emit_oracle_signature_verified(&env, market_id, outcome, verified_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "oracle_signature_verified_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let outcome_val: bool = data
+            .get(Symbol::new(&env, "outcome"))
+            .unwrap()
+            .into_val(&env);
+        let verified_at_val: u64 = data
+            .get(Symbol::new(&env, "verified_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(outcome_val, outcome);
+        assert_eq!(verified_at_val, verified_at);
     }
 }
