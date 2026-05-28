@@ -1,6 +1,7 @@
 use crate::error::ContractError;
 use soroban_sdk::String;
 
+// TODO(#77): Refactor validation helpers for readability
 /// Validates market creation parameters
 pub fn validate_market_creation(
     question: &String,

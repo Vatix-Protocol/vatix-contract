@@ -348,6 +348,8 @@ mod tests {
         let collateral_token = token.address();
         let contract_id = env.register(crate::MarketContract, ());
 
+        env.mock_all_auths();
+
         // Fund the contract with collateral (simulates prior deposit)
         let token_client = StellarAssetClient::new(&env, &collateral_token);
         token_client.mint(&contract_id, &200);
@@ -368,8 +370,6 @@ mod tests {
             storage::set_market(&env, market_id, &market);
             storage::set_position(&env, market_id, &user, &position);
         });
-
-        env.mock_all_auths();
 
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
