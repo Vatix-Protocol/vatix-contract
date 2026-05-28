@@ -1,4 +1,7 @@
-use soroban_sdk::{Address, BytesN, Env, String};
+use soroban_sdk::{
+    testutils::Events as _,
+    Address, BytesN, Env, IntoVal, String,
+};
 
 /// Failure reasons for the integration test harness.
 #[derive(Debug, PartialEq)]
@@ -30,4 +33,24 @@ impl MarketParams {
             collateral_token: Address::generate(env),
         }
     }
+}
+
+/// Assert that at least one event was emitted after an action in the harness.
+///
+/// Call this after any contract action to verify the event was published.
+/// The `expected_topic` string is matched against the first topic symbol of
+/// the most recent event.
+pub fn assert_event_emitted(env: &Env, expected_topic: &str) {
+    let events = env.events().all();
+    assert!(
+        !events.is_empty(),
+        "expected at least one event to be emitted"
+    );
+    let last = events.last().unwrap();
+    let topic: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(env);
+    assert_eq!(
+        topic,
+        soroban_sdk::Symbol::new(env, expected_topic),
+        "event topic mismatch: expected '{expected_topic}'"
+    );
 }

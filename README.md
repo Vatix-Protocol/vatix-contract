@@ -71,6 +71,27 @@ pnpm issues:publish   # requires gh auth
 cargo build 
 ```
 
+## Contract Makefile
+
+The `contracts/market/Makefile` provides convenience targets for day-to-day contract work.
+
+| Target  | Description                                          |
+|---------|------------------------------------------------------|
+| `build` | Compile the contract to WASM (`wasm32-unknown-unknown`) and print the output size |
+| `test`  | Run all unit and integration tests (depends on `build`) |
+| `fmt`   | Format all Rust source with `cargo fmt --all`        |
+| `clean` | Remove build artefacts via `cargo clean`             |
+
+```bash
+# From the repo root
+cd contracts/market
+
+make           # default — builds the WASM artefact
+make test      # build then run the full test suite
+make fmt       # auto-format source files
+make clean     # wipe target/ directory
+```
+
 ## Security
 
 Smart contract security is critical. All contracts will undergo:
