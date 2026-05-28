@@ -40,6 +40,10 @@ pub fn validate_position_change(
     yes_delta: i128,
     no_delta: i128,
 ) -> Result<(), ContractError> {
+    if yes_delta == 0 && no_delta == 0 {
+        return Err(ContractError::InvalidShareAmount);
+    }
+
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
@@ -185,6 +189,11 @@ mod tests {
         assert!(validate_position_change(&position, 10, -20).is_ok());
         assert!(validate_position_change(&position, -60, 0).is_err());
         assert!(validate_position_change(&position, 0, -60).is_err());
+
+        assert_eq!(
+            validate_position_change(&position, 0, 0),
+            Err(ContractError::InvalidShareAmount)
+        );
     }
 
     #[test]
