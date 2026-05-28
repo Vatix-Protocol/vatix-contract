@@ -1,5 +1,6 @@
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
+use soroban_sdk::Env;
 
 /// Calculate payout for a position based on market outcome
 ///
@@ -69,6 +70,9 @@ pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i1
 
     position.is_settled = true;
 
+    // Emit event
+    crate::events::emit_position_settled(env, &position.user, position.market_id, payout);
+
     Ok(payout)
 }
 
@@ -102,7 +106,7 @@ pub fn calculate_market_settlement_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+    use soroban_sdk::{testutils::{Address as _, Events}, Address, BytesN, Env, String};
 
     fn create_test_market(env: &Env, status: MarketStatus, result: Option<bool>) -> Market {
         Market {
@@ -185,7 +189,7 @@ mod tests {
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let mut pos = create_test_position(&env, 100, 0, false);
 
-        let payout = execute_settlement(&mut pos, &market).unwrap();
+        let payout = execute_settlement(&env, &mut pos, &market).unwrap();
         assert_eq!(payout, 100);
         assert!(pos.is_settled);
     }
@@ -196,8 +200,23 @@ mod tests {
         let market = create_test_market(&env, MarketStatus::Resolved, Some(false));
         let mut pos = create_test_position(&env, 100, 30, false);
 
-        let payout = execute_settlement(&mut pos, &market).unwrap();
+        let payout = execute_settlement(&env, &mut pos, &market).unwrap();
         assert_eq!(payout, 30);
+    }
+
+    #[test]
+    fn test_execute_settlement_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
+        let mut pos = create_test_position(&env, 100, 0, false);
+
+        env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap();
+        });
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
     }
 
     #[test]

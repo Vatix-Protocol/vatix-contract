@@ -438,10 +438,9 @@ mod tests {
         let market_id = 1u32;
         let user = Address::generate(&env);
         let payout = 100i128;
-        let settled_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_position_settled(&env, market_id, &user, payout, settled_at);
+            emit_position_settled(&env, &user, market_id, payout);
         });
 
         let events = env.events().all();
@@ -453,23 +452,18 @@ mod tests {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "position_settled_event"));
 
-        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
-        assert_eq!(topic1, market_id);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, user);
 
-        let topic2: Address = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, user);
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let payout_val: i128 = data
             .get(Symbol::new(&env, "payout"))
             .unwrap()
             .into_val(&env);
-        let settled_at_val: u64 = data
-            .get(Symbol::new(&env, "settled_at"))
-            .unwrap()
-            .into_val(&env);
         assert_eq!(payout_val, payout);
-        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]
