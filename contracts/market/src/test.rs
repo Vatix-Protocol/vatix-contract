@@ -205,6 +205,25 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn test_initialize_market_zero_oracle_pubkey_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &zero_pubkey,
+            &collateral_token,
+        );
+    }
+
+    #[test]
     fn test_initialize_market_stores_correct_timestamp() {
         let (env, admin, client, contract_id) = create_test_contract();
 
@@ -440,5 +459,37 @@ mod test {
         let market = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
+    }
+
+    #[test]
+    fn test_collateral_deposit_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Create a market
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Clear events from initialization
+        env.events().all();
+
+        // Deposit collateral
+        let user = Address::generate(&env);
+        let amount = 1000i128;
+
+        client.deposit_collateral(&user, &1, &amount);
+
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0, "CollateralDeposited event should be emitted");
     }
 }

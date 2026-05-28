@@ -78,12 +78,18 @@ impl MarketContract {
         creator.require_auth();
         let admin = storage::get_admin(&env);
         if creator != admin {
-            return Err(ContractError::Unauthorized);
+            return Err(ContractError::NotAdmin);
         }
 
         // 2. Validate inputs
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
+
+        // Guard: an all-zero pubkey can never produce a valid Ed25519 signature,
+        // making the market permanently unresolvable.
+        if oracle_pubkey == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(ContractError::InvalidSignature);
+        }
 
         // 3. Generate market ID
         let market_id = storage::increment_market_id(&env);

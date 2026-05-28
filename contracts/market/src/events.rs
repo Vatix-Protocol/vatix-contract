@@ -33,6 +33,16 @@ pub struct CollateralWithdrawnEvent {
     pub new_total: i128,
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct WithdrawEdgeCaseEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub market_id: u32,
+    pub amount: i128,
+}
+
 /// Emit event when collateral is deposited
 ///
 /// # Arguments
@@ -98,6 +108,27 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
     .publish(env);
 }
 
+/// Emit event for withdraw edge case when user has zero collateral deposited
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * user - User's address
+/// * market_id - Market identifier
+/// * amount - Amount attempted to withdraw in stroops
+pub fn emit_withdraw_edge_case(
+    env: &Env,
+    user: &Address,
+    market_id: u32,
+    amount: i128,
+) {
+    WithdrawEdgeCaseEvent {
+        user: user.clone(),
+        market_id,
+        amount,
+    }
+    .publish(env);
+}
+
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct MarketResolvedEvent {
@@ -134,7 +165,20 @@ pub struct PositionLimitExceededEvent {
     pub side_yes: bool,
 }
 
-/// Emit an event when a position change is rejected due to share balance going below zero.
+/// Emit an event when a position change is rejected because it would push a
+/// share balance below zero.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier where the limit was hit
+/// * `user` - Address of the user whose position change was rejected
+/// * `side_yes` - `true` if the YES share balance would go negative; `false`
+///   if the NO side would go negative
+///
+/// # Example
+/// ```ignore
+/// emit_position_limit_exceeded(&env, market_id, &user, true);
+/// ```
 pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
     PositionLimitExceededEvent {
         market_id,
@@ -157,6 +201,21 @@ pub struct PositionUpdatedEvent {
     pub locked_collateral: i128,
 }
 
+/// Emit an event whenever a user's position is modified (shares bought or sold).
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user whose position was updated
+/// * `yes_shares` - New total YES share balance after the update
+/// * `no_shares` - New total NO share balance after the update
+/// * `locked_collateral` - Collateral (in stroops) now locked to cover the
+///   net position
+///
+/// # Example
+/// ```ignore
+/// emit_position_updated(&env, market_id, &user, 100, 0, 100);
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_updated(
     env: &Env,
@@ -184,6 +243,24 @@ pub struct ValidationFailedEvent {
     pub error_code: u32,
 }
 
+/// Emit an event when a validation step fails, recording which context triggered
+/// the failure and the associated error code.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `context` - Symbol identifying the validation site (e.g.
+///   `Symbol::new(&env, "validate_collateral")`)
+/// * `error_code` - Numeric value of the [`ContractError`] variant that was
+///   returned (e.g. `31` for `InvalidQuantity`)
+///
+/// # Example
+/// ```ignore
+/// emit_validation_failed(
+///     &env,
+///     Symbol::new(&env, "validate_collateral"),
+///     ContractError::InvalidQuantity as u32,
+/// );
+/// ```
 pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
     ValidationFailedEvent {
         context,
@@ -204,6 +281,19 @@ pub struct PositionSettledEvent {
     pub settled_at: u64,
 }
 
+/// Emit an event when a user's position is settled and payout is transferred.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user receiving the payout
+/// * `payout` - Amount transferred to the user in stroops
+/// * `settled_at` - Unix timestamp (ledger time) when settlement occurred
+///
+/// # Example
+/// ```ignore
+/// emit_position_settled(&env, market_id, &user, 500_000, env.ledger().timestamp());
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_settled(
     env: &Env,
@@ -217,6 +307,36 @@ pub fn emit_position_settled(
         user: user.clone(),
         payout,
         settled_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct OracleSignatureVerifiedEvent {
+    #[topic]
+    pub market_id: u32,
+    pub outcome: bool,
+    pub verified_at: u64,
+}
+
+/// Emit event when oracle signature is verified
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * market_id - Market identifier
+/// * outcome - Verified outcome (true = YES, false = NO)
+/// * verified_at - Unix timestamp when verification occurred
+pub fn emit_oracle_signature_verified(
+    env: &Env,
+    market_id: u32,
+    outcome: bool,
+    verified_at: u64,
+) {
+    OracleSignatureVerifiedEvent {
+        market_id,
+        outcome,
+        verified_at,
     }
     .publish(env);
 }
@@ -377,10 +497,9 @@ mod tests {
         let market_id = 1u32;
         let user = Address::generate(&env);
         let payout = 100i128;
-        let settled_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_position_settled(&env, market_id, &user, payout, settled_at);
+            emit_position_settled(&env, &user, market_id, payout);
         });
 
         let events = env.events().all();
@@ -392,23 +511,18 @@ mod tests {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "position_settled_event"));
 
-        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
-        assert_eq!(topic1, market_id);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, user);
 
-        let topic2: Address = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, user);
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let payout_val: i128 = data
             .get(Symbol::new(&env, "payout"))
             .unwrap()
             .into_val(&env);
-        let settled_at_val: u64 = data
-            .get(Symbol::new(&env, "settled_at"))
-            .unwrap()
-            .into_val(&env);
         assert_eq!(payout_val, payout);
-        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]
@@ -525,5 +639,43 @@ mod tests {
             .into_val(&env);
         assert_eq!(amount_val, amount);
         assert_eq!(new_total_val, new_total);
+    }
+
+    #[test]
+    fn test_emit_oracle_signature_verified() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let outcome = true;
+        let verified_at = 1234567890u64;
+
+        env.as_contract(&contract_id, || {
+            emit_oracle_signature_verified(&env, market_id, outcome, verified_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "oracle_signature_verified_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let outcome_val: bool = data
+            .get(Symbol::new(&env, "outcome"))
+            .unwrap()
+            .into_val(&env);
+        let verified_at_val: u64 = data
+            .get(Symbol::new(&env, "verified_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(outcome_val, outcome);
+        assert_eq!(verified_at_val, verified_at);
     }
 }

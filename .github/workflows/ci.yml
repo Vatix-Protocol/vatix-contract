@@ -31,6 +31,11 @@ jobs:
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
+      # Clippy is Rust's official linter. The `-D warnings` flag promotes every
+      # lint warning to a hard error so no warnings can accumulate silently.
+      # To silence a specific lint where it is intentionally acceptable, add a
+      # targeted `#[allow(lint_name)]` attribute in the source rather than
+      # weakening this flag globally.
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       

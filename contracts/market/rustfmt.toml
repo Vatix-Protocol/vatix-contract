@@ -1,0 +1,16 @@
+# Echo guard: no formatting rules are enforced yet.
+#
+# A real implementation should define explicit project-wide rustfmt settings
+# here so that all contributors format code identically. Typical rules include:
+#
+#   edition       = "2021"
+#   max_width     = 100
+#   tab_spaces    = 4
+#   newline_style = "Unix"
+#
+# Until explicit rules are committed, `cargo fmt` and `cargo fmt --check`
+# fall back to rustfmt defaults. Add rules incrementally and verify with:
+#
+#   cd contracts/market && cargo fmt --check
+#
+# See the full option reference at https://rust-lang.github.io/rustfmt/
