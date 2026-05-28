@@ -2,6 +2,9 @@ use crate::types::{Market, Position};
 use soroban_sdk::{contracttype, Address, Env};
 
 // --- Storage Keys ---
+// TODO: https://github.com/vatix-protocol/vatix-contract/issues/79
+// Consider versioning storage layout to support future contract upgrades
+// without data migration issues
 
 #[contracttype]
 pub enum StorageKey {
