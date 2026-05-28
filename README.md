@@ -32,18 +32,77 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 - Fee distribution
 - Market expiration and settlement
 
+## Frontend (`apps/web`)
+
+Next.js 16 app for prediction-market UI (mock data + Freighter wallet stub).
+
+```bash
+pnpm install
+pnpm dev          # http://localhost:3002
+pnpm build:web
+```
+
 ## Getting Started
 
-Coming soon
+### Contracts
+
+```bash
+# Prerequisites: Rust toolchain, Soroban CLI
+cd contracts/market && cargo build
+```
+
+### Contributor issues
+
+Generate **375** onboarding issues (125 per repo) — see [`scripts/issues/README.md`](scripts/issues/README.md).
+
+```bash
+pnpm issues:generate
+pnpm issues:publish   # requires gh auth
+```
+
+## Deployment
+
+### deploy.sh
+
+Deploys the compiled contract to the configured network.
+
+```bash
+# Deploy to testnet
+bash scripts/deploy.sh
+```
+
+> Requires Soroban CLI and a funded testnet account. Set `SOROBAN_NETWORK` and `SOROBAN_ACCOUNT` env vars before running.
 
 ## Development
 ```bash
 # Prerequisites
 - Rust toolchain
 - Soroban CLI
+- Node 20+ and pnpm 8+ (for apps/web and issue scripts)
 
-# Build
+# Build contracts
 cargo build 
+```
+
+## Contract Makefile
+
+The `contracts/market/Makefile` provides convenience targets for day-to-day contract work.
+
+| Target  | Description                                          |
+|---------|------------------------------------------------------|
+| `build` | Compile the contract to WASM (`wasm32-unknown-unknown`) and print the output size |
+| `test`  | Run all unit and integration tests (depends on `build`) |
+| `fmt`   | Format all Rust source with `cargo fmt --all`        |
+| `clean` | Remove build artefacts via `cargo clean`             |
+
+```bash
+# From the repo root
+cd contracts/market
+
+make           # default — builds the WASM artefact
+make test      # build then run the full test suite
+make fmt       # auto-format source files
+make clean     # wipe target/ directory
 ```
 
 ## Security

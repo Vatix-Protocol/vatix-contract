@@ -205,6 +205,25 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn test_initialize_market_zero_oracle_pubkey_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &zero_pubkey,
+            &collateral_token,
+        );
+    }
+
+    #[test]
     fn test_initialize_market_stores_correct_timestamp() {
         let (env, admin, client, contract_id) = create_test_contract();
 
@@ -271,7 +290,7 @@ mod test {
     fn test_resolve_market_not_found() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
-        let non_existent_market_id = 999u32;
+        let non_existent_market_id = String::from_str(&env, "999");
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
 
@@ -308,7 +327,8 @@ mod test {
         // Try to resolve again - should fail
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
-        client.resolve_market(&market_id, &outcome, &invalid_signature);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -322,7 +342,7 @@ mod test {
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
         let collateral_token = Address::generate(&env);
 
-        let market_id = client.initialize_market(
+        let _market_id = client.initialize_market(
             &admin,
             &question,
             &end_time,
@@ -333,7 +353,8 @@ mod test {
         // Try to resolve with invalid signature - should panic
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
-        client.resolve_market(&market_id, &outcome, &invalid_signature);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -365,7 +386,8 @@ mod test {
         assert_eq!(market_before.result, None);
 
         // Resolve market with valid signature
-        client.resolve_market(&market_id, &outcome, &signature);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &signature);
 
         // Verify market is now Resolved
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
@@ -426,7 +448,8 @@ mod test {
         env.events().all();
 
         // Resolve market with valid signature
-        client.resolve_market(&market_id, &outcome, &signature);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &signature);
 
         // Verify event was emitted
         let events = env.events().all();
@@ -436,5 +459,37 @@ mod test {
         let market = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
+    }
+
+    #[test]
+    fn test_collateral_deposit_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Create a market
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Clear events from initialization
+        env.events().all();
+
+        // Deposit collateral
+        let user = Address::generate(&env);
+        let amount = 1000i128;
+
+        client.deposit_collateral(&user, &1, &amount);
+
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0, "CollateralDeposited event should be emitted");
     }
 }

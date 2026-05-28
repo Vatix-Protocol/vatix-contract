@@ -8,6 +8,7 @@ mod oracle;
 mod positions;
 #[allow(dead_code)]
 mod settlement;
+mod withdraw;
 
 #[allow(dead_code)]
 mod storage;
@@ -25,7 +26,46 @@ pub struct MarketContract;
 
 #[contractimpl]
 impl MarketContract {
-    /// Initialize a new market
+    /// Create a new prediction market and return its unique identifier.
+    ///
+    /// Only the stored admin may call this function. The market starts in
+    /// [`MarketStatus::Active`] and accepts collateral deposits immediately.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `creator` - Admin address that authorizes market creation
+    /// * `question` - Human-readable market question (1–499 characters)
+    /// * `end_time` - Unix timestamp after which trading closes (must be
+    ///   within one year of the current ledger time)
+    /// * `oracle_pubkey` - Ed25519 public key of the oracle that will sign
+    ///   the resolution outcome
+    /// * `collateral_token` - Address of the SAC token used as collateral
+    ///   (e.g. USDC)
+    ///
+    /// # Returns
+    /// The `u32` market ID assigned to the new market (auto-incremented).
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] – `creator` is not the admin
+    /// - [`ContractError::InvalidQuestion`] – question is empty or ≥ 500 chars
+    /// - [`ContractError::InvalidTimestamp`] – `end_time` is in the past or
+    ///   more than one year in the future
+    ///
+    /// # Events
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
+    /// `end_time` as payload.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let market_id = client.initialize_market(
+    ///     &admin,
+    ///     &String::from_str(&env, "Will BTC reach $100k by end of year?"),
+    ///     &(env.ledger().timestamp() + 86_400),
+    ///     &oracle_pubkey,
+    ///     &usdc_token,
+    /// );
+    /// assert_eq!(market_id, 1);
+    /// ```
     pub fn initialize_market(
         env: Env,
         creator: Address,
@@ -38,12 +78,18 @@ impl MarketContract {
         creator.require_auth();
         let admin = storage::get_admin(&env);
         if creator != admin {
-            return Err(ContractError::Unauthorized);
+            return Err(ContractError::NotAdmin);
         }
 
         // 2. Validate inputs
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
+
+        // Guard: an all-zero pubkey can never produce a valid Ed25519 signature,
+        // making the market permanently unresolvable.
+        if oracle_pubkey == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(ContractError::InvalidSignature);
+        }
 
         // 3. Generate market ID
         let market_id = storage::increment_market_id(&env);
@@ -64,6 +110,7 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, market_id, &market);
 
+        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
         events::emit_market_created(&env, market_id, &question, end_time);
 
@@ -93,11 +140,38 @@ impl MarketContract {
         deposit::deposit_collateral(env, user, market_id, amount)
     }
 
+    /// Withdraw unused collateral from a market
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User withdrawing
+    /// * `market_id` - Market to withdraw from
+    /// * `amount` - Amount to withdraw in stroops
+    ///
+    /// # Returns
+    /// Unit (success)
+    ///
+    /// # Errors
+    /// - MarketNotFound
+    /// - InsufficientCollateral: Trying to withdraw locked collateral
+    /// - InvalidQuantity: Amount <= 0
+    ///
+    /// # Events
+    /// Emits CollateralWithdrawn event
+    pub fn withdraw_unused_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        withdraw::withdraw_unused_collateral(env, user, market_id, amount)
+    }
+
     /// Resolve a market with oracle-signed outcome
     ///
     /// # Arguments
     /// * `env` - Contract environment
-    /// * `market_id` - Market to resolve
+    /// * `market_id` - Market to resolve (decimal string, e.g. "1")
     /// * `outcome` - Outcome (true = YES won, false = NO won)
     /// * `signature` - Oracle's Ed25519 signature (64 bytes)
     ///
@@ -114,22 +188,19 @@ impl MarketContract {
     /// Emits MarketResolved event
     pub fn resolve_market(
         env: Env,
-        market_id: u32,
+        market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
-        // 1. Load and validate market
+        let market_id = validation::parse_market_id(&market_id)?;
+        // Step 1: Load and validate market
         let mut market =
             storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
-
-        // 2. Check market is not already resolved
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // 3. Verify oracle signature
-        // Note: verify_oracle_signature may panic on invalid signatures, which will
-        // be caught as a contract error. We use the market's stored oracle_pubkey.
+        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
         oracle::verify_oracle_signature(
             &env,
             market_id,
@@ -138,15 +209,14 @@ impl MarketContract {
             &market.oracle_pubkey,
         )?;
 
-        // 4. Update market status and store outcome
+        // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-
-        // 5. Store updated market
         storage::set_market(&env, market_id, &market);
 
-        // 6. Record resolution time and emit event
+        // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
+        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
         Ok(())
