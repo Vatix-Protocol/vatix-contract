@@ -205,6 +205,25 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #20)")]
+    fn test_initialize_market_zero_oracle_pubkey_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &zero_pubkey,
+            &collateral_token,
+        );
+    }
+
+    #[test]
     fn test_initialize_market_stores_correct_timestamp() {
         let (env, admin, client, contract_id) = create_test_contract();
 

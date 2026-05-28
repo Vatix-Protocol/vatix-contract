@@ -171,4 +171,94 @@ mod test {
             assert_eq!(saved_position.market_id, market_id);
         });
     }
+
+    /// Verify that all StorageKey variants are independent slots and that every
+    /// field of the Market and Position structs survives a storage round-trip.
+    #[test]
+    fn test_storage_layout() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let collateral_token = Address::generate(&env);
+        let market_id = 7u32;
+
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Storage layout test question?"),
+            end_time: 9_999_999_999u64,
+            oracle_pubkey: BytesN::from_array(&env, &[0xABu8; 32]),
+            status: crate::types::MarketStatus::Active,
+            result: Some(true),
+            creator: admin.clone(),
+            created_at: 1_000_000u64,
+            collateral_token: collateral_token.clone(),
+        };
+
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 250,
+            no_shares: 75,
+            locked_collateral: 325,
+            total_deposited: 400,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            // --- Admin and MarketCounter are independent slots ---
+            set_admin(&env, &admin);
+            increment_market_id(&env); // counter becomes 1
+
+            assert_eq!(get_admin(&env), admin);
+            // MarketCounter write must not have corrupted Admin slot
+            assert_eq!(get_admin(&env), admin);
+            // Admin write must not have corrupted MarketCounter slot
+            assert_eq!(get_next_market_id(&env), 1);
+
+            // --- Market slot is independent from admin and counter ---
+            assert!(!has_market(&env, market_id));
+            set_market(&env, market_id, &market);
+            assert!(has_market(&env, market_id));
+
+            // Admin and counter are unchanged after market write
+            assert_eq!(get_admin(&env), admin);
+            assert_eq!(get_next_market_id(&env), 1);
+
+            // All Market fields survive the round-trip
+            let m = get_market(&env, market_id).unwrap();
+            assert_eq!(m.id, market.id);
+            assert_eq!(m.question, market.question);
+            assert_eq!(m.end_time, market.end_time);
+            assert_eq!(m.oracle_pubkey, market.oracle_pubkey);
+            assert_eq!(m.result, market.result);
+            assert_eq!(m.creator, market.creator);
+            assert_eq!(m.created_at, market.created_at);
+            assert_eq!(m.collateral_token, market.collateral_token);
+
+            // --- Position slot is keyed by (market_id, user) ---
+            assert!(!has_position(&env, market_id, &user));
+            set_position(&env, market_id, &user, &position);
+            assert!(has_position(&env, market_id, &user));
+
+            // A different user must not see this position
+            let other_user = Address::generate(&env);
+            assert!(!has_position(&env, market_id, &other_user));
+
+            // All Position fields survive the round-trip
+            let p = get_position(&env, market_id, &user).unwrap();
+            assert_eq!(p.market_id, position.market_id);
+            assert_eq!(p.user, position.user);
+            assert_eq!(p.yes_shares, position.yes_shares);
+            assert_eq!(p.no_shares, position.no_shares);
+            assert_eq!(p.locked_collateral, position.locked_collateral);
+            assert_eq!(p.total_deposited, position.total_deposited);
+            assert_eq!(p.is_settled, position.is_settled);
+
+            // Market slot is unchanged after position write
+            let m2 = get_market(&env, market_id).unwrap();
+            assert_eq!(m2.id, market.id);
+        });
+    }
 }

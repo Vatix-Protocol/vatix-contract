@@ -134,7 +134,20 @@ pub struct PositionLimitExceededEvent {
     pub side_yes: bool,
 }
 
-/// Emit an event when a position change is rejected due to share balance going below zero.
+/// Emit an event when a position change is rejected because it would push a
+/// share balance below zero.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier where the limit was hit
+/// * `user` - Address of the user whose position change was rejected
+/// * `side_yes` - `true` if the YES share balance would go negative; `false`
+///   if the NO side would go negative
+///
+/// # Example
+/// ```ignore
+/// emit_position_limit_exceeded(&env, market_id, &user, true);
+/// ```
 pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
     PositionLimitExceededEvent {
         market_id,
@@ -157,6 +170,21 @@ pub struct PositionUpdatedEvent {
     pub locked_collateral: i128,
 }
 
+/// Emit an event whenever a user's position is modified (shares bought or sold).
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user whose position was updated
+/// * `yes_shares` - New total YES share balance after the update
+/// * `no_shares` - New total NO share balance after the update
+/// * `locked_collateral` - Collateral (in stroops) now locked to cover the
+///   net position
+///
+/// # Example
+/// ```ignore
+/// emit_position_updated(&env, market_id, &user, 100, 0, 100);
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_updated(
     env: &Env,
@@ -184,6 +212,24 @@ pub struct ValidationFailedEvent {
     pub error_code: u32,
 }
 
+/// Emit an event when a validation step fails, recording which context triggered
+/// the failure and the associated error code.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `context` - Symbol identifying the validation site (e.g.
+///   `Symbol::new(&env, "validate_collateral")`)
+/// * `error_code` - Numeric value of the [`ContractError`] variant that was
+///   returned (e.g. `31` for `InvalidQuantity`)
+///
+/// # Example
+/// ```ignore
+/// emit_validation_failed(
+///     &env,
+///     Symbol::new(&env, "validate_collateral"),
+///     ContractError::InvalidQuantity as u32,
+/// );
+/// ```
 pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
     ValidationFailedEvent {
         context,
@@ -204,6 +250,19 @@ pub struct PositionSettledEvent {
     pub settled_at: u64,
 }
 
+/// Emit an event when a user's position is settled and payout is transferred.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user receiving the payout
+/// * `payout` - Amount transferred to the user in stroops
+/// * `settled_at` - Unix timestamp (ledger time) when settlement occurred
+///
+/// # Example
+/// ```ignore
+/// emit_position_settled(&env, market_id, &user, 500_000, env.ledger().timestamp());
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_settled(
     env: &Env,

@@ -13,72 +13,90 @@ use soroban_sdk::contracterror;
 #[repr(u32)]
 pub enum ContractError {
     // ========== Market Errors (1-9) ==========
-    /// The requested market does not exist in storage
+    /// The requested market does not exist in storage; verify the market_id is
+    /// correct and that the market has been successfully initialized
     MarketNotFound = 1,
 
-    /// Attempted to resolve a market that has already been resolved
+    /// Attempted to resolve a market that has already been resolved; each
+    /// market can only be resolved once — check market status before resolving
     MarketAlreadyResolved = 2,
 
     /// Settlement was attempted but the market has not been resolved yet;
-    /// wait for the oracle to submit a valid resolution before settling
+    /// wait for the oracle to submit a valid signed resolution before settling
     MarketNotResolved = 3,
 
-    /// Market has passed its end_time and is no longer active for trading
+    /// Market end_time has passed and it is no longer active for trading;
+    /// no new positions may be opened or modified after the deadline
     MarketExpired = 4,
 
-    /// Market is not in Active status (may be Resolved or Canceled)
+    /// Market is not in Active status and cannot accept this operation;
+    /// the market may be Resolved or Canceled — check status before acting
     MarketNotActive = 5,
 
     // ========== Position Errors (10-19) ==========
-    /// User does not have enough collateral locked to perform this operation
+    /// User does not have enough unlocked collateral for this operation;
+    /// deposit more collateral or close open positions to free locked funds
     InsufficientCollateral = 10,
 
     /// Settlement was attempted on a position that has already been paid out;
-    /// each position can only be settled once
+    /// each position can only be settled once — check is_settled before calling
     PositionAlreadySettled = 11,
 
-    /// No position exists for this user in this market
+    /// No position record exists for this (market_id, user) pair;
+    /// the user must deposit collateral and open a position before this call
     NoPositionFound = 12,
 
-    /// Share amount is invalid (e.g., negative or zero when positive required)
+    /// Share amount is invalid; values must be non-negative integers with at
+    /// least one side (yes or no) greater than zero
     InvalidShareAmount = 13,
 
     // ========== Oracle Errors (20-29) ==========
-    /// Oracle signature verification failed
+    /// Oracle Ed25519 signature verification failed; the signature does not
+    /// match the expected message digest for this market_id and outcome
     InvalidSignature = 20,
 
-    /// Caller is not the authorized oracle for this market
+    /// The signing key does not match the authorized oracle for this market;
+    /// ensure the correct oracle keypair is used to sign the resolution
     UnauthorizedOracle = 21,
 
-    /// Resolution outcome value is invalid (must be true or false)
+    /// Resolution outcome is not a valid boolean; must be true (YES wins) or
+    /// false (NO wins) — no other values are accepted
     InvalidOutcome = 22,
 
     // ========== Validation Errors (30-39) ==========
-    /// Price is out of valid range (must be between 0 and 1)
+    /// Price is outside the valid range; binary market prices must be strictly
+    /// between 0 and 1 expressed as a fixed-point fraction
     InvalidPrice = 30,
 
-    /// Quantity is invalid (must be positive)
+    /// Quantity is invalid; the value must be a positive integer and must not
+    /// exceed the contract's maximum allowed collateral amount
     InvalidQuantity = 31,
 
-    /// Timestamp is invalid (e.g., end_time in the past)
+    /// Timestamp is out of range; end_time must be strictly in the future and
+    /// no more than one year (31 536 000 s) from the current ledger time
     InvalidTimestamp = 32,
 
-    /// Market question is invalid (e.g., empty string)
+    /// Market question is invalid; it must be a non-empty UTF-8 string of
+    /// fewer than 500 characters
     InvalidQuestion = 33,
 
     // ========== Authorization Errors (40-49) ==========
-    /// Caller is not authorized to perform this action
+    /// Caller is not authorized to perform this action; only the stored admin
+    /// address may invoke admin-only functions
     Unauthorized = 40,
 
-    /// Caller is not the admin for this operation
+    /// Caller is not the contract admin; use the admin address that was set
+    /// during contract initialization
     NotAdmin = 41,
 
     // ========== Token Errors (50-59) ==========
-    /// Token transfer failed (insufficient balance, approval, etc.)
+    /// Token transfer failed; verify the caller holds sufficient balance and
+    /// has granted the necessary allowance to this contract address
     TokenTransferFailed = 50,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic operation overflowed
+    /// Arithmetic overflow detected; the computed value exceeds the maximum
+    /// representable integer — reduce input magnitudes and retry
     ArithmeticOverflow = 60,
 }
 
