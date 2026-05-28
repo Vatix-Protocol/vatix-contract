@@ -1,6 +1,28 @@
 use crate::error::ContractError;
 use soroban_sdk::String;
 
+/// Guard function to validate input before processing.
+///
+/// This is a general-purpose validation guard that can be used in integration tests
+/// and contract entry points to ensure invalid inputs are rejected early.
+///
+/// # Arguments
+/// * `input` - The input value to validate
+///
+/// # Returns
+/// `Ok(())` if input is valid, `Err(ContractError::InvalidQuantity)` if invalid
+///
+/// # Example
+/// ```ignore
+/// validation::validate_input_guard(amount)?;
+/// ```
+pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
+    if input <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    Ok(())
+}
+
 /// Validates market creation parameters
 pub fn validate_market_creation(
     question: &String,
@@ -12,19 +34,19 @@ pub fn validate_market_creation(
         return Err(ContractError::InvalidQuestion);
     }
 
-    // Question length must be < 500 characters
     if question.len() >= 500 {
         return Err(ContractError::InvalidQuestion);
     }
 
-    // End time must be in future (> current_time)
-    // TODO(#71): Reject post-expiration trading with MarketExpired, not only at creation
+    Ok(())
+}
+
+/// Validates that end_time is in the future and within reasonable bounds
+fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
         return Err(ContractError::InvalidTimestamp);
     }
 
-    // End time not too far in future (< 1 year)
-    // 1 year = 365 * 24 * 60 * 60 = 31,536,000 seconds
     const ONE_YEAR_SECONDS: u64 = 31_536_000;
     if end_time > current_time + ONE_YEAR_SECONDS {
         return Err(ContractError::InvalidTimestamp);
@@ -33,35 +55,61 @@ pub fn validate_market_creation(
     Ok(())
 }
 
-/// Validates collateral amount
-pub fn validate_collateral_amount(amount: i128) -> Result<(), ContractError> {
-    // Amount must be positive
+/// Validates market creation parameters
+pub fn validate_market_creation(
+    question: &String,
+    end_time: u64,
+    current_time: u64,
+) -> Result<(), ContractError> {
+    validate_question_format(question)?;
+    validate_end_time(end_time, current_time)?;
+    Ok(())
+}
+
+/// Validates that amount is positive
+fn validate_amount_positive(amount: i128) -> Result<(), ContractError> {
     if amount <= 0 {
         return Err(ContractError::InvalidQuantity);
     }
+    Ok(())
+}
 
-    // Amount must be reasonable (not overflow i128)
-    // Check against a reasonable maximum to prevent overflow issues
+/// Validates that amount does not exceed reasonable limits
+fn validate_amount_reasonable(amount: i128) -> Result<(), ContractError> {
     const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
     if amount > MAX_REASONABLE_AMOUNT {
         return Err(ContractError::InvalidQuantity);
     }
+    Ok(())
+}
 
+/// Validates collateral amount
+pub fn validate_collateral_amount(amount: i128) -> Result<(), ContractError> {
+    validate_amount_positive(amount)?;
+    validate_amount_reasonable(amount)?;
+    Ok(())
+}
+
+/// Validates that shares are non-negative
+fn validate_shares_non_negative(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
+    if yes_shares < 0 || no_shares < 0 {
+        return Err(ContractError::InvalidShareAmount);
+    }
+    Ok(())
+}
+
+/// Validates that at least one share amount is positive
+fn validate_shares_not_empty(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
+    if yes_shares == 0 && no_shares == 0 {
+        return Err(ContractError::InvalidShareAmount);
+    }
     Ok(())
 }
 
 /// Validates share amounts
 pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
-    // Both must be non-negative
-    if yes_shares < 0 || no_shares < 0 {
-        return Err(ContractError::InvalidShareAmount);
-    }
-
-    // At least one must be > 0
-    if yes_shares == 0 && no_shares == 0 {
-        return Err(ContractError::InvalidShareAmount);
-    }
-
+    validate_shares_non_negative(yes_shares, no_shares)?;
+    validate_shares_not_empty(yes_shares, no_shares)?;
     Ok(())
 }
 
@@ -247,6 +295,29 @@ mod tests {
         );
         assert_eq!(
             parse_market_id(&String::from_str(&env, "12a")),
+            Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_validate_input_guard_valid() {
+        assert!(validate_input_guard(1).is_ok());
+        assert!(validate_input_guard(100).is_ok());
+        assert!(validate_input_guard(i128::MAX / 2).is_ok());
+    }
+
+    #[test]
+    fn test_validate_input_guard_invalid() {
+        assert_eq!(
+            validate_input_guard(0),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_input_guard(-1),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_input_guard(-100),
             Err(ContractError::InvalidQuantity)
         );
     }

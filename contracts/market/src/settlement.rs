@@ -38,23 +38,35 @@ pub fn validate_settlement_eligibility(
     Ok(())
 }
 
+/// Validate that payout amount is non-negative
+///
+/// # Arguments
+/// * `payout` - Payout amount to validate
+///
+/// # Returns
+/// Ok if payout is valid, error otherwise
+fn validate_payout(payout: i128) -> Result<(), ContractError> {
+    if payout < 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    Ok(())
+}
+
 /// Execute settlement for a position and return payout
 ///
 /// This function:
 /// 1. Validates settlement eligibility
 /// 2. Calculates payout
-/// 3. Marks position as settled
-/// 4. Emits PositionSettledEvent
+/// 3. Validates payout amount
+/// 4. Marks position as settled
 /// 5. Returns payout amount
-pub fn execute_settlement(
-    env: &Env,
-    position: &mut Position,
-    market: &Market,
-) -> Result<i128, ContractError> {
+pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i128, ContractError> {
     validate_settlement_eligibility(position, market)?;
 
     let outcome = market.result.ok_or(ContractError::MarketNotResolved)?;
     let payout = calculate_payout(position, outcome);
+
+    validate_payout(payout)?;
 
     position.is_settled = true;
 
@@ -236,5 +248,18 @@ mod tests {
         assert_eq!(winning, 500);
         assert_eq!(losing, 1000);
         assert_eq!(payout, 500);
+    }
+
+    #[test]
+    fn test_validate_payout_valid() {
+        assert!(validate_payout(0).is_ok());
+        assert!(validate_payout(100).is_ok());
+        assert!(validate_payout(i128::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_validate_payout_invalid() {
+        assert_eq!(validate_payout(-1), Err(ContractError::InvalidQuantity));
+        assert_eq!(validate_payout(-100), Err(ContractError::InvalidQuantity));
     }
 }

@@ -34,7 +34,10 @@ export class ErrorBoundary extends React.Component<
   render(): React.ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-950">
+        <div
+          className="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-900 dark:bg-rose-950"
+          role="alert"
+        >
           <p className="font-medium text-rose-900 dark:text-rose-200">
             Something went wrong
           </p>
@@ -42,6 +45,13 @@ export class ErrorBoundary extends React.Component<
             We encountered an error while rendering this component. Please try
             refreshing the page.
           </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-3 rounded px-3 py-1 text-sm font-medium text-rose-700 hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:text-rose-300 dark:hover:bg-rose-900 dark:focus:ring-offset-rose-950"
+            aria-label="Refresh page to recover from error"
+          >
+            Refresh Page
+          </button>
         </div>
       );
     }
