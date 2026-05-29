@@ -42,6 +42,10 @@ jobs:
       - name: Tests
         run: cd contracts/market && cargo test
       
+      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
+      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
+      # contracts/market/Makefile; run `cd contracts/market && make build` locally
+      # to reproduce this check and see the output WASM size.
       - name: Build
         run: cd contracts/market && cargo build --target wasm32-unknown-unknown
 
