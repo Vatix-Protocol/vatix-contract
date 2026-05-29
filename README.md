@@ -73,6 +73,22 @@ bash scripts/deploy.sh
 
 > Requires Soroban CLI and a funded testnet account. Set `SOROBAN_NETWORK` and `SOROBAN_ACCOUNT` env vars before running.
 
+### deploy-testnet.sh
+
+Documents the intended testnet deployment workflow. Currently an echo guard — it prints the deployment steps without executing them, so it is safe to run locally or in CI without side effects.
+
+When a real implementation is ready, this script will:
+1. Build the contract to WASM (`cargo build --target wasm32-unknown-unknown --release`)
+2. Deploy via Soroban CLI (`soroban contract deploy --wasm <path> --network testnet --source <account>`)
+3. Capture and log the returned contract ID for downstream use
+
+```bash
+# Preview the testnet deployment steps (no on-chain action)
+bash scripts/deploy-testnet.sh
+```
+
+> To perform a real deployment, set `SOROBAN_NETWORK=testnet` and `SOROBAN_ACCOUNT=<your-funded-account>` before running once the script is fully implemented.
+
 ## Development
 ```bash
 # Prerequisites
