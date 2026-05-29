@@ -39,9 +39,16 @@ jobs:
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
+      # Runs all unit and integration tests for the market contract via `cargo test`.
+      # Tests are defined alongside the contract source under `contracts/market/src/`
+      # using Soroban SDK test utilities. A new test should be added for every
+      # public contract function to maintain coverage.
       - name: Tests
         run: cd contracts/market && cargo test
       
+      # Compiles the market contract to WebAssembly targeting `wasm32-unknown-unknown`.
+      # The resulting `.wasm` artefact is the deployable contract binary that gets
+      # published to the Stellar network via `scripts/deploy.sh` or the Soroban CLI.
       - name: Build
         run: cd contracts/market && cargo build --target wasm32-unknown-unknown
 

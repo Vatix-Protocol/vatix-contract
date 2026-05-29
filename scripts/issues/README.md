@@ -4,7 +4,7 @@
 
 - [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
 - [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID).
-- [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
+- [`invoke-example.sh`](../invoke-example.sh) — echo guard; documents what a real contract invocation should look like (see the TODO comment inside for details).
 
 ---
 
@@ -53,3 +53,4 @@ Generated JSON is gitignored; re-run anytime for a fresh local export.
 ## Tooling config
 
 - **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
+- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides `build`, `test`, `fmt`, and `clean` targets. Each target currently includes an echo-guard comment explaining what the real implementation should do. Replace these guards with the actual commands once the build pipeline is finalized.

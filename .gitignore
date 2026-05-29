@@ -34,3 +34,6 @@ apps/web/tsconfig.tsbuildinfo
 
 # Generated issue exports (regenerate with pnpm issues:generate)
 scripts/issues/generated/
+
+# Personal notes
+vrickish.md
