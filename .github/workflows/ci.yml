@@ -45,6 +45,16 @@ jobs:
       - name: Build
         run: cd contracts/market && cargo build --target wasm32-unknown-unknown
 
+      # deploy.sh is a guard script that echoes deployment intent without
+      # performing a real on-chain deployment. Running it in CI verifies the
+      # script is executable and reachable, and serves as a placeholder for
+      # the full Soroban CLI deployment step once testnet credentials are
+      # available as repository secrets. When the real implementation lands,
+      # this step will build the WASM artefact, invoke `soroban contract deploy`,
+      # and capture the returned contract ID for downstream use.
+      - name: Deploy (dry-run guard)
+        run: bash scripts/deploy.sh
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
