@@ -105,6 +105,22 @@ make fmt       # auto-format source files
 make clean     # wipe target/ directory
 ```
 
+## Rustfmt config
+
+Formatting rules for the market contract are defined in [`contracts/market/rustfmt.toml`](contracts/market/rustfmt.toml).
+
+The file currently contains an echo-guard comment that documents what a real implementation should define (e.g. `edition`, `max_width`, `tab_spaces`). Until explicit rules are committed, `cargo fmt` falls back to rustfmt defaults.
+
+```bash
+# Auto-format all Rust source files
+cd contracts/market && cargo fmt
+
+# Check formatting without modifying files (used in CI)
+cd contracts/market && cargo fmt --check
+```
+
+> Add formatting rules to `contracts/market/rustfmt.toml` when project-wide conventions are agreed upon. See the [rustfmt configuration reference](https://rust-lang.github.io/rustfmt/) for all available options.
+
 ## Security
 
 Smart contract security is critical. All contracts will undergo:
