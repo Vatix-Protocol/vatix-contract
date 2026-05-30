@@ -61,6 +61,10 @@ pub fn deposit_collateral(
         return Err(ContractError::MarketNotActive);
     }
 
+    if env.ledger().timestamp() > market.end_time {
+        return Err(ContractError::MarketExpired);
+    }
+
     // Transfer USDC from user to contract
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);

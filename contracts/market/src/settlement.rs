@@ -60,7 +60,11 @@ fn validate_payout(payout: i128) -> Result<(), ContractError> {
 /// 3. Validates payout amount
 /// 4. Marks position as settled
 /// 5. Returns payout amount
-pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i128, ContractError> {
+pub fn execute_settlement(
+    env: &Env,
+    position: &mut Position,
+    market: &Market,
+) -> Result<i128, ContractError> {
     validate_settlement_eligibility(position, market)?;
 
     let outcome = market.result.ok_or(ContractError::MarketNotResolved)?;
@@ -71,7 +75,8 @@ pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i1
     position.is_settled = true;
 
     // Emit event
-    crate::events::emit_position_settled(env, &position.user, position.market_id, payout);
+    let settled_at = env.ledger().timestamp();
+    crate::events::emit_position_settled(env, position.market_id, &position.user, payout, settled_at);
 
     Ok(payout)
 }
@@ -186,10 +191,13 @@ mod tests {
     #[test]
     fn test_execute_settlement_marks_as_settled() {
         let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let mut pos = create_test_position(&env, 100, 0, false);
 
-        let payout = execute_settlement(&env, &mut pos, &market).unwrap();
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
         assert_eq!(payout, 100);
         assert!(pos.is_settled);
     }
@@ -197,10 +205,13 @@ mod tests {
     #[test]
     fn test_execute_settlement_returns_correct_amount() {
         let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(false));
         let mut pos = create_test_position(&env, 100, 30, false);
 
-        let payout = execute_settlement(&env, &mut pos, &market).unwrap();
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
         assert_eq!(payout, 30);
     }
 

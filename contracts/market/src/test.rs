@@ -492,4 +492,33 @@ mod test {
         let events = env.events().all();
         assert!(events.len() > 0, "CollateralDeposited event should be emitted");
     }
+
+    // ========== Expiration check tests ==========
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_deposit_collateral_expired_market() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Create a market that expires in 1 day
+        let question = String::from_str(&env, "Will BTC reach $200k?");
+        let end_time = env.ledger().timestamp() + 86400; // 24 h from now
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Advance ledger past end_time so the market is expired
+        env.ledger().set_timestamp(end_time + 1);
+
+        // Attempt to deposit into the expired market — must fail with MarketExpired (#4)
+        let user = Address::generate(&env);
+        client.deposit_collateral(&user, &1, &1000i128);
+    }
 }
