@@ -3,7 +3,7 @@
 ## Deployment
 
 - [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID).
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID). See the [echo guard note in README.md](../../README.md#deploy-testnetssh-echo-guard) for details.
 - [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
 
 ---

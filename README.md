@@ -73,6 +73,14 @@ bash scripts/deploy.sh
 
 > Requires Soroban CLI and a funded testnet account. Set `SOROBAN_NETWORK` and `SOROBAN_ACCOUNT` env vars before running.
 
+### deploy-testnet.sh (echo guard)
+
+`scripts/deploy-testnet.sh` is an **echo guard** — it prints intent only and does not perform a real deploy. A real implementation should:
+
+1. Build the contract (`cargo build --target wasm32-unknown-unknown --release`)
+2. Deploy via Soroban CLI (`soroban contract deploy --wasm <path> --network testnet --source <account>`)
+3. Capture and log the returned contract ID
+
 ## Development
 ```bash
 # Prerequisites
