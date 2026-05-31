@@ -121,6 +121,25 @@ make fmt       # auto-format source files
 make clean     # wipe target/ directory
 ```
 
+## Clippy Lints
+
+[Clippy](https://doc.rust-lang.org/clippy/) is Rust's official linter and is enforced in CI. All warnings are treated as hard errors via `-D warnings`, so the build fails if any lint fires.
+
+```bash
+# Run from the contract directory
+cd contracts/market
+cargo clippy -- -D warnings
+```
+
+To suppress a lint where it is intentionally acceptable, add a targeted attribute in the source rather than weakening the global flag:
+
+```rust
+#[allow(clippy::lint_name)]
+fn my_function() { ... }
+```
+
+The CI step is defined in `.github/workflows/ci.yml` and runs automatically on every push and pull request.
+
 ## Security
 
 Smart contract security is critical. All contracts will undergo:

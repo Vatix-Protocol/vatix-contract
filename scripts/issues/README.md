@@ -3,7 +3,7 @@
 ## Deployment
 
 - [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID).
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID). See the [echo guard note in README.md](../../README.md#deploy-testnetssh-echo-guard) for details.
 - [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
 
 ---
@@ -53,3 +53,5 @@ Generated JSON is gitignored; re-run anytime for a fresh local export.
 ## Tooling config
 
 - **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
+
+- **clippy** — the CI Clippy step runs `cargo clippy -- -D warnings`, which treats every lint warning as a hard error. This is currently an echo guard: it catches obvious issues but does not yet enforce a custom lint set. A real implementation should add project-specific `#[deny(...)]` attributes in `lib.rs` and consider enabling stricter lint groups (`clippy::pedantic`, `clippy::nursery`). Suppress individual lints with targeted `#[allow(lint_name)]` at the call-site rather than weakening the global `-D warnings` flag.
