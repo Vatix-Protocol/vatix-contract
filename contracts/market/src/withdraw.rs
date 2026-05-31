@@ -77,6 +77,8 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
+    // TODO(#85): fee deduction should be applied here before computing available collateral
+    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock =
         calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
     let available = position
