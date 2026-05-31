@@ -28,14 +28,25 @@ jobs:
         with:
           workspaces: contracts/market
       
+      # Format check enforces consistent code style across the project using rustfmt.
+      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
+      # contributors format code identically. This prevents style drift and makes
+      # code reviews focus on logic rather than formatting.
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
-      # Clippy is Rust's official linter. The `-D warnings` flag promotes every
-      # lint warning to a hard error so no warnings can accumulate silently.
-      # To silence a specific lint where it is intentionally acceptable, add a
-      # targeted `#[allow(lint_name)]` attribute in the source rather than
-      # weakening this flag globally.
+      # Echo guard: this step currently runs clippy with `-D warnings` to catch
+      # lint issues early, but does not yet enforce a full set of custom lints.
+      #
+      # What the real implementation should do:
+      #   - Add project-specific `#[deny(...)]` or `#[warn(...)]` attributes in
+      #     lib.rs / main.rs to lock in the exact lint set for this codebase.
+      #   - Consider enabling additional Clippy lint groups such as
+      #     `clippy::pedantic` or `clippy::nursery` for stricter checks.
+      #   - Use `#[allow(lint_name)]` at the call-site for any lint that is
+      #     intentionally acceptable, rather than weakening `-D warnings` globally.
+      #
+      # See scripts/README.md for the full tooling reference.
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
@@ -46,11 +57,22 @@ jobs:
       - name: Tests
         run: cd contracts/market && cargo test
       
-      # Compiles the market contract to WebAssembly targeting `wasm32-unknown-unknown`.
-      # The resulting `.wasm` artefact is the deployable contract binary that gets
-      # published to the Stellar network via `scripts/deploy.sh` or the Soroban CLI.
+      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
+      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
+      # contracts/market/Makefile; run `cd contracts/market && make build` locally
+      # to reproduce this check and see the output WASM size.
       - name: Build
         run: cd contracts/market && cargo build --target wasm32-unknown-unknown
+
+      # deploy.sh is a guard script that echoes deployment intent without
+      # performing a real on-chain deployment. Running it in CI verifies the
+      # script is executable and reachable, and serves as a placeholder for
+      # the full Soroban CLI deployment step once testnet credentials are
+      # available as repository secrets. When the real implementation lands,
+      # this step will build the WASM artefact, invoke `soroban contract deploy`,
+      # and capture the returned contract ID for downstream use.
+      - name: Deploy (dry-run guard)
+        run: bash scripts/deploy.sh
 
   frontend:
     name: Frontend (Next.js)
