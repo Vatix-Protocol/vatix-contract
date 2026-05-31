@@ -28,6 +28,10 @@ jobs:
         with:
           workspaces: contracts/market
       
+      # Format check enforces consistent code style across the project using rustfmt.
+      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
+      # contributors format code identically. This prevents style drift and makes
+      # code reviews focus on logic rather than formatting.
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
