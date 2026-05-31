@@ -73,6 +73,22 @@ bash scripts/deploy.sh
 
 > Requires Soroban CLI and a funded testnet account. Set `SOROBAN_NETWORK` and `SOROBAN_ACCOUNT` env vars before running.
 
+### deploy-testnet.sh
+
+Documents the intended testnet deployment workflow. Currently an echo guard — it prints the deployment steps without executing them, so it is safe to run locally or in CI without side effects.
+
+When a real implementation is ready, this script will:
+1. Build the contract to WASM (`cargo build --target wasm32-unknown-unknown --release`)
+2. Deploy via Soroban CLI (`soroban contract deploy --wasm <path> --network testnet --source <account>`)
+3. Capture and log the returned contract ID for downstream use
+
+```bash
+# Preview the testnet deployment steps (no on-chain action)
+bash scripts/deploy-testnet.sh
+```
+
+> To perform a real deployment, set `SOROBAN_NETWORK=testnet` and `SOROBAN_ACCOUNT=<your-funded-account>` before running once the script is fully implemented.
+
 ## Development
 ```bash
 # Prerequisites
@@ -105,21 +121,24 @@ make fmt       # auto-format source files
 make clean     # wipe target/ directory
 ```
 
-## Rustfmt config
+## Clippy Lints
 
-Formatting rules for the market contract are defined in [`contracts/market/rustfmt.toml`](contracts/market/rustfmt.toml).
-
-The file currently contains an echo-guard comment that documents what a real implementation should define (e.g. `edition`, `max_width`, `tab_spaces`). Until explicit rules are committed, `cargo fmt` falls back to rustfmt defaults.
+[Clippy](https://doc.rust-lang.org/clippy/) is Rust's official linter and is enforced in CI. All warnings are treated as hard errors via `-D warnings`, so the build fails if any lint fires.
 
 ```bash
-# Auto-format all Rust source files
-cd contracts/market && cargo fmt
-
-# Check formatting without modifying files (used in CI)
-cd contracts/market && cargo fmt --check
+# Run from the contract directory
+cd contracts/market
+cargo clippy -- -D warnings
 ```
 
-> Add formatting rules to `contracts/market/rustfmt.toml` when project-wide conventions are agreed upon. See the [rustfmt configuration reference](https://rust-lang.github.io/rustfmt/) for all available options.
+To suppress a lint where it is intentionally acceptable, add a targeted attribute in the source rather than weakening the global flag:
+
+```rust
+#[allow(clippy::lint_name)]
+fn my_function() { ... }
+```
+
+The CI step is defined in `.github/workflows/ci.yml` and runs automatically on every push and pull request.
 
 ## Security
 
