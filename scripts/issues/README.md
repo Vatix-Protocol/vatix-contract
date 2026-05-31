@@ -53,5 +53,4 @@ Generated JSON is gitignored; re-run anytime for a fresh local export.
 ## Tooling config
 
 - **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
-
-- **clippy** — the CI Clippy step runs `cargo clippy -- -D warnings`, which treats every lint warning as a hard error. This is currently an echo guard: it catches obvious issues but does not yet enforce a custom lint set. A real implementation should add project-specific `#[deny(...)]` attributes in `lib.rs` and consider enabling stricter lint groups (`clippy::pedantic`, `clippy::nursery`). Suppress individual lints with targeted `#[allow(lint_name)]` at the call-site rather than weakening the global `-D warnings` flag.
+- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides `build`, `test`, `fmt`, and `clean` targets. Each target currently includes an echo-guard comment explaining what the real implementation should do. Replace these guards with the actual commands once the build pipeline is finalized.

@@ -100,6 +100,22 @@ bash scripts/deploy-testnet.sh
 cargo build 
 ```
 
+## Scripts
+
+The `scripts/` directory contains utility scripts for deployment, invocation, and contributor issue generation. Full documentation is in [`scripts/issues/README.md`](scripts/issues/README.md).
+
+### invoke-example.sh
+
+Smoke-tests a deployed contract by invoking one of its functions via the Soroban CLI. Used in CI to verify that the contract binary is callable after deployment.
+
+```bash
+CONTRACT_ID=your_contract_id bash scripts/invoke-example.sh
+```
+
+> **Note**: Currently an echo guard. Replace with a real `stellar contract invoke` call once the contract is deployed to a target network — see the TODO comment in the script.
+
+---
+
 ## Contract Makefile
 
 The `contracts/market/Makefile` provides convenience targets for day-to-day contract work.
