@@ -71,6 +71,9 @@ jobs:
       # available as repository secrets. When the real implementation lands,
       # this step will build the WASM artefact, invoke `soroban contract deploy`,
       # and capture the returned contract ID for downstream use.
+      #
+      # To run locally: bash scripts/deploy.sh
+      # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
