@@ -68,9 +68,16 @@ jobs:
       # performing a real on-chain deployment. Running it in CI verifies the
       # script is executable and reachable, and serves as a placeholder for
       # the full Soroban CLI deployment step once testnet credentials are
-      # available as repository secrets. When the real implementation lands,
-      # this step will build the WASM artefact, invoke `soroban contract deploy`,
-      # and capture the returned contract ID for downstream use.
+      # available as repository secrets.
+      #
+      # Specifically, README.md (deploy-testnet.sh) lists step (2):
+      #   "Deploy via Soroban CLI (`soroban contract deploy --wasm <path> --network testnet --source <account>`)"
+      #
+      # CI does not perform README step (2) because it requires a funded
+      # testnet account and repository secrets (e.g., SOROBAN_ACCOUNT, keys).
+      # Once secrets are provisioned and reviewed, replace this echo guard
+      # with the real `soroban contract deploy` invocation and ensure the
+      # workflow limits secret exposure (e.g., only run on protected branches).
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
