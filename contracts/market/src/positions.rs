@@ -14,6 +14,18 @@ pub enum PositionError {
     ShareBalanceBelowZero = 1,
 }
 
+/// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
+///
+/// Panics on overflow, which cannot occur for valid share/price values within
+/// the i128 range used by this contract.
+fn scale_by_bps(amount: i128, price_bps: i128) -> i128 {
+    amount
+        .checked_mul(price_bps)
+        .unwrap()
+        .checked_div(BASIS_POINTS)
+        .unwrap()
+}
+
 /// Calculate required locked collateral based on net position.
 ///
 /// # Arguments
@@ -41,20 +53,9 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
     }
 
     if yes_shares > no_shares {
-        let net_yes = yes_shares - no_shares;
-        net_yes
-            .checked_mul(market_price)
-            .unwrap()
-            .checked_div(BASIS_POINTS)
-            .unwrap()
+        scale_by_bps(yes_shares - no_shares, market_price)
     } else {
-        let net_no = no_shares - yes_shares;
-        let inverse_price = BASIS_POINTS - market_price;
-        net_no
-            .checked_mul(inverse_price)
-            .unwrap()
-            .checked_div(BASIS_POINTS)
-            .unwrap()
+        scale_by_bps(no_shares - yes_shares, BASIS_POINTS - market_price)
     }
 }
 
