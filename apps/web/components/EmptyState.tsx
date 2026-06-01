@@ -12,8 +12,8 @@ export function EmptyState({
   onAction,
 }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-900">
-      <h3 className="text-lg font-medium text-slate-900 dark:text-slate-100">
+    <div className="flex w-full flex-col items-center justify-center rounded-lg border border-slate-200 bg-slate-50 p-6 text-center sm:p-8 dark:border-slate-700 dark:bg-slate-900">
+      <h3 className="text-base font-medium text-slate-900 sm:text-lg dark:text-slate-100">
         {title}
       </h3>
       <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
