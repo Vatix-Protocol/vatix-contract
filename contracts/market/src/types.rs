@@ -32,12 +32,9 @@ pub struct Position {
     pub user: Address,
     pub yes_shares: i128,
     pub no_shares: i128,
-    // TODO: ARCHITECTURE REFACTOR
-    // locked_collateral currently tracks BOTH:
-    // 1. Total deposited (what users put in)
-    // 2. Collateral backing positions (calculated from shares)
-    // This is incorrect - should:
-    // move to global user balance model entirely
+    /// Collateral required to back current YES/NO shares (from calculate_locked_collateral).
     pub locked_collateral: i128,
+    /// Total collateral deposited by user in this market (never decreased except by withdraw).
+    pub total_deposited: i128,
     pub is_settled: bool,
 }

@@ -23,3 +23,17 @@ Thumbs.db
 *.dll
 
 contracts/*/test_snapshots
+
+# Node / Next.js
+node_modules/
+.pnpm-store/
+apps/web/.next/
+apps/web/out/
+dist/
+apps/web/tsconfig.tsbuildinfo
+
+# Generated issue exports (regenerate with pnpm issues:generate)
+scripts/issues/generated/
+
+# Personal notes
+vrickish.md

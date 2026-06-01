@@ -17,7 +17,7 @@ export default function MarketsPage() {
           </p>
           <a
             href="/"
-            className="mt-4 inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+            className="mt-4 inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
           >
             Back to home
           </a>
@@ -26,16 +26,7 @@ export default function MarketsPage() {
         <ul className="mt-8 grid gap-4 sm:grid-cols-2">
           {MOCK_MARKETS.map((market) => (
             <li key={market.id}>
-              {/* Wrap each card in a link so it is reachable via Tab and
-                  activatable via Enter/Space. The focus ring is rendered on
-                  the anchor so keyboard users always see a clear indicator. */}
-              <a
-                href={`/markets/${market.id}`}
-                className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
-                aria-label={market.question}
-              >
-                <MarketCard market={market} />
-              </a>
+              <MarketCard market={market} />
             </li>
           ))}
         </ul>

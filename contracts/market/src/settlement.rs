@@ -1,5 +1,6 @@
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
+use soroban_sdk::Env;
 
 /// Calculate payout for a position based on market outcome
 ///
@@ -37,20 +38,45 @@ pub fn validate_settlement_eligibility(
     Ok(())
 }
 
+/// Validate that payout amount is non-negative
+///
+/// # Arguments
+/// * `payout` - Payout amount to validate
+///
+/// # Returns
+/// Ok if payout is valid, error otherwise
+fn validate_payout(payout: i128) -> Result<(), ContractError> {
+    if payout < 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    Ok(())
+}
+
 /// Execute settlement for a position and return payout
 ///
 /// This function:
 /// 1. Validates settlement eligibility
 /// 2. Calculates payout
-/// 3. Marks position as settled
-/// 4. Returns payout amount
-pub fn execute_settlement(position: &mut Position, market: &Market) -> Result<i128, ContractError> {
+/// 3. Validates payout amount
+/// 4. Marks position as settled
+/// 5. Returns payout amount
+pub fn execute_settlement(
+    env: &Env,
+    position: &mut Position,
+    market: &Market,
+) -> Result<i128, ContractError> {
     validate_settlement_eligibility(position, market)?;
 
     let outcome = market.result.ok_or(ContractError::MarketNotResolved)?;
     let payout = calculate_payout(position, outcome);
 
+    validate_payout(payout)?;
+
     position.is_settled = true;
+
+    // Emit event
+    let settled_at = env.ledger().timestamp();
+    crate::events::emit_position_settled(env, position.market_id, &position.user, payout, settled_at);
 
     Ok(payout)
 }
@@ -85,7 +111,7 @@ pub fn calculate_market_settlement_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+    use soroban_sdk::{testutils::{Address as _, Events}, Address, BytesN, Env, String};
 
     fn create_test_market(env: &Env, status: MarketStatus, result: Option<bool>) -> Market {
         Market {
@@ -108,6 +134,7 @@ mod tests {
             yes_shares: yes,
             no_shares: no,
             locked_collateral: yes + no, // simplified
+            total_deposited: yes + no,
             is_settled: settled,
         }
     }
@@ -164,10 +191,13 @@ mod tests {
     #[test]
     fn test_execute_settlement_marks_as_settled() {
         let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let mut pos = create_test_position(&env, 100, 0, false);
 
-        let payout = execute_settlement(&mut pos, &market).unwrap();
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
         assert_eq!(payout, 100);
         assert!(pos.is_settled);
     }
@@ -175,11 +205,29 @@ mod tests {
     #[test]
     fn test_execute_settlement_returns_correct_amount() {
         let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(false));
         let mut pos = create_test_position(&env, 100, 30, false);
 
-        let payout = execute_settlement(&mut pos, &market).unwrap();
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
         assert_eq!(payout, 30);
+    }
+
+    #[test]
+    fn test_execute_settlement_emits_event() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
+        let mut pos = create_test_position(&env, 100, 0, false);
+
+        env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap();
+        });
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
     }
 
     #[test]
@@ -211,5 +259,18 @@ mod tests {
         assert_eq!(winning, 500);
         assert_eq!(losing, 1000);
         assert_eq!(payout, 500);
+    }
+
+    #[test]
+    fn test_validate_payout_valid() {
+        assert!(validate_payout(0).is_ok());
+        assert!(validate_payout(100).is_ok());
+        assert!(validate_payout(i128::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_validate_payout_invalid() {
+        assert_eq!(validate_payout(-1), Err(ContractError::InvalidQuantity));
+        assert_eq!(validate_payout(-100), Err(ContractError::InvalidQuantity));
     }
 }

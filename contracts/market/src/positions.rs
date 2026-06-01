@@ -1,16 +1,40 @@
-use crate::error::ContractError;
+use crate::events::{emit_position_limit_exceeded, emit_position_updated};
 use crate::types::{Market, Position};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{contracterror, Address, Env};
 
 const BASIS_POINTS: i128 = 10_000;
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
 
-/// Calculate required locked collateral based on net position
+/// Errors returned by position validation and update operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum PositionError {
+    /// Proposed YES or NO share change would reduce that side below zero
+    ShareBalanceBelowZero = 1,
+}
+
+/// Calculate required locked collateral based on net position.
 ///
-/// Logic:
-/// - Net YES  => lock net_yes * price
-/// - Net NO   => lock net_no * (1 - price)
-/// - Hedged   => lock 0
+/// # Arguments
+/// * `yes_shares` - Number of YES shares held
+/// * `no_shares` - Number of NO shares held
+/// * `market_price` - Current market price in basis points (0–10_000)
+///
+/// # Returns
+/// Collateral that must remain locked, in the same unit as the share values.
+///
+/// # Logic
+/// - Net YES  => lock `net_yes * price / 10_000`
+/// - Net NO   => lock `net_no * (10_000 - price) / 10_000`
+/// - Hedged   => lock `0`
+///
+/// # Example
+/// ```
+/// // 100 YES shares at a 60% price => 60 units locked
+/// let locked = calculate_locked_collateral(100, 0, 6_000);
+/// assert_eq!(locked, 60);
+/// ```
 pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_price: i128) -> i128 {
     if yes_shares == no_shares {
         return 0;
@@ -34,32 +58,69 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
     }
 }
 
-/// Validate whether a proposed position change is allowed
+/// Validate whether a proposed position change is allowed.
+///
+/// # Errors
+/// Returns [`PositionError::ShareBalanceBelowZero`] when `yes_delta` or
+/// `no_delta` would leave either share balance negative.
 pub fn validate_position_change(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
-) -> Result<(), ContractError> {
+) -> Result<(), PositionError> {
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
     if new_yes < 0 || new_no < 0 {
-        return Err(ContractError::InvalidShareAmount);
+        return Err(PositionError::ShareBalanceBelowZero);
     }
 
     Ok(())
 }
 
-/// Calculate net position from YES and NO shares
+/// Determine which side exceeded the allowed position limits.
 ///
-/// Positive  => net long YES
-/// Negative  => net long NO
-/// Zero      => hedged
+/// Returns `true` when the YES side would underflow, or `false` when the NO
+/// side would underflow.
+fn position_limit_exceeded_side(current_position: &Position, yes_delta: i128, no_delta: i128) -> bool {
+    let new_yes = current_position.yes_shares + yes_delta;
+    let new_no = current_position.no_shares + no_delta;
+
+    new_yes < 0 || (new_no < 0 && new_yes >= 0)
+}
+
+/// Calculate net position from YES and NO shares.
+///
+/// # Arguments
+/// * `yes_shares` - Number of YES shares held
+/// * `no_shares` - Number of NO shares held
+///
+/// # Returns
+/// Positive value => net long YES, negative => net long NO, zero => hedged.
+///
+/// # Example
+/// ```
+/// assert_eq!(calculate_net_position(100, 30), 70);  // net long YES
+/// assert_eq!(calculate_net_position(30, 100), -70); // net long NO
+/// ```
 pub fn calculate_net_position(yes_shares: i128, no_shares: i128) -> i128 {
     yes_shares - no_shares
 }
 
-/// Check if a position is eligible for settlement
+/// Check if a position is eligible for settlement.
+///
+/// Returns `true` only when the market is `Resolved` and the position has not
+/// already been settled.
+///
+/// # Arguments
+/// * `position` - The user's position to check
+/// * `market` - The market the position belongs to
+///
+/// # Example
+/// ```
+/// // Returns false if position.is_settled == true, even on a resolved market.
+/// assert!(!can_settle(&settled_position, &resolved_market));
+/// ```
 pub fn can_settle(position: &Position, market: &Market) -> bool {
     use crate::types::MarketStatus;
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
@@ -79,7 +140,7 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
 /// Updated Position struct
 ///
 /// # Errors
-/// - InvalidShareAmount if deltas would make shares negative
+/// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
 pub fn update_position(
     env: &Env,
     market_id: u32,
@@ -87,7 +148,7 @@ pub fn update_position(
     yes_delta: i128,
     no_delta: i128,
     market_price: i128,
-) -> Result<Position, ContractError> {
+) -> Result<Position, PositionError> {
     // 1. Load or initialize position
     let mut position =
         crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
@@ -96,11 +157,16 @@ pub fn update_position(
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         });
 
     // 2. Validate deltas
-    validate_position_change(&position, yes_delta, no_delta)?;
+    let side_yes = position_limit_exceeded_side(&position, yes_delta, no_delta);
+    if let Err(e) = validate_position_change(&position, yes_delta, no_delta) {
+        emit_position_limit_exceeded(env, market_id, user, side_yes);
+        return Err(e);
+    }
 
     // 3. Apply deltas
     position.yes_shares += yes_delta;
@@ -113,6 +179,16 @@ pub fn update_position(
 
     // 5. Persist
     crate::storage::set_position(env, market_id, user, &position);
+
+    // 6. Emit event
+    emit_position_updated(
+        env,
+        market_id,
+        user,
+        position.yes_shares,
+        position.no_shares,
+        position.locked_collateral,
+    );
 
     Ok(position)
 }
@@ -179,12 +255,19 @@ mod tests {
             yes_shares: 50,
             no_shares: 50,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         };
 
         assert!(validate_position_change(&position, 10, -20).is_ok());
-        assert!(validate_position_change(&position, -60, 0).is_err());
-        assert!(validate_position_change(&position, 0, -60).is_err());
+        assert_eq!(
+            validate_position_change(&position, -60, 0),
+            Err(PositionError::ShareBalanceBelowZero)
+        );
+        assert_eq!(
+            validate_position_change(&position, 0, -60),
+            Err(PositionError::ShareBalanceBelowZero)
+        );
     }
 
     #[test]
@@ -204,6 +287,7 @@ mod tests {
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: false,
         };
 
@@ -220,10 +304,75 @@ mod tests {
             yes_shares: 0,
             no_shares: 0,
             locked_collateral: 0,
+            total_deposited: 0,
             is_settled: true,
         };
 
         assert!(!can_settle(&position, &market));
+    }
+
+    #[test]
+    fn test_update_position_limit_exceeded_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 3);
+        let market_id = 3;
+
+        let result = env.as_contract(&contract_id, || {
+            // Try to sell 50 YES shares the user doesn't have
+            update_position(&env, market_id, &user, -50, 0, 5000)
+        });
+
+        assert_eq!(result.unwrap_err(), PositionError::ShareBalanceBelowZero);
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let topic0: soroban_sdk::Symbol = events
+            .first()
+            .unwrap()
+            .1
+            .get(0)
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
+        );
+    }
+
+    #[test]
+    fn test_update_position_emits_position_updated_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 5);
+        let market_id = 5;
+
+        env.as_contract(&contract_id, || {
+            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
+                .expect("position update should succeed");
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let topic0: soroban_sdk::Symbol = events
+            .first()
+            .unwrap()
+            .1
+            .get(0)
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_updated_event")
+        );
     }
 
     #[test]
