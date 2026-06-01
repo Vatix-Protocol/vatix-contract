@@ -74,6 +74,14 @@ jobs:
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
+      # Verifies that the repository README is present and non-empty. This step
+      # acts as a lightweight documentation gate: it ensures contributors have
+      # not accidentally deleted or truncated the README, which is the primary
+      # entry point for new contributors and CI/CD documentation. No build
+      # tooling is required — a simple file-existence check is sufficient.
+      - name: Verify README
+        run: test -s README.md
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
