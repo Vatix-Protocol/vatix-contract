@@ -2,9 +2,30 @@
 
 ## Deployment
 
-- [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID). See the [echo guard note in README.md](../../README.md#deploy-testnetssh-echo-guard) for details.
-- [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
+- [`deploy.sh`](../deploy.sh) — echo guard; documents what a real mainnet deploy should do (build → deploy via Soroban CLI → log contract ID). The guard comment at the top of the file notes every step the real implementation must carry out. The corresponding CI step (`Deploy (dry-run guard)`) runs this script on every push to verify it is reachable and executable.
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID). The CI step (`Deploy testnet (guard)`) runs this script on every push so the deployment path is always exercised in CI.
+- [`invoke-example.sh`](../invoke-example.sh) — echo guard; demonstrates the `stellar contract invoke` pattern for smoke-testing a deployed contract function. The CI step (`Invoke example (echo guard)`) runs this script on every push. The echo guard comment inside the script notes what the real implementation must do once a contract ID is available.
+
+### invoke-example.sh usage
+
+`invoke-example.sh` shows how to call a function on a deployed Soroban contract.
+Replace the `echo` with the real invocation once a contract has been deployed and
+`CONTRACT_ID` is set (e.g. exported from the deploy step):
+
+```bash
+# Smoke-test the hello function on testnet
+export CONTRACT_ID="CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+stellar contract invoke \
+  --id "$CONTRACT_ID" \
+  --network testnet \
+  --fn hello \
+  --arg --world
+```
+
+The script is intentionally kept as an echo guard until testnet credentials are
+available as repository secrets. See the CI step `Invoke example (echo guard)` in
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) for where it runs.
 
 ---
 
