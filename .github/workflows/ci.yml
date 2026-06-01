@@ -32,6 +32,10 @@ jobs:
       # Configuration is defined in contracts/market/rustfmt.toml to ensure all
       # contributors format code identically. This prevents style drift and makes
       # code reviews focus on logic rather than formatting.
+      #
+      # The `--check` flag makes rustfmt exit with a non-zero status if any file
+      # would be reformatted, failing the CI run without modifying files.
+      # To auto-fix locally before pushing, run: cd contracts/market && cargo fmt
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
