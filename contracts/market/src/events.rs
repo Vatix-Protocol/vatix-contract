@@ -340,6 +340,41 @@ pub fn emit_oracle_signature_verified(
     }
     .publish(env);
 }
+/// Event emitted when the withdraw action completes successfully in the withdraw module.
+///
+/// This is a dedicated action-level event separate from `CollateralWithdrawnEvent`
+/// so indexers can subscribe to withdraw completions without filtering on collateral
+/// accounting fields. The `user` and `market_id` topics allow efficient off-chain
+/// queries (e.g. "all withdrawals by address X in market 3").
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct WithdrawActionEvent {
+    /// The address that performed the withdrawal.
+    #[topic]
+    pub user: Address,
+    /// The market from which collateral was withdrawn.
+    #[topic]
+    pub market_id: u32,
+    /// Amount withdrawn in stroops (1 USDC = 10^7 stroops).
+    pub amount: i128,
+}
+
+/// Emit a [`WithdrawActionEvent`] signalling a successful withdraw.
+///
+/// # Arguments
+/// * `env`       — Soroban environment
+/// * `user`      — Address that initiated the withdrawal (indexed topic)
+/// * `market_id` — Market identifier (indexed topic)
+/// * `amount`    — Amount withdrawn in stroops
+pub fn emit_withdraw_action(env: &Env, user: &Address, market_id: u32, amount: i128) {
+    WithdrawActionEvent {
+        user: user.clone(),
+        market_id,
+        amount,
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +713,45 @@ mod tests {
             .into_val(&env);
         assert_eq!(outcome_val, outcome);
         assert_eq!(verified_at_val, verified_at);
+    }
+
+    #[test]
+    fn test_emit_withdraw_action() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let user = Address::generate(&env);
+        let market_id = 7u32;
+        let amount = 500_000i128;
+
+        env.as_contract(&contract_id, || {
+            emit_withdraw_action(&env, &user, market_id, amount);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "exactly one event must be emitted");
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        // Topic 0: event name symbol
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "withdraw_action_event"));
+
+        // Topic 1: user address (indexed)
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, user);
+
+        // Topic 2: market_id (indexed)
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        // Data: amount field
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let amount_val: i128 = data
+            .get(Symbol::new(&env, "amount"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(amount_val, amount);
     }
 }

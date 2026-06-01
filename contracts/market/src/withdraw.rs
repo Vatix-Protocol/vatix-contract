@@ -4,7 +4,7 @@
 //! Locked collateral is computed from YES/NO shares using a 50/50 market price.
 
 use crate::error::ContractError;
-use crate::events::{emit_collateral_withdrawn, emit_withdraw_edge_case};
+use crate::events::{emit_collateral_withdrawn, emit_withdraw_action, emit_withdraw_edge_case};
 use crate::positions::calculate_locked_collateral;
 use crate::storage;
 use crate::types::{MarketStatus, Position};
@@ -104,6 +104,10 @@ pub fn withdraw_unused_collateral(
 
     // TODO(#issue): consider batching withdrawal events for gas efficiency
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
+
+    // Emit a dedicated withdraw-action event so indexers can subscribe to
+    // successful withdrawals without filtering on collateral accounting fields.
+    emit_withdraw_action(&env, &user, market_id, amount);
 
     Ok(())
 }
