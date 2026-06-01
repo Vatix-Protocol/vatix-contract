@@ -4,7 +4,7 @@
 //! Locked collateral is computed from YES/NO shares using a 50/50 market price.
 
 use crate::error::ContractError;
-use crate::events::{emit_collateral_withdrawn, emit_withdraw_edge_case};
+use crate::events::{emit_collateral_withdrawn, emit_fee_calculated, emit_withdraw_edge_case};
 use crate::positions::calculate_locked_collateral;
 use crate::storage;
 use crate::types::{MarketStatus, Position};
@@ -86,6 +86,9 @@ pub fn withdraw_unused_collateral(
         .checked_sub(required_lock)
         .unwrap_or(0)
         .max(0);
+
+    // Emit fee calculation event (fee_amount is 0 until #85 is implemented)
+    emit_fee_calculated(&env, market_id, &user, 0, available);
 
     if amount > available {
         return Err(ContractError::InsufficientCollateral);

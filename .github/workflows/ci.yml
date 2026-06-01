@@ -29,9 +29,12 @@ jobs:
           workspaces: contracts/market
       
       # Format check enforces consistent code style across the project using rustfmt.
-      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
-      # contributors format code identically. This prevents style drift and makes
-      # code reviews focus on logic rather than formatting.
+      # Configuration is defined in contracts/market/rustfmt.toml — this file pins
+      # project-specific formatting rules (e.g. max_width, imports_granularity) so
+      # that all contributors produce identical output regardless of their local
+      # rustfmt version. Without this config file, rustfmt falls back to its own
+      # defaults, which can differ between toolchain versions and cause noisy diffs.
+      # To auto-fix locally: cd contracts/market && cargo fmt --all
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       

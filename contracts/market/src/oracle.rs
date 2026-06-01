@@ -158,6 +158,15 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_oracle_authorization_zero_pubkey() {
+        let env = Env::default();
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let market = make_market(&env, BytesN::from_array(&env, &[1u8; 32]));
+        let result = validate_oracle_authorization(&market, &zero_pubkey);
+        assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+    }
+
+    #[test]
     fn test_validate_oracle_unauthorized() {
         let env = Env::default();
         let market = make_market(&env, BytesN::from_array(&env, &[1u8; 32]));
