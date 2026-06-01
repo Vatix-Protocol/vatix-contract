@@ -38,6 +38,7 @@ export function DepositForm() {
         <button
           type="submit"
           disabled={isLoading || !amount}
+          aria-label={isLoading ? "Processing deposit" : "Deposit funds"}
           className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-600 dark:hover:bg-indigo-500"
         >
           {isLoading ? "Processing..." : "Deposit"}
