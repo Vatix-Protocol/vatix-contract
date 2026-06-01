@@ -32,6 +32,10 @@ jobs:
       # Configuration is defined in contracts/market/rustfmt.toml to ensure all
       # contributors format code identically. This prevents style drift and makes
       # code reviews focus on logic rather than formatting.
+      #
+      # The `--check` flag makes rustfmt exit with a non-zero status if any file
+      # would be reformatted, failing the CI run without modifying files.
+      # To auto-fix locally before pushing, run: cd contracts/market && cargo fmt
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
@@ -71,6 +75,9 @@ jobs:
       # available as repository secrets. When the real implementation lands,
       # this step will build the WASM artefact, invoke `soroban contract deploy`,
       # and capture the returned contract ID for downstream use.
+      #
+      # To run locally: bash scripts/deploy.sh
+      # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
