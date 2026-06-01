@@ -521,4 +521,28 @@ mod test {
         let user = Address::generate(&env);
         client.deposit_collateral(&user, &1, &1000i128);
     }
+
+    // ========== Validation guard tests ==========
+
+    #[test]
+    fn test_validation_guard_accepts_positive_input() {
+        use crate::validation::validate_input_guard;
+        assert!(validate_input_guard(1).is_ok());
+        assert!(validate_input_guard(1000).is_ok());
+    }
+
+    #[test]
+    fn test_validation_guard_rejects_zero() {
+        use crate::{error::ContractError, validation::validate_input_guard};
+        assert_eq!(validate_input_guard(0), Err(ContractError::InvalidQuantity));
+    }
+
+    #[test]
+    fn test_validation_guard_rejects_negative() {
+        use crate::{error::ContractError, validation::validate_input_guard};
+        assert_eq!(
+            validate_input_guard(-1),
+            Err(ContractError::InvalidQuantity)
+        );
+    }
 }
