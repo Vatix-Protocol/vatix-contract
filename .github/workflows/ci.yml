@@ -28,10 +28,16 @@ jobs:
         with:
           workspaces: contracts/market
       
-      # Format check enforces consistent code style across the project using rustfmt.
-      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
-      # contributors format code identically. This prevents style drift and makes
-      # code reviews focus on logic rather than formatting.
+      # Format check enforces consistent code style across the project using
+      # `rustfmt`.
+      #
+      # Configuration is defined in `contracts/market/rustfmt.toml`. That file is
+      # intentionally an "echo guard" in this repository (it documents what a
+      # real project-wide config would contain). When maintainers decide on a
+      # concrete style, add the desired options to that file so `cargo fmt`
+      # and `cargo fmt --check` enforce the same rules for everyone. Keeping
+      # formatting locked down in CI prevents style drift and lets reviews
+      # focus on behavior rather than whitespace.
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
@@ -47,6 +53,9 @@ jobs:
       #     intentionally acceptable, rather than weakening `-D warnings` globally.
       #
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
@@ -83,6 +92,9 @@ jobs:
       #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
       #   3. Log and export the returned contract ID for use in downstream steps
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
@@ -94,6 +106,9 @@ jobs:
       #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
       #   - Assert the response matches the expected value to act as a smoke test.
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
