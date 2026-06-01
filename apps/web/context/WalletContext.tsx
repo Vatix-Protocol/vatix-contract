@@ -49,8 +49,31 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     [address, isConnecting, connect, disconnect],
   );
 
+  const statusMessage = isConnecting
+    ? "Connecting wallet…"
+    : address
+      ? `Wallet connected: ${address}`
+      : "Wallet disconnected";
+
   return (
-    <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
+    <WalletContext.Provider value={value}>
+      {children}
+      {/*
+       * Screen-reader live region: announces wallet connection state changes
+       * (connecting, connected, disconnected) to assistive technology without
+       * requiring focus. aria-label gives the region a descriptive accessible
+       * name so screen readers identify it as "Wallet status".
+       */}
+      <span
+        role="status"
+        aria-live="polite"
+        aria-label="Wallet status"
+        aria-atomic="true"
+        className="sr-only"
+      >
+        {statusMessage}
+      </span>
+    </WalletContext.Provider>
   );
 }
 
