@@ -105,6 +105,14 @@ pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), Contract
     Ok(())
 }
 
+/// Validates market price is within valid basis-point range (0–10_000)
+pub fn validate_market_price(price: i128) -> Result<(), ContractError> {
+    if price < 0 || price > 10_000 {
+        return Err(ContractError::InvalidPrice);
+    }
+    Ok(())
+}
+
 /// Validates outcome value
 pub fn validate_outcome(outcome: bool) -> Result<(), ContractError> {
     // Simple bool check (for consistency)
@@ -289,6 +297,19 @@ mod tests {
             parse_market_id(&String::from_str(&env, "12a")),
             Err(ContractError::InvalidQuantity)
         );
+    }
+
+    #[test]
+    fn test_validate_market_price_valid() {
+        assert!(validate_market_price(0).is_ok());
+        assert!(validate_market_price(5_000).is_ok());
+        assert!(validate_market_price(10_000).is_ok());
+    }
+
+    #[test]
+    fn test_validate_market_price_invalid() {
+        assert_eq!(validate_market_price(-1), Err(ContractError::InvalidPrice));
+        assert_eq!(validate_market_price(10_001), Err(ContractError::InvalidPrice));
     }
 
     #[test]
