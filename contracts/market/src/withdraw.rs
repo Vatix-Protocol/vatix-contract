@@ -66,15 +66,8 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::MarketNotActive);
     }
 
-    let mut position = storage::get_position(&env, market_id, &user).unwrap_or_else(|| Position {
-        market_id,
-        user: user.clone(),
-        yes_shares: 0,
-        no_shares: 0,
-        locked_collateral: 0,
-        total_deposited: 0,
-        is_settled: false,
-    });
+    let mut position = storage::get_position(&env, market_id, &user)
+            .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
 
     if position.total_deposited == 0 {
         emit_withdraw_edge_case(&env, &user, market_id, amount);
@@ -83,13 +76,18 @@ pub fn withdraw_unused_collateral(
 
     // TODO(#85): fee deduction should be applied here before computing available collateral
     // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
-    let required_lock =
-        calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
-    let available = position
-        .total_deposited
-        .checked_sub(required_lock)
-        .unwrap_or(0)
-        .max(0);
+    let required_lock = calculate_locked_collateral(
+            position.yes_shares,
+            position.no_shares,
+            MARKET_PRICE_BPS,
+        );
+
+        // Available collateral is total deposited minus the amount required to back shares.
+        let available = if position.total_deposited > required_lock {
+            position.total_deposited - required_lock
+        } else {
+            0
+        };
 
     if amount > available {
         return Err(ContractError::InsufficientCollateral);

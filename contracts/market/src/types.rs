@@ -38,3 +38,19 @@ pub struct Position {
     pub total_deposited: i128,
     pub is_settled: bool,
 }
+
+impl Position {
+    /// Create an empty position for a user in a market.
+    /// Used when a position has not been previously recorded in storage.
+    pub fn new_empty(market_id: u32, user: Address) -> Self {
+        Position {
+            market_id,
+            user,
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 0,
+            is_settled: false,
+        }
+    }
+}
