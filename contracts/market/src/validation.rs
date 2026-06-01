@@ -145,6 +145,29 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
     Ok(n)
 }
 
+/// Calculate fee with validation guard
+///
+/// # Arguments
+/// * `amount` - Base amount to calculate fee on
+/// * `fee_rate_bps` - Fee rate in basis points (0-10000)
+///
+/// # Returns
+/// Fee amount in same units as input amount
+///
+/// # Errors
+/// - `InvalidQuantity`: amount <= 0
+/// - `InvalidPrice`: fee_rate_bps outside 0-10000 range
+/// - `ArithmeticOverflow`: calculation would overflow
+pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractError> {
+    validate_amount_positive(amount)?;
+    validate_market_price(fee_rate_bps)?;
+    
+    amount
+        .checked_mul(fee_rate_bps)
+        .and_then(|result| result.checked_div(10_000))
+        .ok_or(ContractError::ArithmeticOverflow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +356,29 @@ mod tests {
             validate_input_guard(-100),
             Err(ContractError::InvalidQuantity)
         );
+    }
+
+    #[test]
+    fn test_calculate_fee_valid() {
+        assert_eq!(calculate_fee(1000, 100).unwrap(), 10); // 1% of 1000
+        assert_eq!(calculate_fee(10000, 500).unwrap(), 500); // 5% of 10000
+        assert_eq!(calculate_fee(100, 0).unwrap(), 0); // 0% fee
+    }
+
+    #[test]
+    fn test_calculate_fee_invalid_amount() {
+        assert_eq!(calculate_fee(0, 100), Err(ContractError::InvalidQuantity));
+        assert_eq!(calculate_fee(-100, 100), Err(ContractError::InvalidQuantity));
+    }
+
+    #[test]
+    fn test_calculate_fee_invalid_rate() {
+        assert_eq!(calculate_fee(1000, -1), Err(ContractError::InvalidPrice));
+        assert_eq!(calculate_fee(1000, 10001), Err(ContractError::InvalidPrice));
+    }
+
+    #[test]
+    fn test_calculate_fee_overflow() {
+        assert_eq!(calculate_fee(i128::MAX, 10000), Err(ContractError::ArithmeticOverflow));
     }
 }
