@@ -97,6 +97,36 @@ jobs:
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
+      # README validation step.
+      #
+      # Why this step exists:
+      #   README.md is the primary entry point for every contributor, reviewer,
+      #   and end-user who discovers this repository. Experience has shown that
+      #   without a CI gate, README.md drifts out of date or is accidentally
+      #   deleted during branch cleanups and forced pushes.
+      #
+      # What it checks:
+      #   The step fails if README.md is absent or empty (zero bytes), which is
+      #   the most common form of documentation rot. It does not enforce prose
+      #   quality — that is a code-review concern.
+      #
+      # How to skip (for WIP / draft PRs only):
+      #   Add the label `skip-readme-check` to your pull request. Remove it
+      #   before requesting a final review.
+      #
+      # Maintenance:
+      #   If the check logic changes (e.g. to validate specific sections),
+      #   update this comment and the corresponding entry in CONTRIBUTING.md so
+      #   contributors know what is required before opening a PR.
+      - name: Check README is present and non-empty
+        run: |
+          if [ ! -s README.md ]; then
+            echo "ERROR: README.md is missing or empty."
+            echo "Please document your changes before merging to main."
+            exit 1
+          fi
+          echo "README.md check passed."
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
