@@ -74,6 +74,15 @@ jobs:
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
+      # invoke-example.sh smoke-tests a deployed contract by calling one of its
+      # functions via the Soroban CLI. In CI this acts as an echo guard — it
+      # verifies the script is present and executable without requiring a live
+      # network or funded account. Once a real contract ID is available, replace
+      # the echo with a `stellar contract invoke` call (see the TODO in the
+      # script). Set CONTRACT_ID as a repository secret to enable the real call.
+      - name: Invoke example (smoke-test guard)
+        run: bash scripts/invoke-example.sh
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
