@@ -74,6 +74,29 @@ jobs:
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
+      # deploy-testnet.sh deploys the compiled contract to the Stellar testnet.
+      # It runs as a CI step to verify the script is reachable and executable.
+      # Purpose: validate the end-to-end deployment path on testnet before any
+      # mainnet release. When the real implementation is wired up it will:
+      #   1. Build the release WASM via cargo
+      #   2. Call `soroban contract deploy --network testnet` with credentials
+      #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
+      #   3. Log and export the returned contract ID for use in downstream steps
+      # See scripts/README.md for the full tooling reference.
+      - name: Deploy testnet (guard)
+        run: bash scripts/deploy-testnet.sh
+
+      # Echo guard: this step runs invoke-example.sh, which currently only echoes
+      # the invocation intent without calling a live contract.
+      # What the real implementation should do:
+      #   - Replace the echo with `stellar contract invoke` (or `soroban contract invoke`)
+      #     pointed at a contract deployed in the Deploy testnet step above.
+      #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
+      #   - Assert the response matches the expected value to act as a smoke test.
+      # See scripts/README.md for the full tooling reference.
+      - name: Invoke example (echo guard)
+        run: bash scripts/invoke-example.sh
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
