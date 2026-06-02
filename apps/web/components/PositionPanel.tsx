@@ -5,7 +5,37 @@ import { DepositForm } from "./DepositForm";
 import { WithdrawForm } from "./WithdrawForm";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 
-export function PositionPanel() {
+/**
+ * Props for the PositionPanel component.
+ *
+ * Currently no props are required — the panel manages its own loading and
+ * position state internally. Props will be added here when the Soroban
+ * contract integration lands and a wallet address or market list needs to
+ * be passed in from a parent.
+ *
+ * @example
+ * ```tsx
+ * // Basic usage — wrap in an ErrorBoundary to catch unexpected throws
+ * <ErrorBoundary>
+ *   <PositionPanel />
+ * </ErrorBoundary>
+ * ```
+ */
+export interface PositionPanelProps {}
+
+/**
+ * PositionPanel displays the user's open positions alongside deposit and
+ * withdraw forms. It simulates a loading delay on mount and then renders
+ * either a skeleton, an empty-state message, or the list of positions.
+ *
+ * @param {PositionPanelProps} _props - No props currently required.
+ *
+ * @example
+ * ```tsx
+ * <PositionPanel />
+ * ```
+ */
+export function PositionPanel(_props: PositionPanelProps = {}) {
   const [isLoading, setIsLoading] = useState(true);
   const [positions, setPositions] = useState<any[]>([]);
 

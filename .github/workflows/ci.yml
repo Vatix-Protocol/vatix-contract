@@ -33,9 +33,16 @@ jobs:
       # contributors format code identically. This prevents style drift and makes
       # code reviews focus on logic rather than formatting.
       #
+      # rustfmt.toml currently acts as an echo guard — no custom rules are active
+      # yet, so `cargo fmt` falls back to rustfmt defaults (2021 edition style,
+      # 4-space indent, 100-char line width). Explicit project-wide rules should
+      # be added to rustfmt.toml incrementally as conventions are agreed upon.
+      #
       # The `--check` flag makes rustfmt exit with a non-zero status if any file
       # would be reformatted, failing the CI run without modifying files.
       # To auto-fix locally before pushing, run: cd contracts/market && cargo fmt
+      #
+      # See contracts/market/rustfmt.toml for the option reference and planned rules.
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
