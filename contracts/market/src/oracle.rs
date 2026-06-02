@@ -1,3 +1,10 @@
+// TODO(#139): The oracle module currently uses a simple Ed25519 signature
+// scheme with a single trusted pubkey stored per market. This needs to be
+// replaced with a decentralised oracle integration (e.g. a Reflector or
+// Pyth price-feed adapter) so that market resolution does not rely on a
+// single off-chain signer. Tracked in:
+// https://github.com/Vatix-Protocol/vatix-contract/issues/139
+
 use crate::error::ContractError;
 use crate::types::Market;
 use soroban_sdk::{Bytes, BytesN, Env};

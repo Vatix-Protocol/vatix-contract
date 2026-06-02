@@ -2,6 +2,10 @@
 //!
 //! Users can withdraw collateral that is not locked by their active positions.
 //! Locked collateral is computed from YES/NO shares using a 50/50 market price.
+//!
+//! TODO(#160): Support dynamic market price for locked collateral calculation
+//! instead of the hardcoded 50/50 price. This will require reading the current
+//! market price from storage once price discovery is implemented.
 
 use crate::error::ContractError;
 use crate::events::{emit_collateral_withdrawn, emit_fee_calculated, emit_withdraw_edge_case};
