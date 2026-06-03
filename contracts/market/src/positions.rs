@@ -1,5 +1,7 @@
+use crate::error::ContractError;
 use crate::events::{emit_position_limit_exceeded, emit_position_updated};
 use crate::types::{Market, Position};
+use crate::validation;
 use soroban_sdk::{contracterror, Address, Env};
 
 const BASIS_POINTS: i128 = 10_000;
@@ -12,6 +14,8 @@ pub const STROOPS_PER_USDC: i128 = 10_000_000;
 pub enum PositionError {
     /// Proposed YES or NO share change would reduce that side below zero
     ShareBalanceBelowZero = 1,
+    /// Market price is outside the valid basis-point range (0–10_000)
+    InvalidMarketPrice = 2,
 }
 
 /// Calculate required locked collateral based on net position.
@@ -149,6 +153,10 @@ pub fn update_position(
     no_delta: i128,
     market_price: i128,
 ) -> Result<Position, PositionError> {
+    // 0. Validate market price
+    validation::validate_market_price(market_price)
+        .map_err(|_| PositionError::InvalidMarketPrice)?;
+
     // 1. Load or initialize position
     let mut position =
         crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
@@ -373,6 +381,21 @@ mod tests {
             topic0,
             soroban_sdk::Symbol::new(&env, "position_updated_event")
         );
+    }
+
+    #[test]
+    fn test_update_position_rejects_invalid_market_price() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 9);
+        let market_id = 9;
+
+        for bad_price in [-1i128, 10_001] {
+            let result = env.as_contract(&contract_id, || {
+                update_position(&env, market_id, &user, 100, 0, bad_price)
+            });
+            assert_eq!(result, Err(PositionError::InvalidMarketPrice));
+        }
     }
 
     #[test]
