@@ -51,6 +51,9 @@ jobs:
       #     intentionally acceptable, rather than weakening `-D warnings` globally.
       #
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
@@ -90,24 +93,23 @@ jobs:
       #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
       #   3. Log and export the returned contract ID for use in downstream steps
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
-      # Invoke example (echo guard): deliberate no-op placeholder for the smoke test (step 2).
-      # Purpose: demonstrate how to invoke a deployed contract without performing network calls
-      # in CI so contributors can run CI without secrets. The current script (scripts/invoke-example.sh)
-      # only echoes the intended invocation.
-      #
-      # Wiring the real implementation (recommended):
-      #   1) Obtain CONTRACT_ID from the preceding "Deploy testnet (guard)" step and expose it
-      #      to this step (e.g., via step outputs, artifacts, or the CI environment).
-      #   2) Run the real invocation, e.g.:
-      #        soroban contract invoke --network testnet --id "$CONTRACT_ID" <function> ...
-      #      (or `stellar contract invoke` if that CLI is preferred).
-      #   3) Validate the response and exit non-zero on unexpected results so this step acts
-      #      as a proper smoke test for the deployed contract.
-      #
-      # See scripts/README.md and scripts/invoke-example.sh for details and examples.
+      # Echo guard: this step runs invoke-example.sh, which currently only echoes
+      # the invocation intent without calling a live contract.
+      # What the real implementation should do:
+      #   - Replace the echo with `stellar contract invoke` (or `soroban contract invoke`)
+      #     pointed at a contract deployed in the Deploy testnet step above.
+      #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
+      #   - Assert the response matches the expected value to act as a smoke test.
+      # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
