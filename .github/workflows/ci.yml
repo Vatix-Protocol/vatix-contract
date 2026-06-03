@@ -51,6 +51,9 @@ jobs:
       #     intentionally acceptable, rather than weakening `-D warnings` globally.
       #
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
@@ -90,6 +93,9 @@ jobs:
       #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
       #   3. Log and export the returned contract ID for use in downstream steps
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
@@ -101,6 +107,9 @@ jobs:
       #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
       #   - Assert the response matches the expected value to act as a smoke test.
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
