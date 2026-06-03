@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { MarketCard } from "@/components/MarketCard";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { LoadingSkeleton } from "@/components/LoadingSkeleton";
 import { PositionPanel } from "@/components/PositionPanel";
 import { MOCK_MARKETS } from "@/lib/markets";
 import { containerClass } from "@/lib/responsive";
@@ -25,13 +26,16 @@ export default function HomePage() {
       </section>
 
       <h2 className="mb-4 text-lg font-medium">Featured markets</h2>
-      <ul className="grid gap-4 sm:grid-cols-2">
-        {MOCK_MARKETS.slice(0, 2).map((market) => (
-          <li key={market.id}>
-            <MarketCard market={market} />
-          </li>
-        ))}
-      </ul>
+      <ErrorBoundary>
+        <LoadingSkeleton />
+        <ul className="grid gap-4 sm:grid-cols-2">
+          {MOCK_MARKETS.slice(0, 2).map((market) => (
+            <li key={market.id}>
+              <MarketCard market={market} />
+            </li>
+          ))}
+        </ul>
+      </ErrorBoundary>
 
       <div className="mt-10">
         <h2 className="mb-4 text-lg font-medium">Your positions</h2>

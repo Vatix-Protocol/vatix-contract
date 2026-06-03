@@ -340,6 +340,42 @@ pub fn emit_oracle_signature_verified(
     }
     .publish(env);
 }
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeCalculatedEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    pub fee_amount: i128,
+    pub available_after_fee: i128,
+}
+
+/// Emit event when a fee is calculated during a withdrawal action.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user performing the withdrawal
+/// * `fee_amount` - Fee deducted in stroops
+/// * `available_after_fee` - Collateral available to withdraw after fee
+pub fn emit_fee_calculated(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    fee_amount: i128,
+    available_after_fee: i128,
+) {
+    FeeCalculatedEvent {
+        market_id,
+        user: user.clone(),
+        fee_amount,
+        available_after_fee,
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,5 +714,44 @@ mod tests {
             .into_val(&env);
         assert_eq!(outcome_val, outcome);
         assert_eq!(verified_at_val, verified_at);
+    }
+
+    #[test]
+    fn test_emit_fee_calculated() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let user = Address::generate(&env);
+        let fee_amount = 0i128;
+        let available_after_fee = 5_000i128;
+
+        env.as_contract(&contract_id, || {
+            emit_fee_calculated(&env, market_id, &user, fee_amount, available_after_fee);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "fee_calculated_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let fee_val: i128 = data
+            .get(Symbol::new(&env, "fee_amount"))
+            .unwrap()
+            .into_val(&env);
+        let available_val: i128 = data
+            .get(Symbol::new(&env, "available_after_fee"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(fee_val, fee_amount);
+        assert_eq!(available_val, available_after_fee);
     }
 }
