@@ -16,14 +16,14 @@ export function EmptyState({
       <h3 className="text-base font-medium text-slate-900 sm:text-lg dark:text-slate-100">
         {title}
       </h3>
-      <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+      <p className="mt-2 text-sm sm:text-base text-slate-600 dark:text-slate-400">
         {description}
       </p>
       {actionLabel && onAction && (
         <button
           onClick={onAction}
           aria-label={actionLabel}
-          className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+          className="mt-4 rounded-lg bg-blue-600 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 w-full sm:w-auto max-w-xs"
         >
           {actionLabel}
         </button>
@@ -32,7 +32,7 @@ export function EmptyState({
         <a
           href="#"
           aria-label={actionLabel}
-          className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
+          className="mt-4 rounded-lg bg-blue-600 px-3 sm:px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900 w-full sm:w-auto max-w-xs"
         >
           {actionLabel}
         </a>
