@@ -79,6 +79,11 @@ jobs:
       # this step will build the WASM artefact, invoke `soroban contract deploy`,
       # and capture the returned contract ID for downstream use.
       #
+      # Purpose: This CI step ensures deploy.sh remains executable and reachable
+      # in the repository, preventing drift as new contributors join. Future
+      # maintainers can reference this step to understand the deployment flow
+      # and add the real implementation when credentials become available.
+      #
       # To run locally: bash scripts/deploy.sh
       # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
       - name: Deploy (dry-run guard)

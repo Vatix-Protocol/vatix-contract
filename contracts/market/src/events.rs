@@ -45,12 +45,21 @@ pub struct WithdrawEdgeCaseEvent {
 
 /// Emit event when collateral is deposited
 ///
+/// Publishes a [`CollateralDepositedEvent`] to the Soroban event stream.
+/// This event is indexed by `user` and `market_id` as topics, allowing
+/// off-chain indexers to efficiently query deposits by user or market.
+///
 /// # Arguments
 /// * env - Soroban environment
 /// * user - User's address
 /// * market_id - Market identifier
 /// * amount - Amount deposited in stroops
 /// * new_total - User's total collateral in this market after deposit
+///
+/// # Example
+/// ```ignore
+/// emit_collateral_deposited(&env, &user, 1, 5_000_000, 5_000_000);
+/// ```
 pub fn emit_collateral_deposited(
     env: &Env,
     user: &Address,
@@ -69,12 +78,21 @@ pub fn emit_collateral_deposited(
 
 /// Emit event when collateral is withdrawn
 ///
+/// Publishes a [`CollateralWithdrawnEvent`] to the Soroban event stream.
+/// This event is indexed by `user` and `market_id` as topics for efficient
+/// querying by off-chain services.
+///
 /// # Arguments
 /// * env - Soroban environment
 /// * user - User's address
 /// * market_id - Market identifier
 /// * amount - Amount withdrawn in stroops
 /// * new_total - User's total collateral in this market after withdrawal
+///
+/// # Example
+/// ```ignore
+/// emit_collateral_withdrawn(&env, &user, 1, 2_000_000, 3_000_000);
+/// ```
 pub fn emit_collateral_withdrawn(
     env: &Env,
     user: &Address,
@@ -93,11 +111,20 @@ pub fn emit_collateral_withdrawn(
 
 /// Emit a MarketCreated event
 ///
+/// Publishes a [`MarketCreatedEvent`] to the Soroban event stream when a new
+/// prediction market is initialized. The event is indexed by `market_id` as
+/// a topic for efficient lookup by off-chain indexers and frontends.
+///
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the created market
 /// * question - The market question
 /// * end_time - Unix timestamp when market closes for trading
+///
+/// # Example
+/// ```ignore
+/// emit_market_created(&env, 1, &String::from_str(&env, "Will BTC hit $100k?"), 1735689600);
+/// ```
 pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_time: u64) {
     // Publish the event with topics and data
     MarketCreatedEvent {
@@ -110,11 +137,20 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
 
 /// Emit event for withdraw edge case when user has zero collateral deposited
 ///
+/// Publishes a [`WithdrawEdgeCaseEvent`] when a user attempts to withdraw
+/// from a market where they have no deposited collateral. This helps off-chain
+/// monitoring tools identify potential UI bugs or user confusion.
+///
 /// # Arguments
 /// * env - Soroban environment
 /// * user - User's address
 /// * market_id - Market identifier
 /// * amount - Amount attempted to withdraw in stroops
+///
+/// # Example
+/// ```ignore
+/// emit_withdraw_edge_case(&env, &user, 1, 1_000_000);
+/// ```
 pub fn emit_withdraw_edge_case(
     env: &Env,
     user: &Address,
@@ -140,11 +176,20 @@ pub struct MarketResolvedEvent {
 
 /// Emit a MarketResolved event
 ///
+/// Publishes a [`MarketResolvedEvent`] to the Soroban event stream when a
+/// market is resolved by an oracle. The event is indexed by `market_id` as
+/// a topic, allowing efficient queries for resolution events.
+///
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the resolved market
 /// * outcome - Market outcome (true = YES won, false = NO won)
 /// * resolved_at - Unix timestamp when market was resolved
+///
+/// # Example
+/// ```ignore
+/// emit_market_resolved(&env, 1, true, env.ledger().timestamp());
+/// ```
 pub fn emit_market_resolved(env: &Env, market_id: u32, outcome: bool, resolved_at: u64) {
     MarketResolvedEvent {
         market_id,
@@ -322,11 +367,21 @@ pub struct OracleSignatureVerifiedEvent {
 
 /// Emit event when oracle signature is verified
 ///
+/// Publishes an [`OracleSignatureVerifiedEvent`] when an oracle's Ed25519
+/// signature is successfully verified during market resolution. This event
+/// provides an audit trail for resolution authenticity and is indexed by
+/// `market_id` for efficient querying.
+///
 /// # Arguments
 /// * env - Soroban environment
 /// * market_id - Market identifier
 /// * outcome - Verified outcome (true = YES, false = NO)
 /// * verified_at - Unix timestamp when verification occurred
+///
+/// # Example
+/// ```ignore
+/// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
+/// ```
 pub fn emit_oracle_signature_verified(
     env: &Env,
     market_id: u32,
