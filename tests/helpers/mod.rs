@@ -19,14 +19,31 @@ use soroban_sdk::{
 };
 
 /// Failure reasons for the integration test harness.
+///
+/// Each variant carries a human-readable message that pinpoints the failing
+/// operation and the most likely cause, so test output is self-explanatory
+/// without having to read the harness source.
 #[derive(Debug, PartialEq)]
 pub enum HarnessError {
-    /// Market initialization failed: the contract rejected the provided parameters.
-    /// Check that `end_time` is in the future and `question` is non-empty.
+    /// `initialize_market` returned a contract error.
+    ///
+    /// Possible causes:
+    /// - `end_time` is in the past or more than one year from now
+    ///   (`ContractError::InvalidTimestamp` / `#32`)
+    /// - `question` is empty or ≥ 500 characters
+    ///   (`ContractError::InvalidQuestion` / `#33`)
+    /// - `oracle_pubkey` is all-zero bytes
+    ///   (`ContractError::InvalidSignature` / `#20`)
+    /// - Caller is not the stored admin
+    ///   (`ContractError::NotAdmin` / `#41`)
     MarketInitFailed,
 
-    /// Storage lookup returned None for the given market_id.
-    /// The market was never created or the wrong id was queried.
+    /// `storage::get_market` returned `None` for the queried `market_id`.
+    ///
+    /// Possible causes:
+    /// - The market was never created (check that `initialize_market` succeeded)
+    /// - The wrong `market_id` was passed (IDs are auto-incremented from 1)
+    /// - The market was created in a different contract instance or environment
     MarketNotFound,
 }
 
