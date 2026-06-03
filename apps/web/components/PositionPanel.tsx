@@ -41,7 +41,7 @@ export function PositionPanel() {
 
       <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-700 sm:p-6">
         <h2 className="text-base font-semibold sm:text-lg">Your positions</h2>
-        <div className="mt-4">
+        <div className="mt-4 min-h-[11rem]">
           {isLoading ? (
             <LoadingSkeleton />
           ) : positions.length === 0 ? (
