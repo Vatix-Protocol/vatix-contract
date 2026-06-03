@@ -1,23 +1,9 @@
-//! Oracle verification for market resolution.
-//!
-//! This module handles Ed25519 signature verification used to resolve prediction
-//! markets. An authorised oracle signs a message encoding the market ID and
-//! outcome; the contract verifies that signature before recording the result.
-//!
-//! # Flow
-//! 1. [`construct_oracle_message`] — builds the 32-byte keccak256 digest that
-//!    the oracle must sign.
-//! 2. [`verify_oracle_signature`] — verifies the Ed25519 signature against the
-//!    digest and rejects the zero public key.
-//! 3. [`validate_oracle_authorization`] — checks that the signing key matches
-//!    the oracle registered on the market.
-//!
-//! # Example
-//! ```ignore
-//! let msg = construct_oracle_message(&env, market_id, outcome);
-//! verify_oracle_signature(&env, market_id, outcome, &sig, &pubkey)?;
-//! validate_oracle_authorization(&market, &pubkey)?;
-//! ```
+// TODO(#139): The oracle module currently uses a simple Ed25519 signature
+// scheme with a single trusted pubkey stored per market. This needs to be
+// replaced with a decentralised oracle integration (e.g. a Reflector or
+// Pyth price-feed adapter) so that market resolution does not rely on a
+// single off-chain signer. Tracked in:
+// https://github.com/Vatix-Protocol/vatix-contract/issues/139
 
 use crate::error::ContractError;
 use crate::types::Market;
@@ -176,6 +162,15 @@ mod tests {
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
         let market = make_market(&env, oracle_pubkey.clone());
         assert!(validate_oracle_authorization(&market, &oracle_pubkey).is_ok());
+    }
+
+    #[test]
+    fn test_validate_oracle_authorization_zero_pubkey() {
+        let env = Env::default();
+        let zero_pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let market = make_market(&env, BytesN::from_array(&env, &[1u8; 32]));
+        let result = validate_oracle_authorization(&market, &zero_pubkey);
+        assert_eq!(result, Err(ContractError::UnauthorizedOracle));
     }
 
     #[test]
