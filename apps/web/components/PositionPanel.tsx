@@ -6,36 +6,20 @@ import { WithdrawForm } from "./WithdrawForm";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 
 /**
- * Props for the PositionPanel component.
+ * PositionPanel displays the user's open prediction-market positions together
+ * with deposit and withdraw controls.
  *
- * Currently no props are required — the panel manages its own loading and
- * position state internally. Props will be added here when the Soroban
- * contract integration lands and a wallet address or market list needs to
- * be passed in from a parent.
- *
- * @example
- * ```tsx
- * // Basic usage — wrap in an ErrorBoundary to catch unexpected throws
- * <ErrorBoundary>
- *   <PositionPanel />
- * </ErrorBoundary>
- * ```
- */
-export interface PositionPanelProps {}
-
-/**
- * PositionPanel displays the user's open positions alongside deposit and
- * withdraw forms. It simulates a loading delay on mount and then renders
- * either a skeleton, an empty-state message, or the list of positions.
- *
- * @param {PositionPanelProps} _props - No props currently required.
+ * Positions are fetched asynchronously on mount. While loading, a skeleton
+ * placeholder is shown. When no positions exist, an empty-state message guides
+ * the user to deposit funds and browse markets.
  *
  * @example
  * ```tsx
+ * // Render the panel on a market detail page
  * <PositionPanel />
  * ```
  */
-export function PositionPanel(_props: PositionPanelProps = {}) {
+export function PositionPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [positions, setPositions] = useState<any[]>([]);
 
@@ -57,7 +41,7 @@ export function PositionPanel(_props: PositionPanelProps = {}) {
 
       <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-700 sm:p-6">
         <h2 className="text-base font-semibold sm:text-lg">Your positions</h2>
-        <div className="mt-4">
+        <div className="mt-4 min-h-[11rem]">
           {isLoading ? (
             <LoadingSkeleton />
           ) : positions.length === 0 ? (

@@ -4,6 +4,12 @@ import Link from "next/link";
 import { useWallet } from "@/context/WalletContext";
 import { WalletConnectButton } from "./WalletConnectButton";
 
+/**
+ * Navigation bar component for the Vatix prediction market application.
+ * 
+ * Displays the site logo, navigation links, and wallet connection status.
+ * When the user has no wallet connected, shows a friendly prompt to connect.
+ */
 export function Navbar() {
   const { address, isConnecting, connect, disconnect } = useWallet();
 
@@ -17,6 +23,11 @@ export function Navbar() {
           <Link href="/markets" className="hover:text-indigo-600 dark:hover:text-indigo-300">
             Markets
           </Link>
+          {!address && !isConnecting && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              Connect your wallet to trade →
+            </span>
+          )}
           <WalletConnectButton
             address={address}
             isConnecting={isConnecting}

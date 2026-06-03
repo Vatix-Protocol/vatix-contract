@@ -1,3 +1,18 @@
+/// Integration test harness helpers used across the contract integration tests.
+///
+/// This module provides small convenience types and assertions that keep tests
+/// concise and readable. It intentionally lives in `tests/helpers` so test
+/// files can import the helpers with `use crate::helpers::*`.
+///
+/// Example:
+/// ```rust
+/// # use soroban_sdk::Env;
+/// # use tests::helpers::MarketParams;
+/// let env = Env::default();
+/// let params = MarketParams::default_valid(&env);
+/// // Use `params` to initialize the contract under test, then assert events:
+/// // assert_event_emitted(&env, "market_created");
+/// ```
 use soroban_sdk::{
     testutils::Events as _,
     Address, BytesN, Env, IntoVal, String,

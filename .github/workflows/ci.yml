@@ -58,6 +58,9 @@ jobs:
       #     intentionally acceptable, rather than weakening `-D warnings` globally.
       #
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
@@ -83,6 +86,11 @@ jobs:
       # this step will build the WASM artefact, invoke `soroban contract deploy`,
       # and capture the returned contract ID for downstream use.
       #
+      # Purpose: This CI step ensures deploy.sh remains executable and reachable
+      # in the repository, preventing drift as new contributors join. Future
+      # maintainers can reference this step to understand the deployment flow
+      # and add the real implementation when credentials become available.
+      #
       # To run locally: bash scripts/deploy.sh
       # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
       - name: Deploy (dry-run guard)
@@ -97,6 +105,9 @@ jobs:
       #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
       #   3. Log and export the returned contract ID for use in downstream steps
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
@@ -108,6 +119,9 @@ jobs:
       #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
       #   - Assert the response matches the expected value to act as a smoke test.
       # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
