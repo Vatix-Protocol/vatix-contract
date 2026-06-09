@@ -13,6 +13,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(__dirname, "issues", "generated");
 const ISSUES_PER_REPO = 125;
 const DEFAULT_LABELS = ["good first issue", "easy"] as const;
+// Used only as a label so we can filter “extra” issues later.
+// Titles for extra issues intentionally do NOT include this prefix.
+const TOPUP_LABEL = "topup";
 
 export interface GeneratedIssue {
   repo: string;
@@ -351,6 +354,10 @@ function parseArgs(argv: string[]) {
     publish: argv.includes("--publish"),
     dryRun: argv.includes("--dry-run"),
     help: argv.includes("--help"),
+    extra: (() => {
+      const i = argv.indexOf("--extra");
+      return i >= 0 ? Number(argv[i + 1]) : 0;
+    })(),
     repo: (() => {
       const i = argv.indexOf("--repo");
       return i >= 0 ? argv[i + 1] : undefined;
@@ -400,12 +407,76 @@ const EXTRA_LABELS = [
 ] as const;
 
 function ensureLabels(github: string) {
-  const all = [...DEFAULT_LABELS, ...EXTRA_LABELS];
+  const all = [...DEFAULT_LABELS, TOPUP_LABEL, ...EXTRA_LABELS];
   for (const name of all) {
     spawnSync("gh", ["label", "create", name, "--repo", github, "--force"], {
       stdio: "ignore",
     });
   }
+}
+
+function splitCounts(total: number, parts: number): number[] {
+  const base = Math.floor(total / parts);
+  const rem = total % parts;
+  return Array.from({ length: parts }, (_, i) => base + (i < rem ? 1 : 0));
+}
+
+function makeUniqueTitle(existing: Set<string>, base: string): string {
+  if (!existing.has(base)) return base;
+  for (let i = 2; i < 10000; i++) {
+    const candidate = `${base} (extra ${i})`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  throw new Error(`Could not make unique title from: ${base}`);
+}
+
+function generateTopUpIssues(
+  configs: RepoConfig[],
+  extraCount: number,
+): GeneratedIssue[] {
+  if (extraCount <= 0) return [];
+  if (!commandExists("gh")) {
+    throw new Error(
+      "--extra requires gh CLI so we can avoid title collisions (run gh auth login)",
+    );
+  }
+
+  const counts = splitCounts(extraCount, configs.length);
+  const out: GeneratedIssue[] = [];
+
+  for (let c = 0; c < configs.length; c++) {
+    const config = configs[c]!;
+    const existing = fetchExistingTitles(config.github);
+    const perRepo = counts[c]!;
+
+    for (let i = 0; i < perRepo; i++) {
+      const bucket = pick(config.buckets, i);
+      const template = pick(bucket.templates, i);
+      const targets = TARGETS[bucket.area as keyof typeof TARGETS] ?? ["module"];
+      const target = pick(targets, i + existing.size);
+      const ctx: TaskContext = { index: i + 1, area: bucket.area, target };
+
+      // Keep the same title style as the base generator; ensure uniqueness via suffix.
+      const rawTitle = `[${bucket.label}] ${template.title(ctx)}`;
+      const title = makeUniqueTitle(existing, rawTitle);
+      existing.add(title);
+
+      out.push({
+        repo: config.slug,
+        github: config.github,
+        number: i + 1,
+        title,
+        body: template.body(ctx),
+        labels: [...DEFAULT_LABELS, TOPUP_LABEL, bucket.label],
+        area: bucket.area,
+      });
+    }
+  }
+
+  if (out.length !== extraCount) {
+    throw new Error(`Expected ${extraCount} top-up issues, got ${out.length}`);
+  }
+  return out;
 }
 
 async function publishIssues(
@@ -485,7 +556,7 @@ function writeOutputs(all: GeneratedIssue[], configs: RepoConfig[]) {
     perRepo: configs.map((c) => ({
       slug: c.slug,
       github: c.github,
-      count: ISSUES_PER_REPO,
+      count: all.filter((i) => i.repo === c.slug).length,
     })),
   };
   writeFileSync(
@@ -499,6 +570,7 @@ function printHelp() {
 
 Options:
   --publish       Create issues on GitHub (requires gh auth)
+  --extra N       Create N additional unique "topup" issues
   --repo <slug>   Only vatix-contract | vatix-backend | swyft
   --delay-ms N    Delay between gh calls (default 300)
   --dry-run       Print 3 sample issues per repo, no files
@@ -521,7 +593,9 @@ async function main() {
     }
   }
 
-  const all = configs.flatMap(generateForRepo);
+  const base = configs.flatMap(generateForRepo);
+  const topUp = generateTopUpIssues(configs, args.extra);
+  const all = args.extra > 0 ? topUp : base;
 
   if (args.dryRun) {
     for (const config of configs) {

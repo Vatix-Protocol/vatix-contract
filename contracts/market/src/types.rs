@@ -25,7 +25,7 @@ pub struct Market {
 }
 
 /// Tracks the position and shares of a specific user in a market.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub struct Position {
     pub market_id: u32,

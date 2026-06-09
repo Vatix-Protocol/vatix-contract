@@ -425,16 +425,16 @@ mod tests {
         assert_eq!(result, Err(ContractError::InsufficientCollateral));
 
         let events = env.events().all();
-        let withdraw_edge_case_events: Vec<_> = events
+        let withdraw_edge_case_count = events
             .iter()
-            .filter(|(event, _)| {
+            .filter(|(event_contract_id, topics, _)| {
                 // Check for WithdrawEdgeCaseEvent
-                event.topics.len() == 2
-                    && event.contract_id == contract_id
+                topics.len() == 2
+                    && event_contract_id == &contract_id
             })
-            .collect();
+            .count();
 
-        assert_eq!(withdraw_edge_case_events.len(), 1);
+        assert_eq!(withdraw_edge_case_count, 1);
     }
 }
 

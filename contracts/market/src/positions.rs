@@ -1,4 +1,3 @@
-use crate::error::ContractError;
 use crate::events::{emit_position_limit_exceeded, emit_position_updated};
 use crate::types::{Market, Position};
 use crate::validation;
