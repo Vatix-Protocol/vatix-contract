@@ -151,12 +151,7 @@ pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_tim
 /// ```ignore
 /// emit_withdraw_edge_case(&env, &user, 1, 1_000_000);
 /// ```
-pub fn emit_withdraw_edge_case(
-    env: &Env,
-    user: &Address,
-    market_id: u32,
-    amount: i128,
-) {
+pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount: i128) {
     WithdrawEdgeCaseEvent {
         user: user.clone(),
         market_id,
@@ -382,12 +377,7 @@ pub struct OracleSignatureVerifiedEvent {
 /// ```ignore
 /// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
 /// ```
-pub fn emit_oracle_signature_verified(
-    env: &Env,
-    market_id: u32,
-    outcome: bool,
-    verified_at: u64,
-) {
+pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, verified_at: u64) {
     OracleSignatureVerifiedEvent {
         market_id,
         outcome,

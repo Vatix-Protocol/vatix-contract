@@ -86,7 +86,11 @@ pub fn validate_position_change(
 ///
 /// Returns `true` when the YES side would underflow, or `false` when the NO
 /// side would underflow.
-fn position_limit_exceeded_side(current_position: &Position, yes_delta: i128, no_delta: i128) -> bool {
+fn position_limit_exceeded_side(
+    current_position: &Position,
+    yes_delta: i128,
+    no_delta: i128,
+) -> bool {
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
@@ -339,13 +343,7 @@ mod tests {
         let events = env.events().all();
         assert_eq!(events.len(), 1);
 
-        let topic0: soroban_sdk::Symbol = events
-            .first()
-            .unwrap()
-            .1
-            .get(0)
-            .unwrap()
-            .into_val(&env);
+        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
             soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
@@ -370,13 +368,7 @@ mod tests {
         let events = env.events().all();
         assert_eq!(events.len(), 1);
 
-        let topic0: soroban_sdk::Symbol = events
-            .first()
-            .unwrap()
-            .1
-            .get(0)
-            .unwrap()
-            .into_val(&env);
+        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
             soroban_sdk::Symbol::new(&env, "position_updated_event")

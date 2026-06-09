@@ -490,7 +490,10 @@ mod test {
 
         // Verify event was emitted
         let events = env.events().all();
-        assert!(events.len() > 0, "CollateralDeposited event should be emitted");
+        assert!(
+            events.len() > 0,
+            "CollateralDeposited event should be emitted"
+        );
     }
 
     // ========== Expiration check tests ==========

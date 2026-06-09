@@ -64,9 +64,7 @@ pub fn get_admin(env: &Env) -> Address {
 }
 
 pub fn set_admin(env: &Env, admin: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::Admin, admin);
+    env.storage().persistent().set(&StorageKey::Admin, admin);
 }
 
 pub fn get_next_market_id(env: &Env) -> u32 {

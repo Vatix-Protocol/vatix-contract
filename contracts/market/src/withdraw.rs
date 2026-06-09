@@ -67,7 +67,7 @@ pub fn withdraw_unused_collateral(
     }
 
     let mut position = storage::get_position(&env, market_id, &user)
-            .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
+        .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
 
     if position.total_deposited == 0 {
         emit_withdraw_edge_case(&env, &user, market_id, amount);
@@ -76,18 +76,15 @@ pub fn withdraw_unused_collateral(
 
     // TODO(#85): fee deduction should be applied here before computing available collateral
     // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
-    let required_lock = calculate_locked_collateral(
-            position.yes_shares,
-            position.no_shares,
-            MARKET_PRICE_BPS,
-        );
+    let required_lock =
+        calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
 
-        // Available collateral is total deposited minus the amount required to back shares.
-        let available = if position.total_deposited > required_lock {
-            position.total_deposited - required_lock
-        } else {
-            0
-        };
+    // Available collateral is total deposited minus the amount required to back shares.
+    let available = if position.total_deposited > required_lock {
+        position.total_deposited - required_lock
+    } else {
+        0
+    };
 
     // Emit fee calculation event (fee_amount is 0 until #85 is implemented)
     emit_fee_calculated(&env, market_id, &user, 0, available);
@@ -428,13 +425,10 @@ mod tests {
         let withdraw_edge_case_count = events
             .iter()
             .filter(|(event_contract_id, topics, _)| {
-                // Check for WithdrawEdgeCaseEvent
-                topics.len() == 2
-                    && event_contract_id == &contract_id
+                topics.len() == 2 && event_contract_id == &contract_id
             })
             .count();
 
         assert_eq!(withdraw_edge_case_count, 1);
     }
 }
-

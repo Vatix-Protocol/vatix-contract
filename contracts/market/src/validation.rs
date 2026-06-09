@@ -23,7 +23,6 @@ pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
     Ok(())
 }
 
-
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
@@ -161,7 +160,7 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
 pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractError> {
     validate_amount_positive(amount)?;
     validate_market_price(fee_rate_bps)?;
-    
+
     amount
         .checked_mul(fee_rate_bps)
         .and_then(|result| result.checked_div(10_000))
@@ -332,7 +331,10 @@ mod tests {
     #[test]
     fn test_validate_market_price_invalid() {
         assert_eq!(validate_market_price(-1), Err(ContractError::InvalidPrice));
-        assert_eq!(validate_market_price(10_001), Err(ContractError::InvalidPrice));
+        assert_eq!(
+            validate_market_price(10_001),
+            Err(ContractError::InvalidPrice)
+        );
     }
 
     #[test]
@@ -344,10 +346,7 @@ mod tests {
 
     #[test]
     fn test_validate_input_guard_invalid() {
-        assert_eq!(
-            validate_input_guard(0),
-            Err(ContractError::InvalidQuantity)
-        );
+        assert_eq!(validate_input_guard(0), Err(ContractError::InvalidQuantity));
         assert_eq!(
             validate_input_guard(-1),
             Err(ContractError::InvalidQuantity)
@@ -368,7 +367,10 @@ mod tests {
     #[test]
     fn test_calculate_fee_invalid_amount() {
         assert_eq!(calculate_fee(0, 100), Err(ContractError::InvalidQuantity));
-        assert_eq!(calculate_fee(-100, 100), Err(ContractError::InvalidQuantity));
+        assert_eq!(
+            calculate_fee(-100, 100),
+            Err(ContractError::InvalidQuantity)
+        );
     }
 
     #[test]
@@ -379,6 +381,9 @@ mod tests {
 
     #[test]
     fn test_calculate_fee_overflow() {
-        assert_eq!(calculate_fee(i128::MAX, 10000), Err(ContractError::ArithmeticOverflow));
+        assert_eq!(
+            calculate_fee(i128::MAX, 10000),
+            Err(ContractError::ArithmeticOverflow)
+        );
     }
 }

@@ -76,7 +76,13 @@ pub fn execute_settlement(
 
     // Emit event
     let settled_at = env.ledger().timestamp();
-    crate::events::emit_position_settled(env, position.market_id, &position.user, payout, settled_at);
+    crate::events::emit_position_settled(
+        env,
+        position.market_id,
+        &position.user,
+        payout,
+        settled_at,
+    );
 
     Ok(payout)
 }
@@ -111,7 +117,10 @@ pub fn calculate_market_settlement_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Events}, Address, BytesN, Env, String};
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        Address, BytesN, Env, String,
+    };
 
     fn create_test_market(env: &Env, status: MarketStatus, result: Option<bool>) -> Market {
         Market {

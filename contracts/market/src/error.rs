@@ -165,7 +165,10 @@ mod tests {
     #[test]
     fn test_error_equality() {
         assert_eq!(ContractError::MarketNotFound, ContractError::MarketNotFound);
-        assert_ne!(ContractError::MarketNotFound, ContractError::MarketNotActive);
+        assert_ne!(
+            ContractError::MarketNotFound,
+            ContractError::MarketNotActive
+        );
     }
 
     #[test]
