@@ -463,13 +463,27 @@ mod test {
 
     #[test]
     fn test_collateral_deposit_emits_event() {
-        let (env, admin, client, _contract_id) = create_test_contract();
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        env.mock_all_auths();
 
         // Create a market
         let question = String::from_str(&env, "Test market");
         let end_time = env.ledger().timestamp() + 86400;
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
-        let collateral_token = Address::generate(&env);
 
         let _market_id = client.initialize_market(
             &admin,
@@ -482,10 +496,13 @@ mod test {
         // Clear events from initialization
         env.events().all();
 
-        // Deposit collateral
+        // Mint tokens to user for deposit
         let user = Address::generate(&env);
         let amount = 1000i128;
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &amount);
 
+        // Deposit collateral
         client.deposit_collateral(&user, &1, &amount);
 
         // Verify event was emitted

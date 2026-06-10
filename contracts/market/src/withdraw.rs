@@ -353,10 +353,6 @@ mod tests {
         let collateral_token = token.address();
         let contract_id = env.register(crate::MarketContract, ());
 
-        // Fund the contract with collateral (simulates prior deposit)
-        let token_client = StellarAssetClient::new(&env, &collateral_token);
-        token_client.mint(&contract_id, &200);
-
         let market = create_test_market(&env, market_id, &collateral_token);
         // No shares held -> required_lock = 0, available = total_deposited = 100
         let position = Position {
@@ -375,6 +371,10 @@ mod tests {
         });
 
         env.mock_all_auths();
+
+        // Fund the contract with collateral (simulates prior deposit)
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&contract_id, &200);
 
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
@@ -415,20 +415,12 @@ mod tests {
 
         env.mock_all_auths();
 
-        let result = env.as_contract(&contract_id, || {
-            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 100)
+        env.as_contract(&contract_id, || {
+            let result = withdraw_unused_collateral(env.clone(), user.clone(), market_id, 100);
+            assert_eq!(result, Err(ContractError::InsufficientCollateral));
+
+            let events = env.events().all();
+            assert_eq!(events.len(), 1, "Expected 1 event, got {}", events.len());
         });
-
-        assert_eq!(result, Err(ContractError::InsufficientCollateral));
-
-        let events = env.events().all();
-        let withdraw_edge_case_count = events
-            .iter()
-            .filter(|(event_contract_id, topics, _)| {
-                topics.len() == 2 && event_contract_id == &contract_id
-            })
-            .count();
-
-        assert_eq!(withdraw_edge_case_count, 1);
     }
 }
