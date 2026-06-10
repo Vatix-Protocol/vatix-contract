@@ -143,7 +143,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #40)")]
+    #[should_panic(expected = "Error(Contract, #41)")]
     fn test_initialize_market_non_admin_fails() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 

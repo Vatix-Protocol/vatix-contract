@@ -94,7 +94,9 @@ fn position_limit_exceeded_side(
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
-    new_yes < 0 || new_no < 0
+    #[allow(clippy::nonminimal_bool)]
+    let result = new_yes < 0 || (new_no < 0 && new_yes >= 0);
+    result
 }
 
 /// Calculate net position from YES and NO shares.
