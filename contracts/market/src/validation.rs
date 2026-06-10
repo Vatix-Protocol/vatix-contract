@@ -106,7 +106,7 @@ pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), Contract
 
 /// Validates market price is within valid basis-point range (0–10_000)
 pub fn validate_market_price(price: i128) -> Result<(), ContractError> {
-    if price < 0 || price > 10_000 {
+    if !(0..=10_000).contains(&price) {
         return Err(ContractError::InvalidPrice);
     }
     Ok(())

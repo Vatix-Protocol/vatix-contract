@@ -277,6 +277,7 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ValidationFailedEvent {
     #[topic]
     pub context: soroban_sdk::Symbol,
@@ -301,6 +302,7 @@ pub struct ValidationFailedEvent {
 ///     ContractError::InvalidQuantity as u32,
 /// );
 /// ```
+#[allow(dead_code)]
 pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
     ValidationFailedEvent {
         context,
@@ -353,6 +355,7 @@ pub fn emit_position_settled(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct OracleSignatureVerifiedEvent {
     #[topic]
     pub market_id: u32,
@@ -377,6 +380,7 @@ pub struct OracleSignatureVerifiedEvent {
 /// ```ignore
 /// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
 /// ```
+#[allow(dead_code)]
 pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, verified_at: u64) {
     OracleSignatureVerifiedEvent {
         market_id,

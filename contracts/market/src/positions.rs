@@ -94,7 +94,7 @@ fn position_limit_exceeded_side(
     let new_yes = current_position.yes_shares + yes_delta;
     let new_no = current_position.no_shares + no_delta;
 
-    new_yes < 0 || (new_no < 0 && new_yes >= 0)
+    new_yes < 0 || new_no < 0
 }
 
 /// Calculate net position from YES and NO shares.
