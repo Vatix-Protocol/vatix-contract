@@ -3,17 +3,17 @@
 mod deposit;
 mod error;
 mod events;
-mod oracle;
+pub mod oracle;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
-mod settlement;
+pub mod settlement;
 mod withdraw;
 
 #[allow(dead_code)]
-mod storage;
+pub mod storage;
 mod test;
-mod types;
+pub mod types;
 #[allow(dead_code)]
 mod validation;
 

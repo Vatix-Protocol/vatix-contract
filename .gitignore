@@ -23,6 +23,7 @@ Thumbs.db
 *.dll
 
 contracts/*/test_snapshots
+/test_snapshots/
 
 # Node / Next.js
 node_modules/

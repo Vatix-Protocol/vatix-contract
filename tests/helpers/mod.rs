@@ -14,7 +14,7 @@
 /// // assert_event_emitted(&env, "market_created");
 /// ```
 use soroban_sdk::{
-    testutils::Events as _,
+    testutils::{Address as _, Events as _},
     Address, BytesN, Env, IntoVal, String,
 };
 
