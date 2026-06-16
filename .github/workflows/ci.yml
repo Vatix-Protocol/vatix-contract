@@ -28,14 +28,121 @@ jobs:
         with:
           workspaces: contracts/market
       
+      # Format check enforces consistent code style across the project using rustfmt.
+      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
+      # contributors format code identically. This prevents style drift and makes
+      # code reviews focus on logic rather than formatting.
+      #
+      # rustfmt.toml currently acts as an echo guard — no custom rules are active
+      # yet, so `cargo fmt` falls back to rustfmt defaults (2021 edition style,
+      # 4-space indent, 100-char line width). Explicit project-wide rules should
+      # be added to rustfmt.toml incrementally as conventions are agreed upon.
+      #
+      # The `--check` flag makes rustfmt exit with a non-zero status if any file
+      # would be reformatted, failing the CI run without modifying files.
+      # To auto-fix locally before pushing, run: cd contracts/market && cargo fmt
+      #
+      # See contracts/market/rustfmt.toml for the option reference and planned rules.
       - name: Format check
         run: cd contracts/market && cargo fmt --check
       
+      # Echo guard: this step currently runs clippy with `-D warnings` to catch
+      # lint issues early, but does not yet enforce a full set of custom lints.
+      #
+      # What the real implementation should do:
+      #   - Add project-specific `#[deny(...)]` or `#[warn(...)]` attributes in
+      #     lib.rs / main.rs to lock in the exact lint set for this codebase.
+      #   - Consider enabling additional Clippy lint groups such as
+      #     `clippy::pedantic` or `clippy::nursery` for stricter checks.
+      #   - Use `#[allow(lint_name)]` at the call-site for any lint that is
+      #     intentionally acceptable, rather than weakening `-D warnings` globally.
+      #
+      # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
       
+      # Runs all unit and integration tests for the market contract via `cargo test`.
+      # Tests are defined alongside the contract source under `contracts/market/src/`
+      # using Soroban SDK test utilities. A new test should be added for every
+      # public contract function to maintain coverage.
       - name: Tests
         run: cd contracts/market && cargo test
       
+      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
+      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
+      # contracts/market/Makefile; run `cd contracts/market && make build` locally
+      # to reproduce this check and see the output WASM size.
       - name: Build
         run: cd contracts/market && cargo build --target wasm32-unknown-unknown
+
+      # deploy.sh is a guard script that echoes deployment intent without
+      # performing a real on-chain deployment. Running it in CI verifies the
+      # script is executable and reachable, and serves as a placeholder for
+      # the full Soroban CLI deployment step once testnet credentials are
+      # available as repository secrets. When the real implementation lands,
+      # this step will build the WASM artefact, invoke `soroban contract deploy`,
+      # and capture the returned contract ID for downstream use.
+      #
+      # Purpose: This CI step ensures deploy.sh remains executable and reachable
+      # in the repository, preventing drift as new contributors join. Future
+      # maintainers can reference this step to understand the deployment flow
+      # and add the real implementation when credentials become available.
+      #
+      # To run locally: bash scripts/deploy.sh
+      # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
+      - name: Deploy (dry-run guard)
+        run: bash scripts/deploy.sh
+
+      # deploy-testnet.sh deploys the compiled contract to the Stellar testnet.
+      # It runs as a CI step to verify the script is reachable and executable.
+      # Purpose: validate the end-to-end deployment path on testnet before any
+      # mainnet release. When the real implementation is wired up it will:
+      #   1. Build the release WASM via cargo
+      #   2. Call `soroban contract deploy --network testnet` with credentials
+      #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
+      #   3. Log and export the returned contract ID for use in downstream steps
+      # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
+      - name: Deploy testnet (guard)
+        run: bash scripts/deploy-testnet.sh
+
+      # Echo guard: this step runs invoke-example.sh, which currently only echoes
+      # the invocation intent without calling a live contract.
+      # What the real implementation should do:
+      #   - Replace the echo with `stellar contract invoke` (or `soroban contract invoke`)
+      #     pointed at a contract deployed in the Deploy testnet step above.
+      #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
+      #   - Assert the response matches the expected value to act as a smoke test.
+      # See scripts/README.md for the full tooling reference.
+      # The scripts README documents the intent of these "echo guard" scripts
+      # and provides guidance for maintainers on how to replace guards with
+      # real CI actions (credentials, expected outputs, and invocation examples).
+      - name: Invoke example (echo guard)
+        run: bash scripts/invoke-example.sh
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint web app
+        run: pnpm --filter web lint
+
+      - name: Build web app
+        run: pnpm --filter web build
