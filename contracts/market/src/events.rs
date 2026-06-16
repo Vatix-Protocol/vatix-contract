@@ -7,6 +7,8 @@ use soroban_sdk::{contractevent, Address, Env, String};
 pub struct ContractInitializedEvent {
     #[topic]
     pub admin: Address,
+    /// Ledger timestamp when the contract was bootstrapped.
+    pub initialized_at: u64,
 }
 
 /// Emit an event when the contract is initialized with an admin.
@@ -21,6 +23,7 @@ pub struct ContractInitializedEvent {
 pub fn emit_contract_initialized(env: &Env, admin: &Address) {
     ContractInitializedEvent {
         admin: admin.clone(),
+        initialized_at: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -240,6 +243,13 @@ mod tests {
 
         let topic1: Address = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, admin);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let initialized_at_val: u64 = data
+            .get(Symbol::new(&env, "initialized_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(initialized_at_val, env.ledger().timestamp());
     }
 
     #[test]
