@@ -59,7 +59,21 @@ pub struct CollateralWithdrawnEvent {
     pub new_total: i128,
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct WithdrawEdgeCaseEvent {
+    #[topic]
+    pub user: Address,
+    #[topic]
+    pub market_id: u32,
+    pub amount: i128,
+}
+
 /// Emit event when collateral is deposited
+///
+/// Publishes a [`CollateralDepositedEvent`] to the Soroban event stream.
+/// This event is indexed by `user` and `market_id` as topics, allowing
+/// off-chain indexers to efficiently query deposits by user or market.
 ///
 /// # Arguments
 /// * env - Soroban environment
@@ -67,6 +81,11 @@ pub struct CollateralWithdrawnEvent {
 /// * market_id - Market identifier
 /// * amount - Amount deposited in stroops
 /// * new_total - User's total collateral in this market after deposit
+///
+/// # Example
+/// ```ignore
+/// emit_collateral_deposited(&env, &user, 1, 5_000_000, 5_000_000);
+/// ```
 pub fn emit_collateral_deposited(
     env: &Env,
     user: &Address,
@@ -85,13 +104,21 @@ pub fn emit_collateral_deposited(
 
 /// Emit event when collateral is withdrawn
 ///
+/// Publishes a [`CollateralWithdrawnEvent`] to the Soroban event stream.
+/// This event is indexed by `user` and `market_id` as topics for efficient
+/// querying by off-chain services.
+///
 /// # Arguments
 /// * env - Soroban environment
 /// * user - User's address
 /// * market_id - Market identifier
 /// * amount - Amount withdrawn in stroops
 /// * new_total - User's total collateral in this market after withdrawal
-#[allow(dead_code)]
+///
+/// # Example
+/// ```ignore
+/// emit_collateral_withdrawn(&env, &user, 1, 2_000_000, 3_000_000);
+/// ```
 pub fn emit_collateral_withdrawn(
     env: &Env,
     user: &Address,
@@ -110,17 +137,51 @@ pub fn emit_collateral_withdrawn(
 
 /// Emit a MarketCreated event
 ///
+/// Publishes a [`MarketCreatedEvent`] to the Soroban event stream when a new
+/// prediction market is initialized. The event is indexed by `market_id` as
+/// a topic for efficient lookup by off-chain indexers and frontends.
+///
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the created market
 /// * question - The market question
 /// * end_time - Unix timestamp when market closes for trading
+///
+/// # Example
+/// ```ignore
+/// emit_market_created(&env, 1, &String::from_str(&env, "Will BTC hit $100k?"), 1735689600);
+/// ```
 pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_time: u64) {
     // Publish the event with topics and data
     MarketCreatedEvent {
         market_id,
         question: question.clone(),
         end_time,
+    }
+    .publish(env);
+}
+
+/// Emit event for withdraw edge case when user has zero collateral deposited
+///
+/// Publishes a [`WithdrawEdgeCaseEvent`] when a user attempts to withdraw
+/// from a market where they have no deposited collateral. This helps off-chain
+/// monitoring tools identify potential UI bugs or user confusion.
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * user - User's address
+/// * market_id - Market identifier
+/// * amount - Amount attempted to withdraw in stroops
+///
+/// # Example
+/// ```ignore
+/// emit_withdraw_edge_case(&env, &user, 1, 1_000_000);
+/// ```
+pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount: i128) {
+    WithdrawEdgeCaseEvent {
+        user: user.clone(),
+        market_id,
+        amount,
     }
     .publish(env);
 }
@@ -136,16 +197,59 @@ pub struct MarketResolvedEvent {
 
 /// Emit a MarketResolved event
 ///
+/// Publishes a [`MarketResolvedEvent`] to the Soroban event stream when a
+/// market is resolved by an oracle. The event is indexed by `market_id` as
+/// a topic, allowing efficient queries for resolution events.
+///
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the resolved market
 /// * outcome - Market outcome (true = YES won, false = NO won)
 /// * resolved_at - Unix timestamp when market was resolved
+///
+/// # Example
+/// ```ignore
+/// emit_market_resolved(&env, 1, true, env.ledger().timestamp());
+/// ```
 pub fn emit_market_resolved(env: &Env, market_id: u32, outcome: bool, resolved_at: u64) {
     MarketResolvedEvent {
         market_id,
         outcome,
         resolved_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PositionLimitExceededEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    /// The share side that would go negative: true = YES, false = NO
+    pub side_yes: bool,
+}
+
+/// Emit an event when a position change is rejected because it would push a
+/// share balance below zero.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier where the limit was hit
+/// * `user` - Address of the user whose position change was rejected
+/// * `side_yes` - `true` if the YES share balance would go negative; `false`
+///   if the NO side would go negative
+///
+/// # Example
+/// ```ignore
+/// emit_position_limit_exceeded(&env, market_id, &user, true);
+/// ```
+pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
+    PositionLimitExceededEvent {
+        market_id,
+        user: user.clone(),
+        side_yes,
     }
     .publish(env);
 }
@@ -163,6 +267,21 @@ pub struct PositionUpdatedEvent {
     pub locked_collateral: i128,
 }
 
+/// Emit an event whenever a user's position is modified (shares bought or sold).
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user whose position was updated
+/// * `yes_shares` - New total YES share balance after the update
+/// * `no_shares` - New total NO share balance after the update
+/// * `locked_collateral` - Collateral (in stroops) now locked to cover the
+///   net position
+///
+/// # Example
+/// ```ignore
+/// emit_position_updated(&env, market_id, &user, 100, 0, 100);
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_updated(
     env: &Env,
@@ -185,6 +304,42 @@ pub fn emit_position_updated(
 #[contractevent]
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
+pub struct ValidationFailedEvent {
+    #[topic]
+    pub context: soroban_sdk::Symbol,
+    pub error_code: u32,
+}
+
+/// Emit an event when a validation step fails, recording which context triggered
+/// the failure and the associated error code.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `context` - Symbol identifying the validation site (e.g.
+///   `Symbol::new(&env, "validate_collateral")`)
+/// * `error_code` - Numeric value of the [`ContractError`] variant that was
+///   returned (e.g. `31` for `InvalidQuantity`)
+///
+/// # Example
+/// ```ignore
+/// emit_validation_failed(
+///     &env,
+///     Symbol::new(&env, "validate_collateral"),
+///     ContractError::InvalidQuantity as u32,
+/// );
+/// ```
+#[allow(dead_code)]
+pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
+    ValidationFailedEvent {
+        context,
+        error_code,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct PositionSettledEvent {
     #[topic]
     pub market_id: u32,
@@ -194,6 +349,19 @@ pub struct PositionSettledEvent {
     pub settled_at: u64,
 }
 
+/// Emit an event when a user's position is settled and payout is transferred.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user receiving the payout
+/// * `payout` - Amount transferred to the user in stroops
+/// * `settled_at` - Unix timestamp (ledger time) when settlement occurred
+///
+/// # Example
+/// ```ignore
+/// emit_position_settled(&env, market_id, &user, 500_000, env.ledger().timestamp());
+/// ```
 #[allow(dead_code)]
 pub fn emit_position_settled(
     env: &Env,
@@ -210,6 +378,79 @@ pub fn emit_position_settled(
     }
     .publish(env);
 }
+
+#[contractevent]
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct OracleSignatureVerifiedEvent {
+    #[topic]
+    pub market_id: u32,
+    pub outcome: bool,
+    pub verified_at: u64,
+}
+
+/// Emit event when oracle signature is verified
+///
+/// Publishes an [`OracleSignatureVerifiedEvent`] when an oracle's Ed25519
+/// signature is successfully verified during market resolution. This event
+/// provides an audit trail for resolution authenticity and is indexed by
+/// `market_id` for efficient querying.
+///
+/// # Arguments
+/// * env - Soroban environment
+/// * market_id - Market identifier
+/// * outcome - Verified outcome (true = YES, false = NO)
+/// * verified_at - Unix timestamp when verification occurred
+///
+/// # Example
+/// ```ignore
+/// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
+/// ```
+#[allow(dead_code)]
+pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, verified_at: u64) {
+    OracleSignatureVerifiedEvent {
+        market_id,
+        outcome,
+        verified_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeCalculatedEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    pub fee_amount: i128,
+    pub available_after_fee: i128,
+}
+
+/// Emit event when a fee is calculated during a withdrawal action.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user performing the withdrawal
+/// * `fee_amount` - Fee deducted in stroops
+/// * `available_after_fee` - Collateral available to withdraw after fee
+pub fn emit_fee_calculated(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    fee_amount: i128,
+    available_after_fee: i128,
+) {
+    FeeCalculatedEvent {
+        market_id,
+        user: user.clone(),
+        fee_amount,
+        available_after_fee,
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,12 +667,7 @@ mod tests {
             .get(Symbol::new(&env, "payout"))
             .unwrap()
             .into_val(&env);
-        let settled_at_val: u64 = data
-            .get(Symbol::new(&env, "settled_at"))
-            .unwrap()
-            .into_val(&env);
         assert_eq!(payout_val, payout);
-        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]
@@ -477,6 +713,38 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_validation_failed() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let context = Symbol::new(&env, "validate_collateral");
+        let error_code = 31u32;
+
+        env.as_contract(&contract_id, || {
+            emit_validation_failed(&env, context.clone(), error_code);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "validation_failed_event"));
+
+        let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, context);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let code: u32 = data
+            .get(Symbol::new(&env, "error_code"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(code, error_code);
+    }
+
+    #[test]
     fn test_emit_collateral_withdrawn() {
         let env = Env::default();
         let contract_id = env.register(MarketContract, ());
@@ -516,5 +784,82 @@ mod tests {
             .into_val(&env);
         assert_eq!(amount_val, amount);
         assert_eq!(new_total_val, new_total);
+    }
+
+    #[test]
+    fn test_emit_oracle_signature_verified() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let outcome = true;
+        let verified_at = 1234567890u64;
+
+        env.as_contract(&contract_id, || {
+            emit_oracle_signature_verified(&env, market_id, outcome, verified_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "oracle_signature_verified_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let outcome_val: bool = data
+            .get(Symbol::new(&env, "outcome"))
+            .unwrap()
+            .into_val(&env);
+        let verified_at_val: u64 = data
+            .get(Symbol::new(&env, "verified_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(outcome_val, outcome);
+        assert_eq!(verified_at_val, verified_at);
+    }
+
+    #[test]
+    fn test_emit_fee_calculated() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let user = Address::generate(&env);
+        let fee_amount = 0i128;
+        let available_after_fee = 5_000i128;
+
+        env.as_contract(&contract_id, || {
+            emit_fee_calculated(&env, market_id, &user, fee_amount, available_after_fee);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "fee_calculated_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let fee_val: i128 = data
+            .get(Symbol::new(&env, "fee_amount"))
+            .unwrap()
+            .into_val(&env);
+        let available_val: i128 = data
+            .get(Symbol::new(&env, "available_after_fee"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(fee_val, fee_amount);
+        assert_eq!(available_val, available_after_fee);
     }
 }

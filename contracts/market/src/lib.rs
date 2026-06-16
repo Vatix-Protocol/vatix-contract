@@ -3,21 +3,22 @@
 mod deposit;
 mod error;
 mod events;
-mod oracle;
+pub mod oracle;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
-mod settlement;
+pub mod settlement;
+mod withdraw;
 
 #[allow(dead_code)]
-mod storage;
+pub mod storage;
 mod test;
-mod types;
+pub mod types;
 #[allow(dead_code)]
 mod validation;
 
 use crate::error::ContractError;
-use crate::types::{Market, MarketStatus};
+use crate::types::{Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 
 #[contract]
@@ -25,49 +26,46 @@ pub struct MarketContract;
 
 #[contractimpl]
 impl MarketContract {
-    /// One-time contract bootstrap. Must be called exactly once after WASM deploy.
+    /// Create a new prediction market and return its unique identifier.
     ///
-    /// Sets the contract admin, which is required before any market can be created.
-    /// Subsequent calls are rejected with [`ContractError::AlreadyInitialized`] to
-    /// prevent admin hijacking.
+    /// Only the stored admin may call this function. The market starts in
+    /// [`MarketStatus::Active`] and accepts collateral deposits immediately.
     ///
     /// # Arguments
     /// * `env` - Soroban contract environment
-    /// * `admin` - Address that will become the contract admin (must authorize)
+    /// * `creator` - Admin address that authorizes market creation
+    /// * `question` - Human-readable market question (1–499 characters)
+    /// * `end_time` - Unix timestamp after which trading closes (must be
+    ///   within one year of the current ledger time)
+    /// * `oracle_pubkey` - Ed25519 public key of the oracle that will sign
+    ///   the resolution outcome
+    /// * `collateral_token` - Address of the SAC token used as collateral
+    ///   (e.g. USDC)
     ///
     /// # Returns
-    /// `Ok(())` on success.
+    /// The `u32` market ID assigned to the new market (auto-incremented).
     ///
     /// # Errors
-    /// - [`ContractError::AlreadyInitialized`] – contract was already initialized
+    /// - [`ContractError::Unauthorized`] – `creator` is not the admin
+    /// - [`ContractError::InvalidQuestion`] – question is empty or ≥ 500 chars
+    /// - [`ContractError::InvalidTimestamp`] – `end_time` is in the past or
+    ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`ContractInitializedEvent`] with `admin` as both topic and payload.
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
+    /// `end_time` as payload.
     ///
     /// # Example
     /// ```ignore
-    /// client.initialize(&admin);
-    /// // subsequent calls return AlreadyInitialized
+    /// let market_id = client.initialize_market(
+    ///     &admin,
+    ///     &String::from_str(&env, "Will BTC reach $100k by end of year?"),
+    ///     &(env.ledger().timestamp() + 86_400),
+    ///     &oracle_pubkey,
+    ///     &usdc_token,
+    /// );
+    /// assert_eq!(market_id, 1);
     /// ```
-    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
-        // 1. Require the admin's authorization (cryptographic proof of ownership)
-        admin.require_auth();
-
-        // 2. Guard against re-initialization — prevent admin hijack on replay
-        if storage::has_admin(&env) {
-            return Err(ContractError::AlreadyInitialized);
-        }
-
-        // 3. Persist the admin address
-        storage::set_admin(&env, &admin);
-
-        // 4. Emit event so indexers and frontends can confirm bootstrap
-        events::emit_contract_initialized(&env, &admin);
-
-        Ok(())
-    }
-
-    /// Initialize a new market
     pub fn initialize_market(
         env: Env,
         creator: Address,
@@ -80,12 +78,18 @@ impl MarketContract {
         creator.require_auth();
         let admin = storage::get_admin(&env);
         if creator != admin {
-            return Err(ContractError::Unauthorized);
+            return Err(ContractError::NotAdmin);
         }
 
         // 2. Validate inputs
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
+
+        // Guard: an all-zero pubkey can never produce a valid Ed25519 signature,
+        // making the market permanently unresolvable.
+        if oracle_pubkey == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(ContractError::InvalidSignature);
+        }
 
         // 3. Generate market ID
         let market_id = storage::increment_market_id(&env);
@@ -106,6 +110,7 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, market_id, &market);
 
+        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
         events::emit_market_created(&env, market_id, &question, end_time);
 
@@ -135,11 +140,38 @@ impl MarketContract {
         deposit::deposit_collateral(env, user, market_id, amount)
     }
 
+    /// Withdraw unused collateral from a market
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User withdrawing
+    /// * `market_id` - Market to withdraw from
+    /// * `amount` - Amount to withdraw in stroops
+    ///
+    /// # Returns
+    /// Unit (success)
+    ///
+    /// # Errors
+    /// - MarketNotFound
+    /// - InsufficientCollateral: Trying to withdraw locked collateral
+    /// - InvalidQuantity: Amount <= 0
+    ///
+    /// # Events
+    /// Emits CollateralWithdrawn event
+    pub fn withdraw_unused_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        withdraw::withdraw_unused_collateral(env, user, market_id, amount)
+    }
+
     /// Resolve a market with oracle-signed outcome
     ///
     /// # Arguments
     /// * `env` - Contract environment
-    /// * `market_id` - Market to resolve
+    /// * `market_id` - Market to resolve (decimal string, e.g. "1")
     /// * `outcome` - Outcome (true = YES won, false = NO won)
     /// * `signature` - Oracle's Ed25519 signature (64 bytes)
     ///
@@ -156,22 +188,19 @@ impl MarketContract {
     /// Emits MarketResolved event
     pub fn resolve_market(
         env: Env,
-        market_id: u32,
+        market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
-        // 1. Load and validate market
+        let market_id = validation::parse_market_id(&market_id)?;
+        // Step 1: Load and validate market
         let mut market =
             storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
-
-        // 2. Check market is not already resolved
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // 3. Verify oracle signature
-        // Note: verify_oracle_signature may panic on invalid signatures, which will
-        // be caught as a contract error. We use the market's stored oracle_pubkey.
+        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
         oracle::verify_oracle_signature(
             &env,
             market_id,
@@ -180,17 +209,96 @@ impl MarketContract {
             &market.oracle_pubkey,
         )?;
 
-        // 4. Update market status and store outcome
+        // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-
-        // 5. Store updated market
         storage::set_market(&env, market_id, &market);
 
-        // 6. Record resolution time and emit event
+        // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
+        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
         Ok(())
+    }
+
+    /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
+    ///
+    /// This is the on-chain entry point for the share-trading logic implemented
+    /// in [`positions::update_position`]. It layers the market- and
+    /// authorization-level checks required before a position may be mutated.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User whose position is updated (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `yes_delta` - Change in YES shares (negative to sell)
+    /// * `no_delta` - Change in NO shares (negative to sell)
+    /// * `market_price` - Current market price in basis points (0–10_000) used
+    ///   to value the resulting net position
+    ///
+    /// # Returns
+    /// The updated [`Position`] on success.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] – market does not exist
+    /// - [`ContractError::MarketNotActive`] – market is resolved or canceled
+    /// - [`ContractError::MarketExpired`] – market has passed its `end_time`
+    /// - [`ContractError::InvalidPrice`] – `market_price` is outside 0–10_000
+    /// - [`ContractError::InsufficientCollateral`] – deposited collateral does
+    ///   not cover the increased locked amount
+    /// - [`ContractError::InvalidShareAmount`] – deltas would push a share
+    ///   balance below zero
+    ///
+    /// # Events
+    /// Emits `PositionUpdated` on success, or `PositionLimitExceeded` when a
+    /// delta would drive a share balance negative.
+    pub fn update_position(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        yes_delta: i128,
+        no_delta: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        // 1. Authorization
+        user.require_auth();
+
+        // 2. Validate market state: must exist, be Active, and not be expired
+        let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+        if market.status != MarketStatus::Active {
+            return Err(ContractError::MarketNotActive);
+        }
+        if env.ledger().timestamp() > market.end_time {
+            return Err(ContractError::MarketExpired);
+        }
+
+        // 3. Validate the market price up front for a clear ContractError
+        validation::validate_market_price(market_price)?;
+
+        // 4. Enforce that deposited collateral covers any increase in the lock.
+        //    Negative-share deltas are left for positions::update_position to
+        //    reject (it also emits a PositionLimitExceeded event).
+        let position = storage::get_position(&env, market_id, &user)
+            .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
+        let new_yes = position.yes_shares + yes_delta;
+        let new_no = position.no_shares + no_delta;
+        if new_yes >= 0 && new_no >= 0 {
+            let prospective_locked =
+                positions::calculate_locked_collateral(new_yes, new_no, market_price);
+            let lock_increased = prospective_locked > position.locked_collateral;
+            if lock_increased && prospective_locked > position.total_deposited {
+                return Err(ContractError::InsufficientCollateral);
+            }
+        }
+
+        // 5. Apply the share deltas (persists the position and emits an event)
+        positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
+            .map_err(|e| match e {
+                positions::PositionError::ShareBalanceBelowZero => {
+                    ContractError::InvalidShareAmount
+                }
+                positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+            })
     }
 }

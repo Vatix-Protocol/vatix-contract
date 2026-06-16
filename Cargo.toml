@@ -3,9 +3,31 @@ resolver = "2"
 members = [
   "contracts/*",
 ]
+default-members = [
+  ".",
+  "contracts/market",
+]
 
 [workspace.dependencies]
 soroban-sdk = "23"
+
+# The workspace root doubles as a package whose only purpose is to host the
+# end-to-end integration tests under `tests/`. It ships no library code.
+[package]
+name = "vatix-contract-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dev-dependencies]
+vatix-market-contract = { path = "contracts/market" }
+soroban-sdk = { workspace = true, features = ["testutils"] }
+ed25519-dalek = "2.2.0"
+rand = "0.8"
 
 [profile.release]
 opt-level = "z"
