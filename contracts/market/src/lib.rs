@@ -25,6 +25,48 @@ pub struct MarketContract;
 
 #[contractimpl]
 impl MarketContract {
+    /// One-time contract bootstrap. Must be called exactly once after WASM deploy.
+    ///
+    /// Sets the contract admin, which is required before any market can be created.
+    /// Subsequent calls are rejected with [`ContractError::AlreadyInitialized`] to
+    /// prevent admin hijacking.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `admin` - Address that will become the contract admin (must authorize)
+    ///
+    /// # Returns
+    /// `Ok(())` on success.
+    ///
+    /// # Errors
+    /// - [`ContractError::AlreadyInitialized`] – contract was already initialized
+    ///
+    /// # Events
+    /// Emits [`ContractInitializedEvent`] with `admin` as both topic and payload.
+    ///
+    /// # Example
+    /// ```ignore
+    /// client.initialize(&admin);
+    /// // subsequent calls return AlreadyInitialized
+    /// ```
+    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
+        // 1. Require the admin's authorization (cryptographic proof of ownership)
+        admin.require_auth();
+
+        // 2. Guard against re-initialization — prevent admin hijack on replay
+        if storage::has_admin(&env) {
+            return Err(ContractError::AlreadyInitialized);
+        }
+
+        // 3. Persist the admin address
+        storage::set_admin(&env, &admin);
+
+        // 4. Emit event so indexers and frontends can confirm bootstrap
+        events::emit_contract_initialized(&env, &admin);
+
+        Ok(())
+    }
+
     /// Initialize a new market
     pub fn initialize_market(
         env: Env,

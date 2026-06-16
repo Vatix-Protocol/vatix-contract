@@ -55,6 +55,12 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().persistent().set(&ADMIN_KEY, admin);
 }
 
+/// Returns `true` if the admin slot has been populated (i.e. `initialize` was
+/// already called), `false` on a freshly deployed contract.
+pub fn has_admin(env: &Env) -> bool {
+    env.storage().persistent().has(&ADMIN_KEY)
+}
+
 pub fn get_next_market_id(env: &Env) -> u32 {
     env.storage().persistent().get(&COUNTER_KEY).unwrap_or(0)
 }
@@ -79,7 +85,9 @@ mod test {
         let contract_id = env.register(crate::MarketContract, ());
 
         env.as_contract(&contract_id, || {
+            assert!(!has_admin(&env), "admin slot should be empty before set");
             set_admin(&env, &admin);
+            assert!(has_admin(&env), "admin slot should be populated after set");
             assert_eq!(get_admin(&env), admin);
         });
     }

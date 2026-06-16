@@ -71,6 +71,12 @@ pub enum ContractError {
     /// Caller is not the admin for this operation
     NotAdmin = 41,
 
+    /// Contract has already been initialized.
+    ///
+    /// `initialize(admin)` may only be called once. Replaying it would allow
+    /// an attacker to hijack the admin slot after initial deploy.
+    AlreadyInitialized = 42,
+
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed (insufficient balance, approval, etc.)
     TokenTransferFailed = 50,

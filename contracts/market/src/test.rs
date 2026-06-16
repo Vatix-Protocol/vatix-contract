@@ -437,4 +437,70 @@ mod test {
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
     }
+
+    // ========== initialize tests ==========
+
+    /// Helper that returns a fresh env + contract with NO admin set.
+    fn create_uninitialized_contract<'a>() -> (Env, Address, MarketContractClient<'a>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        (env, admin, client)
+    }
+
+    #[test]
+    fn test_initialize_sets_admin_and_emits_event() {
+        let (env, admin, client) = create_uninitialized_contract();
+
+        client.initialize(&admin);
+
+        // Event should carry the admin address as topic
+        let events = env.events().all();
+        assert!(!events.is_empty(), "expected ContractInitialized event");
+        let topic0: soroban_sdk::Symbol = events.last().unwrap().1.get(0).unwrap().into_val(&env);
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "contract_initialized_event")
+        );
+    }
+
+    #[test]
+    fn test_initialize_allows_subsequent_market_creation() {
+        let (env, admin, client) = create_uninitialized_contract();
+
+        // Bootstrap via public API
+        client.initialize(&admin);
+
+        let question = String::from_str(&env, "Will ETH flip BTC?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id =
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        assert_eq!(market_id, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn test_initialize_twice_fails_with_already_initialized() {
+        let (env, admin, client) = create_uninitialized_contract();
+
+        client.initialize(&admin);
+        // Second call must fail with AlreadyInitialized (#42)
+        client.initialize(&admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn test_initialize_second_admin_fails() {
+        let (env, admin, client) = create_uninitialized_contract();
+        let attacker = Address::generate(&env);
+
+        client.initialize(&admin);
+        // An attacker trying to replace the admin must be rejected
+        client.initialize(&attacker);
+    }
 }
