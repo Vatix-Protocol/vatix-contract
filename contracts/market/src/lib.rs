@@ -301,4 +301,31 @@ impl MarketContract {
                 positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
             })
     }
+
+    /// Settle a user's position in a resolved market and pay out their winnings.
+    ///
+    /// Completes the deposit -> resolve -> settle -> receive-funds loop: it
+    /// calculates the payout for the resolved outcome, marks the position
+    /// settled, and transfers the payout in collateral (SAC) tokens from the
+    /// contract to the user.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User settling their position (must authorize the call)
+    /// * `market_id` - Market identifier
+    ///
+    /// # Returns
+    /// The payout amount transferred to the user, in stroops.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] - the market does not exist
+    /// - [`ContractError::NoPositionFound`] - the user has no position
+    /// - [`ContractError::MarketNotResolved`] - the market is not resolved
+    /// - [`ContractError::PositionAlreadySettled`] - already settled
+    ///
+    /// # Events
+    /// Emits `PositionSettled` with the payout amount.
+    pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
+        settlement::settle_position(&env, &user, market_id)
+    }
 }
