@@ -18,7 +18,7 @@ mod types;
 mod validation;
 
 use crate::error::ContractError;
-use crate::types::{Market, MarketStatus};
+use crate::types::{Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 
 #[contract]
@@ -220,5 +220,85 @@ impl MarketContract {
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
         Ok(())
+    }
+
+    /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
+    ///
+    /// This is the on-chain entry point for the share-trading logic implemented
+    /// in [`positions::update_position`]. It layers the market- and
+    /// authorization-level checks required before a position may be mutated.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User whose position is updated (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `yes_delta` - Change in YES shares (negative to sell)
+    /// * `no_delta` - Change in NO shares (negative to sell)
+    /// * `market_price` - Current market price in basis points (0–10_000) used
+    ///   to value the resulting net position
+    ///
+    /// # Returns
+    /// The updated [`Position`] on success.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] – market does not exist
+    /// - [`ContractError::MarketNotActive`] – market is resolved or canceled
+    /// - [`ContractError::MarketExpired`] – market has passed its `end_time`
+    /// - [`ContractError::InvalidPrice`] – `market_price` is outside 0–10_000
+    /// - [`ContractError::InsufficientCollateral`] – deposited collateral does
+    ///   not cover the increased locked amount
+    /// - [`ContractError::InvalidShareAmount`] – deltas would push a share
+    ///   balance below zero
+    ///
+    /// # Events
+    /// Emits `PositionUpdated` on success, or `PositionLimitExceeded` when a
+    /// delta would drive a share balance negative.
+    pub fn update_position(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        yes_delta: i128,
+        no_delta: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        // 1. Authorization
+        user.require_auth();
+
+        // 2. Validate market state: must exist, be Active, and not be expired
+        let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+        if market.status != MarketStatus::Active {
+            return Err(ContractError::MarketNotActive);
+        }
+        if env.ledger().timestamp() > market.end_time {
+            return Err(ContractError::MarketExpired);
+        }
+
+        // 3. Validate the market price up front for a clear ContractError
+        validation::validate_market_price(market_price)?;
+
+        // 4. Enforce that deposited collateral covers any increase in the lock.
+        //    Negative-share deltas are left for positions::update_position to
+        //    reject (it also emits a PositionLimitExceeded event).
+        let position = storage::get_position(&env, market_id, &user)
+            .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
+        let new_yes = position.yes_shares + yes_delta;
+        let new_no = position.no_shares + no_delta;
+        if new_yes >= 0 && new_no >= 0 {
+            let prospective_locked =
+                positions::calculate_locked_collateral(new_yes, new_no, market_price);
+            let lock_increased = prospective_locked > position.locked_collateral;
+            if lock_increased && prospective_locked > position.total_deposited {
+                return Err(ContractError::InsufficientCollateral);
+            }
+        }
+
+        // 5. Apply the share deltas (persists the position and emits an event)
+        positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
+            .map_err(|e| match e {
+                positions::PositionError::ShareBalanceBelowZero => {
+                    ContractError::InvalidShareAmount
+                }
+                positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+            })
     }
 }

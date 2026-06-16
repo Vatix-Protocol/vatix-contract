@@ -542,6 +542,141 @@ mod test {
         client.deposit_collateral(&user, &1, &1000i128);
     }
 
+    // ========== update_position tests ==========
+
+    /// Register a market backed by a real Stellar asset, fund `user`, and
+    /// deposit `deposit` stroops of collateral so trades can be exercised.
+    fn setup_funded_market<'a>(
+        deposit: i128,
+    ) -> (Env, Address, MarketContractClient<'a>, Address, u32) {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        env.mock_all_auths();
+
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        (env, user, client, contract_id, market_id)
+    }
+
+    #[test]
+    fn test_update_position_buys_shares_and_locks_collateral() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Buy 100 YES shares at a 60% price -> lock 60 USDC
+        let yes = 100 * STROOPS_PER_USDC;
+        let position = client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
+
+        assert_eq!(position.yes_shares, yes);
+        assert_eq!(position.no_shares, 0);
+        assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
+
+        // The persisted position matches the returned one
+        let stored = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(stored.yes_shares, yes);
+        assert_eq!(stored.locked_collateral, 60 * STROOPS_PER_USDC);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_update_position_insufficient_collateral() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        // Only 10 USDC deposited, but buying 100 YES at 60% needs 60 USDC locked.
+        let deposit = 10 * STROOPS_PER_USDC;
+        let (_env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
+
+        let yes = 100 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #13)")]
+    fn test_update_position_rejects_overselling() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (_env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
+
+        // Selling shares the user does not hold drives the balance below zero.
+        client.update_position(
+            &user,
+            &market_id,
+            &(-50 * STROOPS_PER_USDC),
+            &0i128,
+            &6000i128,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_update_position_rejects_resolved_market() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Force the market into a resolved state.
+        env.as_contract(&contract_id, || {
+            let mut market = storage::get_market(&env, market_id).unwrap();
+            market.status = MarketStatus::Resolved;
+            market.result = Some(true);
+            storage::set_market(&env, market_id, &market);
+        });
+
+        let yes = 10 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_update_position_rejects_expired_market() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Advance the ledger past the market end_time.
+        let end_time = env.as_contract(&contract_id, || {
+            storage::get_market(&env, market_id).unwrap().end_time
+        });
+        env.ledger().set_timestamp(end_time + 1);
+
+        let yes = 10 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
+    }
+
     // ========== Validation guard tests ==========
 
     #[test]
