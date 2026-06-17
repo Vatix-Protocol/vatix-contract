@@ -1,6 +1,8 @@
 use crate::error::ContractError;
+use crate::storage;
 use crate::types::{Market, MarketStatus, Position};
-use soroban_sdk::Env;
+use soroban_sdk::token::Client as TokenClient;
+use soroban_sdk::{Address, Env};
 
 /// Calculate payout for a position based on market outcome
 ///
@@ -83,6 +85,57 @@ pub fn execute_settlement(
         payout,
         settled_at,
     );
+
+    Ok(payout)
+}
+
+/// Settle a user's position in a resolved market and transfer their payout.
+///
+/// This is the full settlement entry point that completes the
+/// deposit -> resolve -> settle -> receive-funds loop:
+/// 1. Loads the market and the user's position
+/// 2. Validates eligibility, calculates the payout, and marks the position
+///    settled (via [`execute_settlement`], which also emits `PositionSettled`)
+/// 3. Persists the updated position
+/// 4. Transfers the payout in collateral (SAC) tokens from the contract to the
+///    user
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `user` - User settling their position (must authorize the call)
+/// * `market_id` - Market identifier
+///
+/// # Returns
+/// The payout amount transferred to the user, in stroops.
+///
+/// # Errors
+/// - [`ContractError::MarketNotFound`] - the market does not exist
+/// - [`ContractError::NoPositionFound`] - the user has no position in the market
+/// - [`ContractError::MarketNotResolved`] - the market has not been resolved
+/// - [`ContractError::PositionAlreadySettled`] - the position was already settled
+///
+/// # Events
+/// Emits `PositionSettled` with the payout amount.
+pub fn settle_position(env: &Env, user: &Address, market_id: u32) -> Result<i128, ContractError> {
+    user.require_auth();
+
+    let market = storage::get_market(env, market_id).ok_or(ContractError::MarketNotFound)?;
+    let mut position =
+        storage::get_position(env, market_id, user).ok_or(ContractError::NoPositionFound)?;
+
+    // Validates eligibility (Resolved + not already settled), computes the
+    // payout, marks the position settled, and emits the PositionSettled event.
+    let payout = execute_settlement(env, &mut position, &market)?;
+
+    // Persist the settled position before paying out.
+    storage::set_position(env, market_id, user, &position);
+
+    // Transfer the payout in collateral tokens from the contract to the user.
+    if payout > 0 {
+        let contract_address = env.current_contract_address();
+        let token_client = TokenClient::new(env, &market.collateral_token);
+        token_client.transfer(&contract_address, user, &payout);
+    }
 
     Ok(payout)
 }
@@ -281,5 +334,136 @@ mod tests {
     fn test_validate_payout_invalid() {
         assert_eq!(validate_payout(-1), Err(ContractError::InvalidQuantity));
         assert_eq!(validate_payout(-100), Err(ContractError::InvalidQuantity));
+    }
+
+    /// End-to-end settlement through the contract client, asserting that the
+    /// SAC token payout actually reaches the user:
+    /// init -> create market -> deposit -> buy -> resolve -> settle.
+    #[test]
+    fn test_settle_position_transfers_payout_full_flow() {
+        use crate::{MarketContract, MarketContractClient};
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+        use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+
+        const STROOPS_PER_USDC: i128 = 10_000_000;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+
+        // Admin is required before a market can be created.
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        // Real SAC collateral token.
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+        let token_client = TokenClient::new(&env, &collateral_token);
+
+        // Oracle keypair used to sign the resolution of market id 1.
+        let outcome = true;
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        // Create the market.
+        let question = String::from_str(&env, "Will the payout land?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Deposit collateral.
+        let user = Address::generate(&env);
+        let deposit = 100 * STROOPS_PER_USDC;
+        sac.mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        // Buy YES shares so the resolved position has a payout.
+        let yes_shares = 100 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
+
+        // Resolve the market (YES wins) with a valid oracle signature.
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &signature);
+
+        // Before settling, the contract holds the deposit and the user holds nothing.
+        assert_eq!(token_client.balance(&user), 0);
+        assert_eq!(token_client.balance(&contract_id), deposit);
+
+        // Settle: the payout equals the winning YES shares.
+        let payout = client.settle_position(&user, &market_id);
+        assert_eq!(payout, yes_shares);
+
+        // The SAC tokens moved from the contract to the user.
+        assert_eq!(token_client.balance(&user), payout);
+        assert_eq!(token_client.balance(&contract_id), deposit - payout);
+
+        // The position is now marked settled.
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert!(position.is_settled);
+
+        // Settling a second time is rejected.
+        let second = client.try_settle_position(&user, &market_id);
+        assert!(second.is_err());
+    }
+
+    #[test]
+    fn test_settle_position_rejects_unresolved_market() {
+        use crate::{MarketContract, MarketContractClient};
+        use soroban_sdk::token::StellarAssetClient;
+
+        const STROOPS_PER_USDC: i128 = 10_000_000;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let question = String::from_str(&env, "Still active?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        let deposit = 50 * STROOPS_PER_USDC;
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        // The market is still Active, so settlement must be rejected (#3).
+        let result = client.try_settle_position(&user, &market_id);
+        assert_eq!(result, Err(Ok(ContractError::MarketNotResolved)));
     }
 }
