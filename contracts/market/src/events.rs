@@ -477,10 +477,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(
-            topic0,
-            Symbol::new(&env, "contract_initialized_event")
-        );
+        assert_eq!(topic0, Symbol::new(&env, "contract_initialized_event"));
 
         let topic1: Address = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, admin);
