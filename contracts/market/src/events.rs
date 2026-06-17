@@ -4,6 +4,32 @@ use soroban_sdk::{contractevent, Address, Env, String};
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct ContractInitializedEvent {
+    #[topic]
+    pub admin: Address,
+    /// Ledger timestamp when the contract was bootstrapped.
+    pub initialized_at: u64,
+}
+
+/// Emit an event when the contract is initialized with an admin.
+///
+/// Publishes a [`ContractInitializedEvent`] to the Soroban event stream when
+/// `initialize` is called for the first time. Indexed by `admin` as a topic
+/// so off-chain indexers can confirm who bootstrapped the contract.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `admin` - The address stored as the contract admin
+pub fn emit_contract_initialized(env: &Env, admin: &Address) {
+    ContractInitializedEvent {
+        admin: admin.clone(),
+        initialized_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 pub struct MarketCreatedEvent {
     #[topic]
     pub market_id: u32,
@@ -433,6 +459,36 @@ mod tests {
         testutils::{Address as _, Events as _},
         Env, IntoVal, Map, String, Symbol, TryIntoVal, Val,
     };
+
+    #[test]
+    fn test_emit_contract_initialized() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            emit_contract_initialized(&env, &admin);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "contract_initialized_event"));
+
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, admin);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let initialized_at_val: u64 = data
+            .get(Symbol::new(&env, "initialized_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(initialized_at_val, env.ledger().timestamp());
+    }
 
     #[test]
     fn test_emit_market_created() {
