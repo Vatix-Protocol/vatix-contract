@@ -66,6 +66,20 @@ impl MarketContract {
     /// );
     /// assert_eq!(market_id, 1);
     /// ```
+    /// Bootstrap the contract by setting the admin address.
+    ///
+    /// Must be called once by the admin immediately after deployment.
+    /// Subsequent calls return [`ContractError::AlreadyInitialized`].
+    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        if storage::has_admin(&env) {
+            return Err(ContractError::AlreadyInitialized);
+        }
+        storage::set_admin(&env, &admin);
+        events::emit_contract_initialized(&env, &admin);
+        Ok(())
+    }
+
     pub fn initialize_market(
         env: Env,
         creator: Address,
