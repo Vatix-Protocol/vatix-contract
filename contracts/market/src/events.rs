@@ -451,6 +451,27 @@ pub fn emit_fee_calculated(
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasurySetEvent {
+    #[topic]
+    pub treasury: Address,
+    pub set_at: u64,
+}
+
+/// Emit an event when the admin registers or replaces the treasury contract.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `treasury` - Address of the treasury contract that will receive fees
+pub fn emit_treasury_set(env: &Env, treasury: &Address) {
+    TreasurySetEvent {
+        treasury: treasury.clone(),
+        set_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

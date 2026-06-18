@@ -8,10 +8,44 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 ## Contracts
 
-- **Market Contract**: Market creation, trading, and settlement logic
-- **Outcome Token**: Fungible tokens representing market outcomes
-- **Resolution Contract**: Oracle-based outcome resolution
-- **Treasury**: Fee collection and protocol management
+| Contract | Path | Status | Description |
+|---|---|---|---|
+| **Market** | `contracts/market/` | ✅ Deployed | Market creation, trading, and settlement logic |
+| **Treasury** | `contracts/treasury/` | ✅ Implemented | Protocol fee collection, custody, and admin withdrawal |
+| **Outcome Token** | `contracts/outcome-token/` | 🔜 Planned | Fungible tokens representing market outcomes (YES/NO shares) |
+| **Resolution** | `contracts/resolution/` | 🔜 Planned | Oracle-based outcome resolution and dispute handling |
+
+### Treasury contract (this PR)
+
+The `treasury` contract custodies protocol fees collected from market withdrawal operations.
+
+**API:**
+
+```rust
+// Lifecycle
+initialize(env, admin, market_contract) → Result<()>
+
+// Fee collection — callable only by the registered market contract
+collect_fee(env, caller, token, market_id, fee_amount) → Result<()>
+
+// Admin operations
+withdraw_fees(env, caller, token, to, amount) → Result<()>
+set_market_contract(env, caller, new_market_contract) → Result<()>
+
+// Getters (permissionless)
+admin(env) → Address
+market_contract(env) → Address
+token_balance(env, token) → i128
+total_collected(env) → i128
+```
+
+**Fee routing from the market contract:**
+
+`set_treasury(admin, treasury_address)` registers the treasury in the market contract.
+Once registered, any non-zero withdrawal fee (computed in `withdraw_unused_collateral`)
+is automatically transferred to the treasury and recorded via `collect_fee`.
+Fee calculation is currently deferred to [#85](https://github.com/Vatix-Protocol/vatix-contract/issues/85);
+the routing plumbing is in place and will activate once a non-zero fee is introduced.
 
 ## Tech Stack
 

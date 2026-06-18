@@ -12,6 +12,10 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    /// Address of the deployed treasury contract.
+    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
+    /// only routed there when this key is populated and fee_amount > 0.
+    TreasuryContract,
 }
 
 // --- Market Storage ---
@@ -86,6 +90,26 @@ pub fn increment_market_id(env: &Env) -> u32 {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     next_id
+}
+
+// --- Treasury Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&StorageKey::TreasuryContract)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::TreasuryContract, treasury);
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .has(&StorageKey::TreasuryContract)
 }
 
 #[cfg(test)]
