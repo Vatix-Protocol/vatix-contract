@@ -451,6 +451,44 @@ pub fn emit_fee_calculated(
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferProposedEvent {
+    #[topic]
+    pub current_admin: Address,
+    #[topic]
+    pub pending_admin: Address,
+    pub proposed_at: u64,
+}
+
+pub fn emit_admin_transfer_proposed(env: &Env, current_admin: &Address, pending_admin: &Address) {
+    AdminTransferProposedEvent {
+        current_admin: current_admin.clone(),
+        pending_admin: pending_admin.clone(),
+        proposed_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferAcceptedEvent {
+    #[topic]
+    pub old_admin: Address,
+    #[topic]
+    pub new_admin: Address,
+    pub accepted_at: u64,
+}
+
+pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    AdminTransferAcceptedEvent {
+        old_admin: old_admin.clone(),
+        new_admin: new_admin.clone(),
+        accepted_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
