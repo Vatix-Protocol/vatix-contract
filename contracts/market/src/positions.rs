@@ -1,4 +1,4 @@
-use crate::events::{emit_position_limit_exceeded, emit_position_updated};
+use crate::events::{emit_position_limit_exceeded, emit_position_updated, emit_trade_executed};
 use crate::types::{Market, Position};
 use crate::validation;
 use soroban_sdk::{contracterror, Address, Env};
@@ -194,7 +194,7 @@ pub fn update_position(
     // 5. Persist
     crate::storage::set_position(env, market_id, user, &position);
 
-    // 6. Emit event
+    // 6. Emit position_updated event
     emit_position_updated(
         env,
         market_id,
@@ -203,6 +203,51 @@ pub fn update_position(
         position.no_shares,
         position.locked_collateral,
     );
+
+    // 7. Emit trade_executed event(s) for the actual trades
+    if yes_delta > 0 {
+        emit_trade_executed(
+            env,
+            market_id,
+            user,
+            yes_delta,
+            market_price,
+            true,
+            env.ledger().timestamp(),
+        );
+    } else if yes_delta < 0 {
+        emit_trade_executed(
+            env,
+            market_id,
+            user,
+            -yes_delta,
+            market_price,
+            true,
+            env.ledger().timestamp(),
+        );
+    }
+
+    if no_delta > 0 {
+        emit_trade_executed(
+            env,
+            market_id,
+            user,
+            no_delta,
+            market_price,
+            false,
+            env.ledger().timestamp(),
+        );
+    } else if no_delta < 0 {
+        emit_trade_executed(
+            env,
+            market_id,
+            user,
+            -no_delta,
+            market_price,
+            false,
+            env.ledger().timestamp(),
+        );
+    }
 
     Ok(position)
 }
@@ -368,12 +413,19 @@ mod tests {
         });
 
         let events = env.events().all();
-        assert_eq!(events.len(), 1);
+        // Now we emit both position_updated and trade_executed events
+        assert_eq!(events.len(), 2);
 
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
             soroban_sdk::Symbol::new(&env, "position_updated_event")
+        );
+
+        let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
+        assert_eq!(
+            topic1,
+            soroban_sdk::Symbol::new(&env, "trade_executed_event")
         );
     }
 
