@@ -22,7 +22,7 @@ function main() {
     "contracts",
     "market",
     "target",
-    "wasm32-unknown-unknown",
+    "wasm32v1-none",
     "release",
     "vatix_market_contract.wasm",
   );
