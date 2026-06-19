@@ -1,3 +1,5 @@
+import { fetchContractMarkets } from "./soroban";
+
 export type MarketStatus = "open" | "resolved" | "expired";
 
 export interface Market {
@@ -10,6 +12,27 @@ export interface Market {
   endsAt: string;
 }
 
+/**
+ * Fetch markets from the Soroban contract (or indexer).
+ * Returns an empty array when the contract ID is not configured.
+ */
+export async function getMarkets(): Promise<Market[]> {
+  const { markets } = await fetchContractMarkets();
+  return markets.map((m) => ({
+    id: m.id,
+    question: m.question,
+    yesPrice: m.yes_price,
+    noPrice: m.no_price,
+    volume: m.volume,
+    status: m.status as MarketStatus,
+    endsAt: m.ends_at,
+  }));
+}
+
+/**
+ * Fallback static markets used when no contract is configured.
+ * Kept for UI development and as a reference data shape.
+ */
 export const MOCK_MARKETS: Market[] = [
   {
     id: "mkt-1",
