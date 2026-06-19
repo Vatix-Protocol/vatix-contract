@@ -303,6 +303,58 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct TradeExecutedEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    pub quantity: i128,
+    pub price_bps: i128,
+    pub side_yes: bool,
+    pub executed_at: u64,
+}
+
+/// Emit an event when a trade is executed (shares bought or sold).
+///
+/// Publishes a [`TradeExecutedEvent`] to the Soroban event stream indexed by
+/// `market_id` and `user` to allow efficient off-chain indexing of trades
+/// by market or trader.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user executing the trade
+/// * `quantity` - Number of shares traded (always positive)
+/// * `price_bps` - Market price in basis points (0–10_000)
+/// * `side_yes` - `true` for YES side, `false` for NO side
+/// * `executed_at` - Unix timestamp when the trade was executed
+///
+/// # Example
+/// ```ignore
+/// emit_trade_executed(&env, 1, &user, 100, 5_000, true, env.ledger().timestamp());
+/// ```
+pub fn emit_trade_executed(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    quantity: i128,
+    price_bps: i128,
+    side_yes: bool,
+    executed_at: u64,
+) {
+    TradeExecutedEvent {
+        market_id,
+        user: user.clone(),
+        quantity,
+        price_bps,
+        side_yes,
+        executed_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct ValidationFailedEvent {
     #[topic]
