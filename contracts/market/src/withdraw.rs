@@ -1,15 +1,16 @@
 //! Withdraw unused collateral from a market.
 //!
 //! Users can withdraw collateral that is not locked by their active positions.
-//! Locked collateral is computed from YES/NO shares using a 50/50 market price.
-//!
-//! TODO(#160): Support dynamic market price for locked collateral calculation
-//! instead of the hardcoded 50/50 price. This will require reading the current
-//! market price from storage once price discovery is implemented.
+//! `Position::locked_collateral` is the single source of truth for how much
+//! collateral is currently required to back a user's YES/NO shares: it is
+//! computed and persisted exclusively by `positions::update_position` (via
+//! `calculate_locked_collateral`) at the real trade price. Withdraw must
+//! trust that stored value rather than recompute its own lock from a
+//! hardcoded price, otherwise its view of "locked" can diverge from what was
+//! actually locked when shares were bought at a price other than 50/50.
 
 use crate::error::ContractError;
 use crate::events::{emit_collateral_withdrawn, emit_fee_calculated, emit_withdraw_edge_case};
-use crate::positions::calculate_locked_collateral;
 use crate::storage;
 use crate::types::{MarketStatus, Position};
 use crate::validation;
@@ -31,8 +32,9 @@ const BPS_DENOM: i128 = 10_000;
 
 /// Withdraw unused collateral from a market.
 ///
-/// Computes how much collateral is locked by the user's YES/NO shares at the
-/// current 50/50 market price, then allows withdrawing any remaining balance.
+/// Reads the collateral already locked by the user's YES/NO shares from
+/// `Position::locked_collateral` (kept up to date by `update_position`), then
+/// allows withdrawing any remaining balance.
 ///
 /// # Arguments
 /// * `env` - Contract environment
@@ -85,6 +87,9 @@ pub fn withdraw_unused_collateral(
 
     let required_lock =
         calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
+    // TODO(#85): fee deduction should be applied here before computing available collateral
+    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
+    let required_lock = position.locked_collateral;
 
     // Available collateral is total deposited minus the amount required to back shares.
     let available = if position.total_deposited > required_lock {
