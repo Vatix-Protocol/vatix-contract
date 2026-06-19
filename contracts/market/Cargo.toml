@@ -10,8 +10,11 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
+# default-features = false: drops "std" (incompatible with this contract's
+# #![no_std]/wasm32v1-none target) and "fast"/"zeroize" (unneeded WASM size).
+# Used for oracle signature verification - see contracts/market/src/oracle.rs.
+ed25519-dalek = { version = "2.2.0", default-features = false }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-ed25519-dalek = "2.2.0"
 rand = "0.8"
