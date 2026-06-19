@@ -43,7 +43,7 @@ Coming soon
 - Soroban CLI
 
 # Build
-cargo build 
+cd contracts/market && make build
 ```
 
 ## Security
