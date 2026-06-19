@@ -67,11 +67,10 @@ impl MarketParams {
     }
 }
 
-/// Assert that at least one event was emitted after an action in the harness.
+/// Assert that the most recently emitted event has the given topic symbol.
 ///
-/// Call this after any contract action to verify the event was published.
-/// The `expected_topic` string is matched against the first topic symbol of
-/// the most recent event.
+/// Checks only the last event in the log. Use [`assert_any_event_emitted`]
+/// when the target event may be followed by other events (e.g. SAC transfers).
 pub fn assert_event_emitted(env: &Env, expected_topic: &str) {
     let events = env.events().all();
     assert!(
@@ -84,5 +83,26 @@ pub fn assert_event_emitted(env: &Env, expected_topic: &str) {
         topic,
         soroban_sdk::Symbol::new(env, expected_topic),
         "event topic mismatch: expected '{expected_topic}'"
+    );
+}
+
+/// Assert that at least one event anywhere in the log has the given topic symbol.
+///
+/// Use this when the target event may not be the last one emitted — for example,
+/// when a contract action emits an application event and then performs a SAC
+/// token transfer (which appends its own `transfer` event afterward).
+pub fn assert_any_event_emitted(env: &Env, expected_topic: &str) {
+    let events = env.events().all();
+    let target = soroban_sdk::Symbol::new(env, expected_topic);
+    let found = events.iter().any(|e| {
+        if e.1.is_empty() {
+            return false;
+        }
+        let topic: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(env);
+        topic == target
+    });
+    assert!(
+        found,
+        "expected event with topic '{expected_topic}' but none was found in the event log"
     );
 }

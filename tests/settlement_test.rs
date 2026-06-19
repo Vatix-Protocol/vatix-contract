@@ -1,15 +1,15 @@
 //! End-to-end workspace integration test covering the full market lifecycle:
-//! init -> create market -> deposit -> buy shares -> resolve -> settle.
+//! init -> create market -> deposit -> buy shares -> resolve -> settle -> payout.
 
 #[allow(dead_code)]
 mod helpers;
 
-use helpers::{assert_event_emitted, MarketParams};
+use helpers::{assert_any_event_emitted, assert_event_emitted, MarketParams};
 
 use soroban_sdk::{
-    testutils::Address as _, token::StellarAssetClient, Address, BytesN, Env, String,
+    testutils::Address as _, token::{Client as TokenClient, StellarAssetClient}, Address, BytesN, Env, String,
 };
-use vatix_market_contract::{settlement, storage, MarketContract, MarketContractClient};
+use vatix_market_contract::{storage, MarketContract, MarketContractClient};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
@@ -92,28 +92,32 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     client.resolve_market(&market_id_str, &outcome, &signature);
     assert_event_emitted(&env, "market_resolved_event");
 
-    // --- settle the user's winning position ---
-    let payout = env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
-        let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
-        let payout = settlement::execute_settlement(&env, &mut position, &market)
-            .expect("settlement should succeed");
-        storage::set_position(&env, market_id, &user, &position);
-        payout
-    });
+    // --- settle the user's winning position via the public contract API ---
+    let token_client = TokenClient::new(&env, &collateral_token);
 
+    // Before settlement: contract holds the full deposit and the user holds nothing.
+    assert_eq!(token_client.balance(&user), 0);
+    assert_eq!(token_client.balance(&contract_id), deposit);
+
+    let payout = client.settle_position(&user, &market_id);
     assert_eq!(payout, yes_shares);
-    assert_event_emitted(&env, "position_settled_event");
+    assert_any_event_emitted(&env, "position_settled_event");
+
+    // After settlement: winning YES shares were transferred from contract to user.
+    assert_eq!(token_client.balance(&user), payout);
+    assert_eq!(token_client.balance(&contract_id), deposit - payout);
 
     let settled = env.as_contract(&contract_id, || {
         storage::get_position(&env, market_id, &user).expect("position should exist")
     });
     assert!(settled.is_settled);
+
+    // Settling a second time must be rejected.
+    assert!(client.try_settle_position(&user, &market_id).is_err());
 }
 
 #[test]
-#[should_panic(expected = "MarketNotResolved")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn settlement_before_resolution_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -147,10 +151,5 @@ fn settlement_before_resolution_is_rejected() {
     client.deposit_collateral(&user, &market_id, &deposit);
 
     // Settling an Active (unresolved) market must fail with MarketNotResolved (#3).
-    env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
-        let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
-        settlement::execute_settlement(&env, &mut position, &market).unwrap();
-    });
+    client.settle_position(&user, &market_id);
 }
