@@ -58,20 +58,27 @@ pub enum ContractError {
     /// Ensure sufficient collateral is deposited before attempting trades.
     InsufficientCollateral = 10,
 
-    /// Settlement was attempted on a position that has already been paid out.
+    /// No collateral available to withdraw.
     ///
-    /// Each position can only be settled once.
-    PositionAlreadySettled = 11,
+    /// The user has not deposited any collateral in this market or all collateral is locked.
+    /// Deposit collateral before attempting to withdraw.
+    NoCollateralToWithdraw = 11,
 
-    /// No position exists for this user in this market.
+    /// Withdrawal amount exceeds unlocked collateral.
     ///
-    /// The user must have an open position to perform this operation.
-    NoPositionFound = 12,
+    /// Requested amount is greater than available collateral.
+    /// Available = total deposited - collateral locked by positions.
+    /// Reduce withdrawal amount or close positions to unlock more collateral.
+    WithdrawalExceedsUnlockedCollateral = 12,
 
-    /// Share amount is invalid (e.g., negative or zero when positive required).
-    ///
-    /// Share amounts must be non-negative, and at least one side must be positive.
-    InvalidShareAmount = 13,
+    /// Attempted to settle a position that has already been settled
+    PositionAlreadySettled = 13,
+
+    /// No position exists for this user in this market
+    NoPositionFound = 14,
+
+    /// Share amount is invalid (e.g., negative or zero when positive required)
+    InvalidShareAmount = 15,
 
     // ========== Oracle Errors (20-29) ==========
     /// Oracle signature verification failed.
