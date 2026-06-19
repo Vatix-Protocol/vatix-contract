@@ -332,7 +332,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #20)")]
     fn test_resolve_market_invalid_signature() {
         let (env, admin, client, _contract_id) = create_test_contract();
 
@@ -350,11 +350,45 @@ mod test {
             &collateral_token,
         );
 
-        // Try to resolve with invalid signature - should panic
+        // Bad signature must surface as the typed InvalidSignature error
+        // (#20), not an uncaught host trap.
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
         client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+    }
+
+    #[test]
+    fn test_resolve_market_invalid_signature_leaves_market_active() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let outcome = true;
+        let invalid_signature = BytesN::random(&env);
+        let market_id_str = String::from_str(&env, "1");
+        let result = client.try_resolve_market(&market_id_str, &outcome, &invalid_signature);
+
+        assert_eq!(
+            result,
+            Err(Ok(crate::error::ContractError::InvalidSignature))
+        );
+
+        // Market must be untouched - no partial state mutation on failure.
+        let market = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market.status, MarketStatus::Active);
+        assert_eq!(market.result, None);
     }
 
     #[test]
