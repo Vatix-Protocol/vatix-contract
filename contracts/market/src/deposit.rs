@@ -90,14 +90,17 @@ pub fn deposit_collateral(
         is_settled: false,
     });
 
-    // Add to total_deposited (total collateral user has in this market)
+    // Add to total_deposited (total collateral user has in this market).
+    //
+    // `locked_collateral` is NOT touched here. It represents collateral
+    // required to back the user's current YES/NO shares and is the single
+    // source of truth maintained exclusively by `positions::update_position`
+    // (see `calculate_locked_collateral`). A deposit with no shares held
+    // must leave `locked_collateral` at 0, otherwise `withdraw` (which now
+    // trusts this field directly) would see deposited-but-unused collateral
+    // as locked.
     position.total_deposited = position
         .total_deposited
-        .checked_add(amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
-    // Add to locked_collateral (available for buying shares until they trade)
-    position.locked_collateral = position
-        .locked_collateral
         .checked_add(amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
@@ -314,6 +317,61 @@ mod tests {
             storage::get_position(&env, market_id, &user).expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount);
-        assert_eq!(position.locked_collateral, deposit_amount);
+        // locked_collateral is share-based and is untouched by deposit; see
+        // `test_deposit_with_zero_shares_keeps_locked_collateral_zero` below.
+        assert_eq!(position.locked_collateral, 0);
+    }
+
+    /// Regression test for #262: a deposit with zero shares held must never
+    /// show any collateral as locked. Before the fix, `deposit_collateral`
+    /// incremented `locked_collateral` by the deposit amount directly,
+    /// making freshly deposited (and entirely unused) collateral look
+    /// "locked" even though the user had not bought any YES/NO shares.
+    #[test]
+    fn test_deposit_with_zero_shares_keeps_locked_collateral_zero() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+        });
+
+        env.mock_all_auths();
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &10_000);
+
+        let deposit_amount = 5_000i128;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, deposit_amount)
+        });
+        assert!(result.is_ok());
+
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(position.yes_shares, 0);
+        assert_eq!(position.no_shares, 0);
+        assert_eq!(position.total_deposited, deposit_amount);
+        assert_eq!(position.locked_collateral, 0);
+
+        // A second deposit must keep locked_collateral at 0 while
+        // total_deposited keeps growing.
+        let second_deposit = 1_000i128;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, second_deposit)
+        });
+        assert!(result.is_ok());
+
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(position.total_deposited, deposit_amount + second_deposit);
+        assert_eq!(position.locked_collateral, 0);
     }
 }
