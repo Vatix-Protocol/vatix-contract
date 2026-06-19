@@ -80,6 +80,40 @@ impl MarketContract {
         Ok(())
     }
 
+    /// Register the Treasury contract so that withdrawal fees are forwarded to it.
+    ///
+    /// After this is called every `withdraw_unused_collateral` invocation will
+    /// deduct a protocol fee (see `withdraw::FEE_BPS`) and forward it to the
+    /// Treasury via a cross-contract `collect_fee` call.
+    ///
+    /// Calling this a second time replaces the previous treasury address.
+    ///
+    /// # Arguments
+    /// * `env`      – Contract environment
+    /// * `admin`    – Must match the stored admin
+    /// * `treasury` – Address of the deployed `TreasuryContract`
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – caller is not the admin
+    pub fn set_treasury_contract(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env);
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury_contract(&env, &treasury);
+        Ok(())
+    }
+
+    /// Return the registered treasury contract address, if any.
+    pub fn get_treasury_contract(env: Env) -> Option<Address> {
+        storage::get_treasury_contract(&env)
+    }
+
     pub fn initialize_market(
         env: Env,
         creator: Address,

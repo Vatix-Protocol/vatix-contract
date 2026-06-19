@@ -12,6 +12,9 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    /// Address of the deployed Treasury contract.
+    /// Set via `set_treasury_contract`; absent until configured.
+    TreasuryContract,
 }
 
 // --- Market Storage ---
@@ -71,6 +74,27 @@ pub fn set_admin(env: &Env, admin: &Address) {
 /// already called), `false` on a freshly deployed contract.
 pub fn has_admin(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Admin)
+}
+
+// --- Treasury storage ---
+
+/// Return the registered treasury contract address, if any.
+pub fn get_treasury_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&StorageKey::TreasuryContract)
+}
+
+pub fn set_treasury_contract(env: &Env, treasury: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::TreasuryContract, treasury);
+}
+
+pub fn has_treasury_contract(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .has(&StorageKey::TreasuryContract)
 }
 
 pub fn get_next_market_id(env: &Env) -> u32 {

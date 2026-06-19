@@ -1,0 +1,16 @@
+[package]
+name = "vatix-treasury-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Protocol fee collection and management for the Vatix prediction market"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

@@ -15,10 +15,19 @@ use crate::types::{MarketStatus, Position};
 use crate::validation;
 
 use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{vec, Address, Env, IntoVal, Symbol, Val};
 
 /// Market price used for locked collateral calculation (50/50 = 5000 basis points).
 const MARKET_PRICE_BPS: i128 = 5_000;
+
+/// Protocol fee rate in basis points (50 bps = 0.5%).
+///
+/// Applied to every withdrawal when a treasury contract is registered.
+/// Fee is rounded down; zero-fee withdrawals still succeed.
+pub(crate) const FEE_BPS: i128 = 50;
+
+/// Denominator for basis-point arithmetic.
+const BPS_DENOM: i128 = 10_000;
 
 /// Withdraw unused collateral from a market.
 ///
@@ -74,8 +83,6 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
-    // TODO(#85): fee deduction should be applied here before computing available collateral
-    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock =
         calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
 
@@ -86,25 +93,68 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // Emit fee calculation event (fee_amount is 0 until #85 is implemented)
-    emit_fee_calculated(&env, market_id, &user, 0, available);
+    // Compute the protocol fee.  When a treasury is registered, fee_amount is
+    // deducted from the user's withdrawal; when no treasury is set, fee is 0.
+    let treasury_opt = storage::get_treasury_contract(&env);
+    let fee_amount = if treasury_opt.is_some() {
+        // floor division — user always receives at least amount - fee_amount
+        amount
+            .checked_mul(FEE_BPS)
+            .and_then(|v| v.checked_div(BPS_DENOM))
+            .ok_or(ContractError::ArithmeticOverflow)?
+    } else {
+        0
+    };
 
-    if amount > available {
+    // The user must have `amount + fee_amount` of unlocked collateral so that
+    // the net transfer to them remains exactly `amount`.
+    let total_required = amount
+        .checked_add(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+
+    if total_required > available {
         return Err(ContractError::InsufficientCollateral);
     }
 
+    // Deduct the full amount (including fee) from the user's deposited balance.
     position.total_deposited = position
         .total_deposited
-        .checked_sub(amount)
+        .checked_sub(total_required)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
     storage::set_position(&env, market_id, &user, &position);
 
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
+
+    // Forward fee to treasury via cross-contract call (only when configured).
+    if let Some(ref treasury) = treasury_opt {
+        if fee_amount > 0 {
+            // Grant treasury an allowance so collect_fee can use transfer_from
+            // to pull the fee without requiring market's auth from a sub-invocation.
+            token_client.approve(
+                &contract_address,
+                treasury,
+                &fee_amount,
+                &(env.ledger().sequence() + 1),
+            );
+
+            let fn_name = Symbol::new(&env, "collect_fee");
+            let args: soroban_sdk::Vec<Val> = vec![
+                &env,
+                contract_address.clone().into_val(&env),
+                market.collateral_token.clone().into_val(&env),
+                fee_amount.into_val(&env),
+            ];
+            env.invoke_contract::<()>(treasury, &fn_name, args);
+        }
+    }
+
+    // Transfer the net withdrawal amount to the user.
     token_client.transfer(&contract_address, &user, &amount);
 
-    // TODO(#issue): consider batching withdrawal events for gas efficiency
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
 
     Ok(())
