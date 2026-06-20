@@ -28,6 +28,15 @@ The Treasury contract is linked to the Market contract via `set_treasury_contrac
 - **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
 - **Treasury**: Fee collection and protocol management
 
+## Contract Status
+
+| Contract | Crate | Status | Notes |
+|---|---|---|---|
+| Market | `contracts/market` | ✅ Complete | Trading, deposit, withdraw, settlement |
+| Outcome Token | `contracts/outcome-token` | ✅ Complete | Mint/burn YES/NO tokens; callable only by market contract |
+| Resolution | `contracts/resolution` | ✅ Complete | Challenge-window lifecycle for oracle candidates |
+| Treasury | — | 🔲 Not started | Fee collection and protocol management |
+
 ## Tech Stack
 
 - **Language**: Rust
@@ -102,6 +111,7 @@ pnpm build:web
 ```bash
 # Prerequisites: Rust toolchain, Soroban CLI
 cd contracts/market && cargo build
+cd ../outcome-token && cargo build
 cd ../resolution && cargo build
 ```
 
