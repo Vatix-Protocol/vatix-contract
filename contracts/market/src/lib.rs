@@ -52,8 +52,8 @@ impl MarketContract {
     ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
-    /// `end_time` as payload.
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `creator`, `question`,
+    /// and `end_time` as payload.
     ///
     /// # Example
     /// ```ignore
@@ -124,9 +124,8 @@ impl MarketContract {
         // 5. Store market
         storage::set_market(&env, market_id, &market);
 
-        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &question, end_time);
+        events::emit_market_created(&env, market_id, &creator, &question, end_time);
 
         // 7. Return market ID
         Ok(market_id)
@@ -199,7 +198,7 @@ impl MarketContract {
     /// - UnauthorizedOracle: Wrong oracle pubkey
     ///
     /// # Events
-    /// Emits MarketResolved event
+    /// Emits MarketResolved event with the authorized oracle public key as resolver.
     pub fn resolve_market(
         env: Env,
         market_id: String,
@@ -231,8 +230,13 @@ impl MarketContract {
 
         // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
-        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
-        events::emit_market_resolved(&env, market_id, outcome, resolved_at);
+        events::emit_market_resolved(
+            &env,
+            market_id,
+            &market.oracle_pubkey,
+            outcome,
+            resolved_at,
+        );
 
         Ok(())
     }
