@@ -622,7 +622,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #13)")]
+    #[should_panic(expected = "Error(Contract, #15)")]
     fn test_update_position_rejects_overselling() {
         use crate::positions::STROOPS_PER_USDC;
 
