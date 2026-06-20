@@ -4,6 +4,8 @@ mod deposit;
 mod error;
 mod events;
 pub mod oracle;
+#[cfg(feature = "oracle-adapter")]
+pub mod oracle_adapter;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]

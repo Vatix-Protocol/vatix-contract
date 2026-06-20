@@ -15,6 +15,11 @@ soroban-sdk = { workspace = true }
 # Used for oracle signature verification - see contracts/market/src/oracle.rs.
 ed25519-dalek = { version = "2.2.0", default-features = false }
 
+[features]
+# Enables the oracle_adapter module (trait + Ed25519/Reflector/Pyth stubs).
+# Not enabled by default — no mainnet switch in issue #139.
+oracle-adapter = []
+
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
