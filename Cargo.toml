@@ -6,6 +6,7 @@ members = [
 default-members = [
   ".",
   "contracts/market",
+  "contracts/resolution",
 ]
 
 [workspace.dependencies]
