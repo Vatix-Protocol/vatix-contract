@@ -18,9 +18,6 @@ use crate::validation;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{vec, Address, Env, IntoVal, Symbol, Val};
 
-/// Market price used for locked collateral calculation (50/50 = 5000 basis points).
-const MARKET_PRICE_BPS: i128 = 5_000;
-
 /// Protocol fee rate in basis points (50 bps = 0.5%).
 ///
 /// Applied to every withdrawal when a treasury contract is registered.
@@ -85,10 +82,6 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
-    let required_lock =
-        calculate_locked_collateral(position.yes_shares, position.no_shares, MARKET_PRICE_BPS);
-    // TODO(#85): fee deduction should be applied here before computing available collateral
-    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock = position.locked_collateral;
 
     // Available collateral is total deposited minus the amount required to back shares.
