@@ -256,6 +256,7 @@ impl MarketContract {
             &signature,
             &market.oracle_pubkey,
         )?;
+        events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
 
         // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;

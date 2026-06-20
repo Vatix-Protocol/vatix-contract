@@ -1,15 +1,34 @@
 "use client";
 
 import { useState } from "react";
+import { useWallet } from "@/context/WalletContext";
+import { invokeContract } from "@/lib/soroban";
 
 export function DepositForm() {
+  const { address } = useWallet();
   const [amount, setAmount] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!address) {
+      setError("Connect your Freighter wallet first.");
+      return;
+    }
     setIsLoading(true);
-    setTimeout(() => setIsLoading(false), 1000);
+    setError(null);
+    setTxHash(null);
+    try {
+      const { hash } = await invokeContract("deposit", { amount, address });
+      setTxHash(hash);
+      setAmount("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Deposit failed.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -35,6 +54,16 @@ export function DepositForm() {
             className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
           />
         </div>
+        {error && (
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+            {error}
+          </p>
+        )}
+        {txHash && (
+          <p className="text-sm text-green-600 dark:text-green-400">
+            Deposited! Tx: {txHash}
+          </p>
+        )}
         <button
           type="submit"
           disabled={isLoading || !amount}
