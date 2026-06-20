@@ -78,14 +78,14 @@ pub fn calculate_fee(amount: i128, fee_bps: u32) -> Result<i128, ContractError> 
     if amount <= 0 {
         return Err(ContractError::InvalidQuantity);
     }
-    
+
     let fee_bps_i128 = i128::from(fee_bps);
     let fee = amount
         .checked_mul(fee_bps_i128)
         .ok_or(ContractError::ArithmeticOverflow)?
         .checked_div(10000)
         .ok_or(ContractError::ArithmeticOverflow)?;
-    
+
     Ok(fee)
 }
 
