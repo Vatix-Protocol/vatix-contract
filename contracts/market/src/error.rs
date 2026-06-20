@@ -72,6 +72,27 @@ pub enum ContractError {
     ///
     /// Share amounts must be non-negative, and at least one side must be positive.
     InvalidShareAmount = 13,
+    /// No collateral available to withdraw.
+    ///
+    /// The user has not deposited any collateral in this market or all collateral is locked.
+    /// Deposit collateral before attempting to withdraw.
+    NoCollateralToWithdraw = 11,
+
+    /// Withdrawal amount exceeds unlocked collateral.
+    ///
+    /// Requested amount is greater than available collateral.
+    /// Available = total deposited - collateral locked by positions.
+    /// Reduce withdrawal amount or close positions to unlock more collateral.
+    WithdrawalExceedsUnlockedCollateral = 12,
+
+    /// Attempted to settle a position that has already been settled
+    PositionAlreadySettled = 13,
+
+    /// No position exists for this user in this market
+    NoPositionFound = 14,
+
+    /// Share amount is invalid (e.g., negative or zero when positive required)
+    InvalidShareAmount = 15,
 
     // ========== Oracle Errors (20-29) ==========
     /// Oracle signature verification failed.

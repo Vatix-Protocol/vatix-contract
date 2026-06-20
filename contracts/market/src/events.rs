@@ -346,6 +346,7 @@ pub struct PositionSettledEvent {
     #[topic]
     pub user: Address,
     pub payout: i128,
+    pub fee_amount: i128,
     pub settled_at: u64,
 }
 
@@ -362,18 +363,33 @@ pub struct PositionSettledEvent {
 /// ```ignore
 /// emit_position_settled(&env, market_id, &user, 500_000, env.ledger().timestamp());
 /// ```
+#[contractevent]
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct FeeCalculatedEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    pub amount: i128,
+    pub fee_bps: u32,
+    pub fee_amount: i128,
+}
+
 #[allow(dead_code)]
 pub fn emit_position_settled(
     env: &Env,
     market_id: u32,
     user: &Address,
     payout: i128,
+    fee_amount: i128,
     settled_at: u64,
 ) {
     PositionSettledEvent {
         market_id,
         user: user.clone(),
         payout,
+        fee_amount,
         settled_at,
     }
     .publish(env);
@@ -435,12 +451,16 @@ pub struct FeeCalculatedEvent {
 /// * `user` - Address of the user performing the withdrawal
 /// * `fee_amount` - Fee deducted in stroops
 /// * `available_after_fee` - Collateral available to withdraw after fee
+#[allow(dead_code)]
 pub fn emit_fee_calculated(
     env: &Env,
     market_id: u32,
     user: &Address,
     fee_amount: i128,
     available_after_fee: i128,
+    amount: i128,
+    fee_bps: u32,
+    fee_amount: i128,
 ) {
     FeeCalculatedEvent {
         market_id,
@@ -451,6 +471,12 @@ pub fn emit_fee_calculated(
     .publish(env);
 }
 
+        amount,
+        fee_bps,
+        fee_amount,
+    }
+    .publish(env);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,10 +664,11 @@ mod tests {
         let market_id = 1u32;
         let user = Address::generate(&env);
         let payout = 100i128;
+        let fee_amount = 1i128;
         let settled_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_position_settled(&env, market_id, &user, payout, settled_at);
+            emit_position_settled(&env, market_id, &user, payout, fee_amount, settled_at);
         });
 
         let events = env.events().all();
@@ -665,6 +692,17 @@ mod tests {
             .unwrap()
             .into_val(&env);
         assert_eq!(payout_val, payout);
+        let fee_amount_val: i128 = data
+            .get(Symbol::new(&env, "fee_amount"))
+            .unwrap()
+            .into_val(&env);
+        let settled_at_val: u64 = data
+            .get(Symbol::new(&env, "settled_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(payout_val, payout);
+        assert_eq!(fee_amount_val, fee_amount);
+        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]

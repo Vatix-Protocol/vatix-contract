@@ -25,10 +25,29 @@ pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
 
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
+/// Validates market creation parameters
+pub fn validate_market_creation(
+    question: &String,
+    end_time: u64,
+    current_time: u64,
+) -> Result<(), ContractError> {
+    // Question must not be empty
+    if question.is_empty() {
+        return Err(ContractError::InvalidQuestion);
+    }
+
+    // Question length must be < 500 characters
+    if question.len() >= 500 {
+        return Err(ContractError::InvalidQuestion);
+    }
+
+    // End time must be in future (> current_time)
     if end_time <= current_time {
         return Err(ContractError::InvalidTimestamp);
     }
 
+    // End time not too far in future (< 1 year)
+    // 1 year = 365 * 24 * 60 * 60 = 31,536,000 seconds
     const ONE_YEAR_SECONDS: u64 = 31_536_000;
     if end_time > current_time + ONE_YEAR_SECONDS {
         return Err(ContractError::InvalidTimestamp);
@@ -67,6 +86,15 @@ fn validate_amount_positive(amount: i128) -> Result<(), ContractError> {
 
 /// Validates that amount does not exceed reasonable limits
 fn validate_amount_reasonable(amount: i128) -> Result<(), ContractError> {
+/// Validates collateral amount
+pub fn validate_collateral_amount(amount: i128) -> Result<(), ContractError> {
+    // Amount must be positive
+    if amount <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+
+    // Amount must be reasonable (not overflow i128)
+    // Check against a reasonable maximum to prevent overflow issues
     const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
     if amount > MAX_REASONABLE_AMOUNT {
         return Err(ContractError::InvalidQuantity);
@@ -109,6 +137,22 @@ pub fn validate_market_price(price: i128) -> Result<(), ContractError> {
     if !(0..=10_000).contains(&price) {
         return Err(ContractError::InvalidPrice);
     }
+
+    Ok(())
+}
+
+/// Validates share amounts
+pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
+    // Both must be non-negative
+    if yes_shares < 0 || no_shares < 0 {
+        return Err(ContractError::InvalidShareAmount);
+    }
+
+    // At least one must be > 0
+    if yes_shares == 0 && no_shares == 0 {
+        return Err(ContractError::InvalidShareAmount);
+    }
+
     Ok(())
 }
 
@@ -165,6 +209,20 @@ pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractE
         .checked_mul(fee_rate_bps)
         .and_then(|result| result.checked_div(10_000))
         .ok_or(ContractError::ArithmeticOverflow)
+/// Calculates fee amount from a given amount and fee in basis points
+pub fn calculate_fee(amount: i128, fee_bps: u32) -> Result<i128, ContractError> {
+    if amount <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+
+    let fee_bps_i128 = i128::from(fee_bps);
+    let fee = amount
+        .checked_mul(fee_bps_i128)
+        .ok_or(ContractError::ArithmeticOverflow)?
+        .checked_div(10000)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    Ok(fee)
 }
 
 #[cfg(test)]
