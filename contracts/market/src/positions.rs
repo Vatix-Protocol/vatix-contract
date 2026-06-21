@@ -484,3 +484,167 @@ mod tests {
         assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
     }
 }
+
+#[cfg(test)]
+mod proptest_tests {
+    use super::*;
+    use crate::types::Position;
+    use proptest::prelude::*;
+    use soroban_sdk::{testutils::Address as TestAddress, Address, Env};
+
+    // Upper bound chosen so that `net * 10_000` never overflows i128.
+    // scale_by_bps does `amount.checked_mul(price_bps).unwrap()`, so any
+    // `amount` up to this value is safe for all valid prices [0, 10_000].
+    const MAX_SAFE_SHARES: i128 = i128::MAX / 10_001;
+
+    fn make_position(env: &Env, yes_shares: i128, no_shares: i128) -> Position {
+        Position {
+            market_id: 0,
+            user: <Address as TestAddress>::generate(env),
+            yes_shares,
+            no_shares,
+            locked_collateral: 0,
+            total_deposited: 0,
+            is_settled: false,
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+        /// Locked collateral is always >= 0 for any valid inputs.
+        #[test]
+        fn prop_locked_collateral_never_negative(
+            yes in 0i128..=MAX_SAFE_SHARES,
+            no in 0i128..=MAX_SAFE_SHARES,
+            price in 0i128..=10_000i128,
+        ) {
+            let locked = calculate_locked_collateral(yes, no, price);
+            prop_assert!(
+                locked >= 0,
+                "locked={locked} yes={yes} no={no} price={price}"
+            );
+        }
+
+        /// Equal YES and NO shares always produce zero locked collateral,
+        /// regardless of market price.
+        #[test]
+        fn prop_locked_collateral_hedged_is_zero(
+            shares in 0i128..=MAX_SAFE_SHARES,
+            price in 0i128..=10_000i128,
+        ) {
+            prop_assert_eq!(calculate_locked_collateral(shares, shares, price), 0);
+        }
+
+        /// Locked collateral never exceeds the absolute net position.
+        /// Invariant: locked <= |yes - no|.
+        #[test]
+        fn prop_locked_lte_net_position(
+            yes in 0i128..=MAX_SAFE_SHARES,
+            no in 0i128..=MAX_SAFE_SHARES,
+            price in 0i128..=10_000i128,
+        ) {
+            let locked = calculate_locked_collateral(yes, no, price);
+            let net = (yes - no).abs();
+            prop_assert!(
+                locked <= net,
+                "locked={locked} > net={net}  yes={yes} no={no} price={price}"
+            );
+        }
+
+        /// At price = 5_000 (50 %), long-YES and long-NO of equal net magnitude
+        /// lock the same amount of collateral (symmetry).
+        #[test]
+        fn prop_locked_symmetric_at_midpoint(
+            net in 0i128..=MAX_SAFE_SHARES,
+        ) {
+            let yes_heavy = calculate_locked_collateral(net, 0, 5_000);
+            let no_heavy  = calculate_locked_collateral(0, net, 5_000);
+            prop_assert_eq!(yes_heavy, no_heavy);
+        }
+
+        /// At price = 0 a net-YES position locks nothing; a net-NO position
+        /// locks its full magnitude (cost-to-close at 100 % price).
+        #[test]
+        fn prop_locked_at_zero_price(
+            yes in 0i128..=MAX_SAFE_SHARES,
+            no in 0i128..=MAX_SAFE_SHARES,
+        ) {
+            let locked = calculate_locked_collateral(yes, no, 0);
+            if yes >= no {
+                prop_assert_eq!(locked, 0, "net-YES at price=0 should lock 0");
+            } else {
+                prop_assert_eq!(
+                    locked, no - yes,
+                    "net-NO at price=0 should lock (no-yes)"
+                );
+            }
+        }
+
+        /// At price = 10_000 a net-NO position locks nothing; a net-YES
+        /// position locks its full magnitude.
+        #[test]
+        fn prop_locked_at_full_price(
+            yes in 0i128..=MAX_SAFE_SHARES,
+            no in 0i128..=MAX_SAFE_SHARES,
+        ) {
+            let locked = calculate_locked_collateral(yes, no, 10_000);
+            if no >= yes {
+                prop_assert_eq!(locked, 0, "net-NO at price=10000 should lock 0");
+            } else {
+                prop_assert_eq!(
+                    locked, yes - no,
+                    "net-YES at price=10000 should lock (yes-no)"
+                );
+            }
+        }
+
+        /// validate_position_change returns Err iff the resulting share balance
+        /// would drop below zero on either side.
+        #[test]
+        fn prop_validate_rejects_iff_shares_go_negative(
+            yes_shares in 0i128..=1_000_000i128,
+            no_shares in 0i128..=1_000_000i128,
+            yes_delta in -1_000_000i128..=1_000_000i128,
+            no_delta in -1_000_000i128..=1_000_000i128,
+        ) {
+            let env = Env::default();
+            let pos = make_position(&env, yes_shares, no_shares);
+            let result = validate_position_change(&pos, yes_delta, no_delta);
+            let new_yes = yes_shares + yes_delta;
+            let new_no  = no_shares  + no_delta;
+            if new_yes < 0 || new_no < 0 {
+                prop_assert_eq!(result, Err(PositionError::ShareBalanceBelowZero));
+            } else {
+                prop_assert!(result.is_ok());
+            }
+        }
+
+        /// After a valid position change both share counts are non-negative.
+        #[test]
+        fn prop_valid_position_has_non_negative_shares(
+            yes_shares in 0i128..=1_000_000i128,
+            no_shares in 0i128..=1_000_000i128,
+            yes_delta in -1_000_000i128..=1_000_000i128,
+            no_delta in -1_000_000i128..=1_000_000i128,
+        ) {
+            let env = Env::default();
+            let pos = make_position(&env, yes_shares, no_shares);
+            if validate_position_change(&pos, yes_delta, no_delta).is_ok() {
+                prop_assert!(yes_shares + yes_delta >= 0);
+                prop_assert!(no_shares  + no_delta  >= 0);
+            }
+        }
+
+        /// calculate_net_position is antisymmetric: swapping YES and NO negates it.
+        #[test]
+        fn prop_net_position_antisymmetric(
+            yes in 0i128..=1_000_000_000i128,
+            no in 0i128..=1_000_000_000i128,
+        ) {
+            let net         = calculate_net_position(yes, no);
+            let net_swapped = calculate_net_position(no, yes);
+            prop_assert_eq!(net, -net_swapped);
+        }
+    }
+}

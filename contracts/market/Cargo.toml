@@ -18,3 +18,4 @@ ed25519-dalek = { version = "2.2.0", default-features = false }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
+proptest = "1"
