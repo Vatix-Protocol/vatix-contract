@@ -140,6 +140,7 @@ mod test {
             creator,
             created_at: 0,
             collateral_token,
+            price_bps: 5_000,
         };
 
         env.as_contract(&contract_id, || {
@@ -203,6 +204,7 @@ mod test {
             creator: admin.clone(),
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
+            price_bps: 5_000,
         };
 
         let position = Position {

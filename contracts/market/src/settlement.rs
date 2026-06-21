@@ -186,6 +186,7 @@ mod tests {
             creator: Address::generate(env),
             created_at: 0,
             collateral_token: Address::generate(env),
+            price_bps: 5_000,
         }
     }
 
