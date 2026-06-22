@@ -10,8 +10,17 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 - **Market Contract**: Market creation, trading, and settlement logic
 - **Outcome Token**: Fungible tokens representing market outcomes
-- **Resolution Contract**: Oracle-based outcome resolution
+- **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
 - **Treasury**: Fee collection and protocol management
+
+## Contract Status
+
+| Contract | Crate | Status | Notes |
+|---|---|---|---|
+| Market | `contracts/market` | ✅ Complete | Trading, deposit, withdraw, settlement |
+| Outcome Token | `contracts/outcome-token` | ✅ Complete | Mint/burn YES/NO tokens; callable only by market contract |
+| Resolution | `contracts/resolution` | ✅ Complete | Challenge-window lifecycle for oracle candidates |
+| Treasury | — | 🔲 Not started | Fee collection and protocol management |
 
 ## Tech Stack
 
@@ -31,6 +40,17 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 - Oracle-based resolution
 - Fee distribution
 - Market expiration and settlement
+
+## Resolution Lifecycle
+
+The Market Contract still owns the final `resolve_market(market_id, outcome, signature)` state transition. The separate Resolution Contract adds the missing on-chain challenge window that mirrors the backend `ResolutionCandidate` flow:
+
+1. `propose(proposer, market_id, outcome, signature, evidence_uri, challenge_window_seconds)` stores a signed candidate and publishes its `challenge_deadline`.
+2. `challenge(challenger, candidate_id, challenge_uri)` can be called until the deadline. A challenged candidate cannot be finalized.
+3. `finalize(finalizer, candidate_id)` succeeds only after the challenge window closes and returns the candidate payload.
+4. The backend or registered factory then submits the finalized candidate to `MarketContract::resolve_market`, using the stored outcome and oracle signature.
+
+`contracts/resolution` is intentionally a lifecycle and registration layer, not a replacement settlement engine. `initialize(admin, factory, market_contract)` registers the factory/market relationship so off-chain services can discover which resolution contract guards a market deployment.
 
 ## Event Catalog
 
@@ -76,6 +96,8 @@ pnpm build:web
 ```bash
 # Prerequisites: Rust toolchain, Soroban CLI
 cd contracts/market && cargo build
+cd ../outcome-token && cargo build
+cd ../resolution && cargo build
 ```
 
 ### Contributor issues
