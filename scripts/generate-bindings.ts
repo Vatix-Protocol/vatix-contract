@@ -44,7 +44,9 @@ function main() {
   console.log("TypeScript bindings generated successfully!");
 }
 
-main().catch((err) => {
+try {
+  main();
+} catch (err) {
   console.error(err);
   process.exit(1);
-});
+}
