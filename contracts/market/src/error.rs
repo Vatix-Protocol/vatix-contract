@@ -160,7 +160,10 @@ mod tests {
         assert_eq!(ContractError::MarketNotActive as u32, 5);
         assert_eq!(ContractError::InsufficientCollateral as u32, 10);
         assert_eq!(ContractError::NoCollateralToWithdraw as u32, 11);
-        assert_eq!(ContractError::WithdrawalExceedsUnlockedCollateral as u32, 12);
+        assert_eq!(
+            ContractError::WithdrawalExceedsUnlockedCollateral as u32,
+            12
+        );
         assert_eq!(ContractError::PositionAlreadySettled as u32, 13);
         assert_eq!(ContractError::NoPositionFound as u32, 14);
         assert_eq!(ContractError::InvalidShareAmount as u32, 15);

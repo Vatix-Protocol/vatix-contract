@@ -342,4 +342,24 @@ impl MarketContract {
     pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
         settlement::settle_position(&env, &user, market_id)
     }
+
+    /// Set Treasury contract address (admin only)
+    pub fn set_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        if admin != storage::get_admin(&env) {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury(&env, &treasury);
+        Ok(())
+    }
+
+    /// Set fee in basis points (admin only)
+    pub fn set_fee_bps(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
+        admin.require_auth();
+        if admin != storage::get_admin(&env) {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_fee_bps(&env, fee_bps);
+        Ok(())
+    }
 }

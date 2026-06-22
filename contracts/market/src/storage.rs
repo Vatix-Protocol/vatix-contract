@@ -12,6 +12,8 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    Treasury,
+    FeeBps,
 }
 
 // --- Market Storage ---
@@ -71,6 +73,31 @@ pub fn set_admin(env: &Env, admin: &Address) {
 /// already called), `false` on a freshly deployed contract.
 pub fn has_admin(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Admin)
+}
+
+// --- Treasury & Fee Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+pub fn get_fee_bps(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeBps)
+        .unwrap_or(100) // Default 1% = 100 bps
+}
+
+pub fn set_fee_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeBps, &fee_bps);
 }
 
 pub fn get_next_market_id(env: &Env) -> u32 {
