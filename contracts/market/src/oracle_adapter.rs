@@ -71,8 +71,8 @@ impl<'a> OracleAdapter for Ed25519Adapter<'a> {
         outcome: bool,
         proof: &Bytes,
     ) -> Result<(), ContractError> {
-        let sig: BytesN<64> = BytesN::try_from(proof.clone())
-            .map_err(|_| ContractError::InvalidSignature)?;
+        let sig: BytesN<64> =
+            BytesN::try_from(proof.clone()).map_err(|_| ContractError::InvalidSignature)?;
         crate::oracle::verify_oracle_signature(env, market_id, outcome, &sig, self.oracle_pubkey)
     }
 }
