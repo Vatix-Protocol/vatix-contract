@@ -80,6 +80,43 @@ impl MarketContract {
         Ok(())
     }
 
+    pub fn set_fee_rate_bps(
+        env: Env,
+        admin: Address,
+        fee_rate_bps: i128,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let current_admin = storage::get_admin(&env);
+        if admin != current_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        validation::validate_market_price(fee_rate_bps)?;
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
+        Ok(())
+    }
+
+    pub fn get_fee_rate_bps(env: Env) -> i128 {
+        storage::get_fee_rate_bps(&env)
+    }
+
+    pub fn set_treasury(
+        env: Env,
+        admin: Address,
+        treasury: Option<Address>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let current_admin = storage::get_admin(&env);
+        if admin != current_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury(&env, &treasury);
+        Ok(())
+    }
+
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        storage::get_treasury(&env)
+    }
+
     pub fn initialize_market(
         env: Env,
         creator: Address,

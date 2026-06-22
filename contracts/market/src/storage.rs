@@ -12,6 +12,8 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    FeeRateBps,
+    Treasury,
 }
 
 // --- Market Storage ---
@@ -86,6 +88,34 @@ pub fn increment_market_id(env: &Env) -> u32 {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     next_id
+}
+
+// --- Fee Config Storage ---
+
+pub fn get_fee_rate_bps(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeRateBps)
+        .unwrap_or(0)
+}
+
+pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
 }
 
 #[cfg(test)]
