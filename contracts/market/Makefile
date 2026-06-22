@@ -13,7 +13,7 @@ test: build
 #       contract to a `.wasm` binary deployable to the Stellar network.
 build:
 	stellar contract build
-	@ls -l target/wasm32v1-none/release/*.wasm
+	@ls -l ../../target/wasm32v1-none/release/*.wasm
 
 fmt:
 	cargo fmt --all

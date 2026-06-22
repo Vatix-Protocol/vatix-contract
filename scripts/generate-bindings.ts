@@ -19,8 +19,6 @@ function main() {
 
   const wasmPath = join(
     PROJECT_ROOT,
-    "contracts",
-    "market",
     "target",
     "wasm32v1-none",
     "release",
