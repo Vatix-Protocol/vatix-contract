@@ -22,6 +22,8 @@ pub struct Market {
     pub creator: Address,
     pub created_at: u64,
     pub collateral_token: Address,
+    /// Current market price in basis points (0–10_000). Updated on every trade.
+    pub price_bps: i128,
 }
 
 /// Tracks the position and shares of a specific user in a market.

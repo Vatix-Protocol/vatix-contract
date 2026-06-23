@@ -170,6 +170,7 @@ impl MarketContract {
             creator: creator.clone(),
             created_at: current_time,
             collateral_token,
+            price_bps: 5_000,
         };
 
         // 5. Store market
@@ -363,13 +364,20 @@ impl MarketContract {
         }
 
         // 5. Apply the share deltas (persists the position and emits an event)
-        positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
-            .map_err(|e| match e {
-                positions::PositionError::ShareBalanceBelowZero => {
-                    ContractError::InvalidShareAmount
-                }
-                positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
-            })
+        let result =
+            positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
+                .map_err(|e| match e {
+                    positions::PositionError::ShareBalanceBelowZero => {
+                        ContractError::InvalidShareAmount
+                    }
+                    positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+                })?;
+
+        // 6. Persist the updated price so withdraw and other callers see it
+        market.price_bps = market_price;
+        storage::set_market(&env, market_id, &market);
+
+        Ok(result)
     }
 
     /// Settle a user's position in a resolved market and pay out their winnings.

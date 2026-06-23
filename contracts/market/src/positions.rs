@@ -282,6 +282,7 @@ mod tests {
             creator: <Address as TestAddress>::generate(env),
             created_at: 0,
             result: None,
+            price_bps: 5_000,
         }
     }
 
