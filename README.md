@@ -8,6 +8,21 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 ## Contracts
 
+| Contract | Crate | Status | Description |
+|---|---|---|---|
+| **Market** | `contracts/market` | ✅ Implemented | Market creation, position trading, oracle resolution, and settlement |
+| **Treasury** | `contracts/treasury` | ✅ Implemented | Protocol fee collection from withdrawal events; admin-controlled fee withdrawal |
+| **Outcome Token** | `contracts/outcome-token` | 🚧 Planned | Fungible SAC-compatible tokens representing YES/NO market outcomes |
+| **Resolution** | `contracts/resolution` | 🚧 Planned | Standalone oracle-based outcome resolution with dispute window |
+
+### Treasury → Market integration
+
+The Treasury contract is linked to the Market contract via `set_treasury_contract`. Once registered:
+
+1. Every `withdraw_unused_collateral` call deducts a 0.5% protocol fee (`FEE_BPS = 50`).
+2. The fee is forwarded to the Treasury contract via a cross-contract `collect_fee` call.
+3. The Treasury emits a `FeeCollected` event and accumulates a running total.
+4. The admin can drain accumulated fees at any time via `withdraw_fees`.
 - **Market Contract**: Market creation, trading, and settlement logic
 - **Outcome Token**: Fungible tokens representing market outcomes
 - **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates

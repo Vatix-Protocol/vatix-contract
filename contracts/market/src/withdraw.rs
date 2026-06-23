@@ -118,20 +118,28 @@ pub fn withdraw_unused_collateral(
         }
     }
 
-    if amount > available {
+    // The user must have `amount + fee_amount` of unlocked collateral so that
+    // the net transfer to them remains exactly `amount`.
+    let total_required = amount
+        .checked_add(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+
+    if total_required > available {
         return Err(ContractError::InsufficientCollateral);
     }
 
+    // Deduct the full amount (including fee) from the user's deposited balance.
     position.total_deposited = position
         .total_deposited
-        .checked_sub(amount)
+        .checked_sub(total_required)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
     storage::set_position(&env, market_id, &user, &position);
 
     token_client.transfer(&contract_address, &user, &amount);
 
-    // TODO(#issue): consider batching withdrawal events for gas efficiency
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
 
     Ok(())
