@@ -80,9 +80,9 @@ pub fn withdraw_unused_collateral(
     // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock = position.locked_collateral;
 
-    // Available collateral is total deposited minus the amount required to back shares.
-    let available = if position.total_deposited > required_lock {
-        position.total_deposited - required_lock
+    // Available collateral is total deposited (after fee) minus the amount required to back shares.
+    let available = if total_deposited_after_fee > required_lock {
+        total_deposited_after_fee - required_lock
     } else {
         0
     };
@@ -471,5 +471,248 @@ mod tests {
             let events = env.events().all();
             assert_eq!(events.len(), 1, "Expected 1 event, got {}", events.len());
         });
+    }
+
+    #[test]
+    fn test_withdraw_fee_zero_bps() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 100,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+            storage::set_fee_rate_bps(&env, 0); // 0 bps
+        });
+
+        env.mock_all_auths();
+
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&contract_id, &200);
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
+        });
+        assert!(result.is_ok());
+
+        let updated = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(updated.total_deposited, 60); // 100 - 40 - 0 = 60
+    }
+
+    #[test]
+    fn test_withdraw_fee_max_bps() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 100,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+            storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
+        });
+
+        env.mock_all_auths();
+
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&contract_id, &200);
+
+        // Try to withdraw 50. Fee will be calculate_fee(50, 10000) = 50.
+        // Total deduction will be 100.
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 50)
+        });
+        assert!(result.is_ok());
+
+        let updated = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(updated.total_deposited, 0); // 100 - 50 - 50 = 0
+    }
+
+    #[test]
+    fn test_withdraw_fee_insufficient_after_fee() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 50,
+            total_deposited: 100, // available before fee = 50
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+            storage::set_fee_rate_bps(&env, 1000); // 10% fee
+        });
+
+        env.mock_all_auths();
+
+        // Withdraw 48. Fee is calculate_fee(48, 1000) = 4.
+        // total_deposited_after_fee = 96.
+        // available = 96 - 50 = 46.
+        // 48 > 46, so should fail with InsufficientCollateral.
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 48)
+        });
+        assert_eq!(result, Err(ContractError::InsufficientCollateral));
+    }
+
+    #[test]
+    fn test_withdraw_fee_holds_in_contract_when_no_treasury() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 100,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+            storage::set_fee_rate_bps(&env, 1000); // 10% fee
+            // no treasury address is set
+        });
+
+        env.mock_all_auths();
+
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&contract_id, &100);
+
+        let user_token_client = soroban_sdk::token::Client::new(&env, &collateral_token);
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
+        });
+        assert!(result.is_ok());
+
+        // Position reduced by 44 (40 withdrawal + 4 fee)
+        let updated = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(updated.total_deposited, 56);
+
+        // User receives 40
+        assert_eq!(user_token_client.balance(&user), 40);
+
+        // Contract retains the fee of 4 (original 100 mint - 40 user withdraw = 60 contract balance)
+        assert_eq!(user_token_client.balance(&contract_id), 60);
+    }
+
+    #[test]
+    fn test_withdraw_fee_routes_to_treasury() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 100,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            storage::set_market(&env, market_id, &market);
+            storage::set_position(&env, market_id, &user, &position);
+            storage::set_fee_rate_bps(&env, 1000); // 10% fee
+            storage::set_treasury(&env, &Some(treasury.clone()));
+        });
+
+        env.mock_all_auths();
+
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&contract_id, &100);
+
+        let user_token_client = soroban_sdk::token::Client::new(&env, &collateral_token);
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
+        });
+        assert!(result.is_ok());
+
+        // Position reduced by 44 (40 withdrawal + 4 fee)
+        let updated = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).expect("position should exist")
+        });
+        assert_eq!(updated.total_deposited, 56);
+
+        // User receives 40
+        assert_eq!(user_token_client.balance(&user), 40);
+
+        // Treasury receives 4
+        assert_eq!(user_token_client.balance(&treasury), 4);
+
+        // Contract balance decreases by 44 (original 100 - 44 = 56)
+        assert_eq!(user_token_client.balance(&contract_id), 56);
     }
 }
