@@ -119,16 +119,16 @@ pub fn execute_settlement(
 pub fn settle_position(env: &Env, user: &Address, market_id: u32) -> Result<i128, ContractError> {
     user.require_auth();
 
-    let market = storage::get_market(env, market_id).ok_or(ContractError::MarketNotFound)?;
+    let market = storage::get_market(env, market_id)?.ok_or(ContractError::MarketNotFound)?;
     let mut position =
-        storage::get_position(env, market_id, user).ok_or(ContractError::NoPositionFound)?;
+        storage::get_position(env, market_id, user)?.ok_or(ContractError::NoPositionFound)?;
 
     // Validates eligibility (Resolved + not already settled), computes the
     // payout, marks the position settled, and emits the PositionSettled event.
     let payout = execute_settlement(env, &mut position, &market)?;
 
     // Persist the settled position before paying out.
-    storage::set_position(env, market_id, user, &position);
+    storage::set_position(env, market_id, user, &position)?;
 
     // Transfer the payout in collateral tokens from the contract to the user.
     if payout > 0 {
@@ -186,6 +186,7 @@ mod tests {
             creator: Address::generate(env),
             created_at: 0,
             collateral_token: Address::generate(env),
+            price_bps: 5_000,
         }
     }
 
@@ -358,6 +359,7 @@ mod tests {
         let admin = Address::generate(&env);
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         // Real SAC collateral token.
@@ -415,7 +417,7 @@ mod tests {
 
         // The position is now marked settled.
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert!(position.is_settled);
 
@@ -440,6 +442,7 @@ mod tests {
         let admin = Address::generate(&env);
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         let token_admin = Address::generate(&env);
