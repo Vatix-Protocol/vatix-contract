@@ -80,9 +80,7 @@ impl OutcomeTokenContract {
         config.market_contract.require_auth();
 
         let balance = storage::get_balance(&env, market_id, &user, &kind);
-        let new_balance = balance
-            .checked_add(amount)
-            .ok_or(ContractError::Overflow)?;
+        let new_balance = balance.checked_add(amount).ok_or(ContractError::Overflow)?;
         storage::set_balance(&env, market_id, &user, &kind, new_balance);
 
         let supply = storage::get_total_supply(&env, market_id, &kind);

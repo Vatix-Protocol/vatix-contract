@@ -8,6 +8,21 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 ## Contracts
 
+| Contract | Crate | Status | Description |
+|---|---|---|---|
+| **Market** | `contracts/market` | ✅ Implemented | Market creation, position trading, oracle resolution, and settlement |
+| **Treasury** | `contracts/treasury` | ✅ Implemented | Protocol fee collection from withdrawal events; admin-controlled fee withdrawal |
+| **Outcome Token** | `contracts/outcome-token` | 🚧 Planned | Fungible SAC-compatible tokens representing YES/NO market outcomes |
+| **Resolution** | `contracts/resolution` | 🚧 Planned | Standalone oracle-based outcome resolution with dispute window |
+
+### Treasury → Market integration
+
+The Treasury contract is linked to the Market contract via `set_treasury_contract`. Once registered:
+
+1. Every `withdraw_unused_collateral` call deducts a 0.5% protocol fee (`FEE_BPS = 50`).
+2. The fee is forwarded to the Treasury contract via a cross-contract `collect_fee` call.
+3. The Treasury emits a `FeeCollected` event and accumulates a running total.
+4. The admin can drain accumulated fees at any time via `withdraw_fees`.
 - **Market Contract**: Market creation, trading, and settlement logic
 - **Outcome Token**: Fungible tokens representing market outcomes
 - **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
@@ -59,13 +74,13 @@ The Market Contract emits the following events for off-chain indexing and tracki
 | Event | Topics | Fields | Description |
 |-------|--------|--------|-------------|
 | `contract_initialized_event` | `admin` | `initialized_at: u64` | Emitted when the contract is initialized with an admin |
-| `market_created_event` | `market_id` | `question: String`, `end_time: u64` | Emitted when a new market is created |
+| `market_created_event` | `market_id` | `creator: Address`, `question: String`, `end_time: u64` | Emitted when a new market is created |
 | `collateral_deposited_event` | `user`, `market_id` | `amount: i128`, `new_total: i128` | Emitted when a user deposits collateral into a market |
 | `collateral_withdrawn_event` | `user`, `market_id` | `amount: i128`, `new_total: i128` | Emitted when a user withdraws collateral from a market |
 | `position_updated_event` | `market_id`, `user` | `yes_shares: i128`, `no_shares: i128`, `locked_collateral: i128` | Emitted when a user's position is updated after trading |
 | `trade_executed_event` | `market_id`, `user` | `quantity: i128`, `price_bps: i128`, `side_yes: bool`, `executed_at: u64` | Emitted when a user executes a trade (buy or sell) |
 | `position_limit_exceeded_event` | `market_id`, `user` | `side_yes: bool` | Emitted when a trade would result in negative shares |
-| `market_resolved_event` | `market_id` | `outcome: bool`, `resolved_at: u64` | Emitted when a market is resolved with an oracle-signed outcome |
+| `market_resolved_event` | `market_id` | `resolver: BytesN<32>`, `outcome: bool`, `resolved_at: u64` | Emitted when a market is resolved with an oracle-signed outcome |
 | `position_settled_event` | `market_id`, `user` | `payout: i128`, `settled_at: u64` | Emitted when a user's position is settled and payout is transferred |
 | `oracle_signature_verified_event` | `market_id` | `outcome: bool`, `verified_at: u64` | Emitted when an oracle signature is verified during resolution |
 | `fee_calculated_event` | `market_id`, `user` | `fee_amount: i128`, `available_after_fee: i128` | Emitted when a fee is calculated during withdrawal |

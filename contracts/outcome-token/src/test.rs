@@ -1,5 +1,5 @@
-use crate::{ContractError, OutcomeTokenContract, OutcomeTokenContractClient};
 use crate::types::TokenKind;
+use crate::{ContractError, OutcomeTokenContract, OutcomeTokenContractClient};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 fn setup(env: &Env) -> (OutcomeTokenContractClient<'_>, Address, Address) {

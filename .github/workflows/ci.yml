@@ -70,6 +70,31 @@ jobs:
       # public contract function to maintain coverage.
       - name: Tests
         run: cd contracts/market && cargo test
+
+      # Restore saved proptest regression cases from previous CI runs so that
+      # any previously-found failing inputs are always re-checked.
+      - name: Restore proptest regression corpus
+        uses: actions/cache@v4
+        with:
+          path: contracts/market/src/.proptest-regressions
+          key: proptest-regressions-${{ runner.os }}-${{ hashFiles('contracts/market/src/positions.rs') }}
+          restore-keys: proptest-regressions-${{ runner.os }}-
+
+      # Run the proptest fuzz suite with 2 000 cases per property in CI.
+      # Increase PROPTEST_CASES for deeper coverage in scheduled / nightly runs.
+      # Failing inputs are persisted to .proptest-regressions/ and cached above.
+      - name: Proptest fuzz (share and collateral math)
+        run: cd contracts/market && PROPTEST_CASES=2000 cargo test prop_ -- --nocapture
+
+      # Upload any new regression seeds discovered in this run so they are
+      # available to future runs even when the cache key changes.
+      - name: Upload proptest regressions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proptest-regressions
+          path: contracts/market/src/.proptest-regressions
+          if-no-files-found: ignore
       
       # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
       # required by the Stellar Soroban runtime. Mirrors the `make build` target in

@@ -1,0 +1,9 @@
+{
+  "description": "Canonical oracle message: keccak256(market_id_be || outcome_byte)",
+  "market_id": 1,
+  "outcome": "YES",
+  "raw_hex": "0000000101",
+  "keccak_hex": "a01f051be047843977f523e7944513ebbedd5568cc9911c955850f3cccc6979f",
+  "pubkey_hex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+  "signature_hex": "3b2cbf2d44e00bbf5f6d8bc48e0e820d7c126cdb25a8c4b7943845662afb0d1a6f43fa831250ed6efc33ebec8c08f4b8421d9072966deeeb2d3c523d0f2a3406"
+}
