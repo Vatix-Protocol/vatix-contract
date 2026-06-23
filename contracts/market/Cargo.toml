@@ -23,3 +23,4 @@ oracle-adapter = []
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
+proptest = "1"
