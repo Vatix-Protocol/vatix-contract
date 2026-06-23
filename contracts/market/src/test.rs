@@ -734,4 +734,172 @@ mod test {
             Err(ContractError::InvalidQuantity)
         );
     }
+
+    // ========== propose_admin / accept_admin tests ==========
+
+    #[test]
+    fn test_propose_admin_success() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                storage::get_pending_admin(&env).expect("pending admin should be set"),
+                new_admin
+            );
+        });
+    }
+
+    #[test]
+    fn test_propose_admin_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn test_accept_admin_completes_transfer() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_admin(&env), new_admin);
+            assert!(
+                storage::get_pending_admin(&env).is_none(),
+                "pending admin should be cleared after acceptance"
+            );
+        });
+    }
+
+    #[test]
+    fn test_accept_admin_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        env.events().all(); // clear
+
+        client.accept_admin(&new_admin);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn test_new_admin_can_create_market_after_transfer() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        let question = String::from_str(&env, "Will ETH flip BTC?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id =
+            client.initialize_market(&new_admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        assert_eq!(market_id, 1);
+    }
+
+    #[test]
+    fn test_old_admin_cannot_create_market_after_transfer() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        let question = String::from_str(&env, "Will ETH flip BTC?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let result =
+            client.try_initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_admin_overwrites_previous_nominee() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let first_nominee = Address::generate(&env);
+        let second_nominee = Address::generate(&env);
+
+        client.propose_admin(&admin, &first_nominee);
+        client.propose_admin(&admin, &second_nominee);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                storage::get_pending_admin(&env).expect("pending admin should be set"),
+                second_nominee
+            );
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_propose_admin_non_admin_fails() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let attacker = Address::generate(&env);
+        let victim = Address::generate(&env);
+
+        client.propose_admin(&attacker, &victim);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_propose_admin_when_not_initialized_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        client.propose_admin(&caller, &new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #43)")]
+    fn test_accept_admin_with_no_pending_fails() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let attacker = Address::generate(&env);
+
+        client.accept_admin(&attacker);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #40)")]
+    fn test_accept_admin_hijack_wrong_address_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&attacker);
+    }
+
+    #[test]
+    fn test_first_nominee_cannot_accept_after_overwrite() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let first_nominee = Address::generate(&env);
+        let second_nominee = Address::generate(&env);
+
+        client.propose_admin(&admin, &first_nominee);
+        client.propose_admin(&admin, &second_nominee);
+
+        let result = client.try_accept_admin(&first_nominee);
+        assert!(result.is_err());
+    }
 }

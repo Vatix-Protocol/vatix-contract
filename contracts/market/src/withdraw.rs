@@ -16,16 +16,7 @@ use crate::types::{MarketStatus, Position};
 use crate::validation;
 
 use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::{vec, Address, Env, IntoVal, Symbol, Val};
-
-/// Protocol fee rate in basis points (50 bps = 0.5%).
-///
-/// Applied to every withdrawal when a treasury contract is registered.
-/// Fee is rounded down; zero-fee withdrawals still succeed.
-pub(crate) const FEE_BPS: i128 = 50;
-
-/// Denominator for basis-point arithmetic.
-const BPS_DENOM: i128 = 10_000;
+use soroban_sdk::{Address, Env, IntoVal, Symbol, Val, Vec};
 
 /// Withdraw unused collateral from a market.
 ///
@@ -82,6 +73,11 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
+    let contract_address = env.current_contract_address();
+    let token_client = TokenClient::new(&env, &market.collateral_token);
+
+    // TODO(#85): fee deduction should be applied here before computing available collateral
+    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock = position.locked_collateral;
 
     // Available collateral is total deposited minus the amount required to back shares.
@@ -91,18 +87,36 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // Compute the protocol fee.  When a treasury is registered, fee_amount is
-    // deducted from the user's withdrawal; when no treasury is set, fee is 0.
-    let treasury_opt = storage::get_treasury_contract(&env);
-    let fee_amount = if treasury_opt.is_some() {
-        // floor division — user always receives at least amount - fee_amount
-        amount
-            .checked_mul(FEE_BPS)
-            .and_then(|v| v.checked_div(BPS_DENOM))
-            .ok_or(ContractError::ArithmeticOverflow)?
-    } else {
-        0
-    };
+    // TODO(#85): replace 0 with real fee computation once issue #85 is resolved.
+    let fee_amount: i128 = 0;
+
+    // Emit fee calculation event.
+    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+
+    // Route non-zero fees to the treasury contract if one has been registered.
+    // This plumbing fires automatically once issue #85 produces a real fee_amount > 0.
+    if fee_amount > 0 {
+        if let Some(treasury_addr) = storage::get_treasury(&env) {
+            // Transfer the fee portion from this contract to the treasury.
+            token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
+
+            // Notify the treasury to record the fee in its accounting ledger.
+            // We use env.invoke_contract to avoid a compile-time crate dependency
+            // on the treasury contract while its client ABI stabilises.
+            let args: Vec<Val> = soroban_sdk::vec![
+                &env,
+                contract_address.into_val(&env),
+                market.collateral_token.clone().into_val(&env),
+                market_id.into_val(&env),
+                fee_amount.into_val(&env),
+            ];
+            let _: () = env.invoke_contract(
+                &treasury_addr,
+                &Symbol::new(&env, "collect_fee"),
+                args,
+            );
+        }
+    }
 
     // The user must have `amount + fee_amount` of unlocked collateral so that
     // the net transfer to them remains exactly `amount`.
@@ -124,33 +138,6 @@ pub fn withdraw_unused_collateral(
 
     storage::set_position(&env, market_id, &user, &position);
 
-    let contract_address = env.current_contract_address();
-    let token_client = TokenClient::new(&env, &market.collateral_token);
-
-    // Forward fee to treasury via cross-contract call (only when configured).
-    if let Some(ref treasury) = treasury_opt {
-        if fee_amount > 0 {
-            // Grant treasury an allowance so collect_fee can use transfer_from
-            // to pull the fee without requiring market's auth from a sub-invocation.
-            token_client.approve(
-                &contract_address,
-                treasury,
-                &fee_amount,
-                &(env.ledger().sequence() + 1),
-            );
-
-            let fn_name = Symbol::new(&env, "collect_fee");
-            let args: soroban_sdk::Vec<Val> = vec![
-                &env,
-                contract_address.clone().into_val(&env),
-                market.collateral_token.clone().into_val(&env),
-                fee_amount.into_val(&env),
-            ];
-            env.invoke_contract::<()>(treasury, &fn_name, args);
-        }
-    }
-
-    // Transfer the net withdrawal amount to the user.
     token_client.transfer(&contract_address, &user, &amount);
 
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
