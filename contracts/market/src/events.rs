@@ -1,6 +1,6 @@
 //! Event emission functions for the Vatix prediction market contract
 
-use soroban_sdk::{contractevent, Address, Env, String};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String};
 
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -33,6 +33,7 @@ pub fn emit_contract_initialized(env: &Env, admin: &Address) {
 pub struct MarketCreatedEvent {
     #[topic]
     pub market_id: u32,
+    pub creator: Address,
     pub question: String,
     pub end_time: u64,
 }
@@ -144,17 +145,25 @@ pub fn emit_collateral_withdrawn(
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the created market
+/// * creator - Address that created the market
 /// * question - The market question
 /// * end_time - Unix timestamp when market closes for trading
 ///
 /// # Example
 /// ```ignore
-/// emit_market_created(&env, 1, &String::from_str(&env, "Will BTC hit $100k?"), 1735689600);
+/// emit_market_created(&env, 1, &creator, &String::from_str(&env, "Will BTC hit $100k?"), 1735689600);
 /// ```
-pub fn emit_market_created(env: &Env, market_id: u32, question: &String, end_time: u64) {
+pub fn emit_market_created(
+    env: &Env,
+    market_id: u32,
+    creator: &Address,
+    question: &String,
+    end_time: u64,
+) {
     // Publish the event with topics and data
     MarketCreatedEvent {
         market_id,
+        creator: creator.clone(),
         question: question.clone(),
         end_time,
     }
@@ -191,6 +200,7 @@ pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount
 pub struct MarketResolvedEvent {
     #[topic]
     pub market_id: u32,
+    pub resolver: BytesN<32>,
     pub outcome: bool,
     pub resolved_at: u64,
 }
@@ -204,16 +214,24 @@ pub struct MarketResolvedEvent {
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the resolved market
+/// * resolver - Oracle public key that resolved the market
 /// * outcome - Market outcome (true = YES won, false = NO won)
 /// * resolved_at - Unix timestamp when market was resolved
 ///
 /// # Example
 /// ```ignore
-/// emit_market_resolved(&env, 1, true, env.ledger().timestamp());
+/// emit_market_resolved(&env, 1, &oracle_pubkey, true, env.ledger().timestamp());
 /// ```
-pub fn emit_market_resolved(env: &Env, market_id: u32, outcome: bool, resolved_at: u64) {
+pub fn emit_market_resolved(
+    env: &Env,
+    market_id: u32,
+    resolver: &BytesN<32>,
+    outcome: bool,
+    resolved_at: u64,
+) {
     MarketResolvedEvent {
         market_id,
+        resolver: resolver.clone(),
         outcome,
         resolved_at,
     }
@@ -501,6 +519,44 @@ pub fn emit_fee_calculated(
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferProposedEvent {
+    #[topic]
+    pub current_admin: Address,
+    #[topic]
+    pub pending_admin: Address,
+    pub proposed_at: u64,
+}
+
+pub fn emit_admin_transfer_proposed(env: &Env, current_admin: &Address, pending_admin: &Address) {
+    AdminTransferProposedEvent {
+        current_admin: current_admin.clone(),
+        pending_admin: pending_admin.clone(),
+        proposed_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferAcceptedEvent {
+    #[topic]
+    pub old_admin: Address,
+    #[topic]
+    pub new_admin: Address,
+    pub accepted_at: u64,
+}
+
+pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    AdminTransferAcceptedEvent {
+        old_admin: old_admin.clone(),
+        new_admin: new_admin.clone(),
+        accepted_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,11 +602,12 @@ mod tests {
         let contract_id = env.register(MarketContract, ());
 
         let market_id = 1u32;
+        let creator = Address::generate(&env);
         let question = String::from_str(&env, "Will BTC hit $100k?");
         let end_time = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_market_created(&env, market_id, &question, end_time);
+            emit_market_created(&env, market_id, &creator, &question, end_time);
         });
 
         // Verify event was published
@@ -574,6 +631,10 @@ mod tests {
         // Data
         // Data
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let creator_val: Address = data
+            .get(Symbol::new(&env, "creator"))
+            .unwrap()
+            .into_val(&env);
         let question_val: String = data
             .get(Symbol::new(&env, "question"))
             .unwrap()
@@ -582,6 +643,7 @@ mod tests {
             .get(Symbol::new(&env, "end_time"))
             .unwrap()
             .into_val(&env);
+        assert_eq!(creator_val, creator);
         assert_eq!(question_val, question);
         assert_eq!(end_time_val, end_time);
     }
@@ -592,11 +654,12 @@ mod tests {
         let contract_id = env.register(MarketContract, ());
 
         let market_id = 1u32;
+        let resolver = BytesN::from_array(&env, &[1u8; 32]);
         let outcome = true;
         let resolved_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_market_resolved(&env, market_id, outcome, resolved_at);
+            emit_market_resolved(&env, market_id, &resolver, outcome, resolved_at);
         });
 
         let events = env.events().all();
@@ -612,6 +675,10 @@ mod tests {
         assert_eq!(topic1, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let resolver_val: BytesN<32> = data
+            .get(Symbol::new(&env, "resolver"))
+            .unwrap()
+            .into_val(&env);
         let outcome_val: bool = data
             .get(Symbol::new(&env, "outcome"))
             .unwrap()
@@ -620,6 +687,7 @@ mod tests {
             .get(Symbol::new(&env, "resolved_at"))
             .unwrap()
             .into_val(&env);
+        assert_eq!(resolver_val, resolver);
         assert_eq!(outcome_val, outcome);
         assert_eq!(resolved_at_val, resolved_at);
     }

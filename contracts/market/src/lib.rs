@@ -4,6 +4,8 @@ mod deposit;
 mod error;
 mod events;
 pub mod oracle;
+#[cfg(feature = "oracle-adapter")]
+pub mod oracle_adapter;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
@@ -52,8 +54,8 @@ impl MarketContract {
     ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
-    /// `end_time` as payload.
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `creator`, `question`,
+    /// and `end_time` as payload.
     ///
     /// # Example
     /// ```ignore
@@ -76,7 +78,56 @@ impl MarketContract {
             return Err(ContractError::AlreadyInitialized);
         }
         storage::set_admin(&env, &admin);
+        storage::set_version(&env);
         events::emit_contract_initialized(&env, &admin);
+        Ok(())
+    }
+
+    /// Begin a two-step admin transfer by nominating a new admin address.
+    ///
+    /// Only the current admin may call this. The nominated address becomes the
+    /// pending admin and must confirm the transfer by calling [`accept_admin`].
+    /// Calling this again before acceptance overwrites the previous nomination.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – contract is not initialized or `current_admin` is not the stored admin
+    pub fn propose_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
+        if !storage::has_admin(&env) {
+            return Err(ContractError::NotAdmin);
+        }
+        let stored_admin = storage::get_admin(&env);
+        if current_admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        current_admin.require_auth();
+        storage::set_pending_admin(&env, &new_admin);
+        events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Complete a two-step admin transfer by accepting a pending nomination.
+    ///
+    /// Must be called by the address that was nominated via [`propose_admin`].
+    /// On success the caller becomes the new admin and the pending nomination
+    /// is cleared.
+    ///
+    /// # Errors
+    /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
+    /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
+        if new_admin != pending {
+            return Err(ContractError::Unauthorized);
+        }
+        new_admin.require_auth();
+        let old_admin = storage::get_admin(&env);
+        storage::set_admin(&env, &new_admin);
+        storage::clear_pending_admin(&env);
+        events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
         Ok(())
     }
 
@@ -90,7 +141,7 @@ impl MarketContract {
     ) -> Result<u32, ContractError> {
         // 1. Verify creator is admin
         creator.require_auth();
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if creator != admin {
             return Err(ContractError::NotAdmin);
         }
@@ -106,7 +157,7 @@ impl MarketContract {
         }
 
         // 3. Generate market ID
-        let market_id = storage::increment_market_id(&env);
+        let market_id = storage::increment_market_id(&env)?;
 
         // 4. Create Market struct
         let market = Market {
@@ -123,11 +174,10 @@ impl MarketContract {
         };
 
         // 5. Store market
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
-        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &question, end_time);
+        events::emit_market_created(&env, market_id, &creator, &question, end_time);
 
         // 7. Return market ID
         Ok(market_id)
@@ -200,7 +250,7 @@ impl MarketContract {
     /// - UnauthorizedOracle: Wrong oracle pubkey
     ///
     /// # Events
-    /// Emits MarketResolved event
+    /// Emits MarketResolved event with the authorized oracle public key as resolver.
     pub fn resolve_market(
         env: Env,
         market_id: String,
@@ -210,7 +260,7 @@ impl MarketContract {
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
-            storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
@@ -228,12 +278,17 @@ impl MarketContract {
         // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
-        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
-        events::emit_market_resolved(&env, market_id, outcome, resolved_at);
+        events::emit_market_resolved(
+            &env,
+            market_id,
+            &market.oracle_pubkey,
+            outcome,
+            resolved_at,
+        );
 
         Ok(())
     }
@@ -281,7 +336,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let mut market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -295,7 +350,7 @@ impl MarketContract {
         // 4. Enforce that deposited collateral covers any increase in the lock.
         //    Negative-share deltas are left for positions::update_position to
         //    reject (it also emits a PositionLimitExceeded event).
-        let position = storage::get_position(&env, market_id, &user)
+        let position = storage::get_position(&env, market_id, &user)?
             .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
         let new_yes = position.yes_shares + yes_delta;
         let new_no = position.no_shares + no_delta;
@@ -350,5 +405,41 @@ impl MarketContract {
     /// Emits `PositionSettled` with the payout amount.
     pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
         settlement::settle_position(&env, &user, market_id)
+    }
+
+    /// Register the treasury contract address for protocol fee routing.
+    ///
+    /// Once set, any non-zero withdrawal fee computed during
+    /// [`withdraw_unused_collateral`] will be transferred to this address and
+    /// recorded via the treasury's `collect_fee` entry point.
+    ///
+    /// Calling this a second time replaces the previous address, enabling
+    /// seamless treasury upgrades without redeploying the market contract.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address.
+    /// * `treasury` - Address of the deployed treasury contract.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
+    pub fn set_treasury(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env);
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury(&env, &treasury);
+        events::emit_treasury_set(&env, &treasury);
+        Ok(())
+    }
+
+    /// Return the registered treasury contract address, if any.
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        storage::get_treasury(&env)
     }
 }

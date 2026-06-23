@@ -165,15 +165,17 @@ pub fn update_position(
 
     // 1. Load or initialize position
     let mut position =
-        crate::storage::get_position(env, market_id, user).unwrap_or_else(|| Position {
-            market_id,
-            user: user.clone(),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        });
+        crate::storage::get_position(env, market_id, user)
+            .unwrap_or_else(|_| None)
+            .unwrap_or_else(|| Position {
+                market_id,
+                user: user.clone(),
+                yes_shares: 0,
+                no_shares: 0,
+                locked_collateral: 0,
+                total_deposited: 0,
+                is_settled: false,
+            });
 
     // 2. Validate deltas
     let side_yes = position_limit_exceeded_side(&position, yes_delta, no_delta);
@@ -192,7 +194,8 @@ pub fn update_position(
     position.locked_collateral = new_locked;
 
     // 5. Persist
-    crate::storage::set_position(env, market_id, user, &position);
+    crate::storage::set_position(env, market_id, user, &position)
+        .unwrap_or_default();
 
     // 6. Emit position_updated event
     emit_position_updated(
@@ -382,6 +385,7 @@ mod tests {
         let market_id = 3;
 
         let result = env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
             // Try to sell 50 YES shares the user doesn't have
             update_position(&env, market_id, &user, -50, 0, 5000)
         });
@@ -409,6 +413,7 @@ mod tests {
         let market_id = 5;
 
         env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
             update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
                 .expect("position update should succeed");
         });
@@ -439,6 +444,7 @@ mod tests {
 
         for bad_price in [-1i128, 10_001] {
             let result = env.as_contract(&contract_id, || {
+                crate::storage::set_version(&env);
                 update_position(&env, market_id, &user, 100, 0, bad_price)
             });
             assert_eq!(result, Err(PositionError::InvalidMarketPrice));
@@ -453,6 +459,7 @@ mod tests {
         let market_id = 1;
 
         let pos = env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
             update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
                 .expect("should update position")
         });
@@ -472,6 +479,7 @@ mod tests {
 
         // First update - buy YES
         let _ = env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
             update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
         });
 

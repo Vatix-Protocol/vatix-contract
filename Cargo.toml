@@ -27,6 +27,7 @@ doctest = false
 
 [dev-dependencies]
 vatix-market-contract = { path = "contracts/market" }
+vatix-treasury-contract = { path = "contracts/treasury" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 ed25519-dalek = "2.2.0"
 rand = "0.8"

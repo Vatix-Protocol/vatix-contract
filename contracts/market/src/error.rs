@@ -127,6 +127,12 @@ pub enum ContractError {
     /// an attacker to hijack the admin slot after initial deploy.
     AlreadyInitialized = 42,
 
+    /// No pending admin transfer exists.
+    ///
+    /// `accept_admin` was called but `propose_admin` has not been issued yet,
+    /// or the previous proposal was already accepted.
+    NoPendingAdmin = 43,
+
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed (insufficient balance, approval, etc.).
     ///
@@ -138,6 +144,13 @@ pub enum ContractError {
     ///
     /// The operation would exceed the maximum value for the data type.
     ArithmeticOverflow = 60,
+
+    // ========== Upgrade Errors (70-79) ==========
+    /// Storage layout version does not match the current contract version.
+    ///
+    /// A migration must be performed before the contract can be used.
+    /// On testnet, redeploy and reinitialize the contract.
+    UpgradeRequired = 70,
 }
 
 #[cfg(test)]
@@ -164,6 +177,8 @@ mod tests {
         assert_eq!(ContractError::InvalidQuestion as u32, 33);
         assert_eq!(ContractError::Unauthorized as u32, 40);
         assert_eq!(ContractError::NotAdmin as u32, 41);
+        assert_eq!(ContractError::AlreadyInitialized as u32, 42);
+        assert_eq!(ContractError::NoPendingAdmin as u32, 43);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
         assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
     }
