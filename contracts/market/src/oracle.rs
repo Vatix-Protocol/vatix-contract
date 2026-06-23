@@ -7,6 +7,7 @@
 
 use crate::error::ContractError;
 use crate::types::Market;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use soroban_sdk::{Bytes, BytesN, Env};
 
 /// Construct the message that the oracle signs.
@@ -21,17 +22,37 @@ pub fn construct_oracle_message(env: &Env, market_id: u32, outcome: bool) -> Byt
     env.crypto().keccak256(&message).into()
 }
 
+/// Verify an ed25519 signature without panicking on invalid input.
+///
+/// `env.crypto().ed25519_verify` traps the host (an unrecoverable WASM trap,
+/// not a catchable error) when the signature fails to verify, so it cannot
+/// be used here — any failure must surface as a typed [`ContractError`].
+/// Verification is therefore done in pure Rust via `ed25519-dalek`, which
+/// reports failure as a `Result` instead of trapping.
+///
+/// Returns `false` if `pubkey` does not decode to a valid curve point or if
+/// the signature does not verify against `message`.
+fn verify_ed25519_safe(pubkey: &BytesN<32>, message: &BytesN<32>, signature: &BytesN<64>) -> bool {
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&pubkey.to_array()) else {
+        return false;
+    };
+    let signature = Signature::from_bytes(&signature.to_array());
+    verifying_key
+        .verify(&message.to_array(), &signature)
+        .is_ok()
+}
+
 /// Verify that an oracle signature is valid for a market resolution.
 ///
 /// # Errors
 /// - [`ContractError::UnauthorizedOracle`] if `oracle_pubkey` is the zero key.
-/// - Panics if the Ed25519 signature is invalid (SDK limitation — see TODO below).
+/// - [`ContractError::InvalidSignature`] if the signature does not verify
+///   against `construct_oracle_message(env, market_id, outcome)`.
 ///
 /// # Security
-/// Uses Ed25519 signature verification via the Soroban crypto module.
-///
-/// TODO: `ed25519_verify` panics on invalid signatures. Consider `secp256k1_recover`
-/// for proper error handling.
+/// Uses Ed25519 signature verification, performed in pure Rust (see
+/// [`verify_ed25519_safe`]) rather than the host's `ed25519_verify`, so that
+/// an invalid signature returns a typed error instead of trapping the host.
 pub fn verify_oracle_signature(
     env: &Env,
     market_id: u32,
@@ -44,8 +65,9 @@ pub fn verify_oracle_signature(
     }
 
     let message = construct_oracle_message(env, market_id, outcome);
-    env.crypto()
-        .ed25519_verify(oracle_pubkey, &message.into(), signature);
+    if !verify_ed25519_safe(oracle_pubkey, &message, signature) {
+        return Err(ContractError::InvalidSignature);
+    }
 
     Ok(())
 }
@@ -196,16 +218,80 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_verify_invalid_signature() {
         let env = Env::default();
-        verify_oracle_signature(
+        let result = verify_oracle_signature(
             &env,
             123u32,
             true,
             &BytesN::random(&env),
             &BytesN::random(&env),
+        );
+        assert_eq!(result, Err(ContractError::InvalidSignature));
+    }
+
+    /// Generate an ed25519 keypair and sign `construct_oracle_message(market_id, outcome)`.
+    fn generate_keypair_and_sign(
+        env: &Env,
+        market_id: u32,
+        outcome: bool,
+    ) -> (BytesN<32>, BytesN<64>) {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let message = construct_oracle_message(env, market_id, outcome);
+        let signature = signing_key.sign(message.to_array().as_slice());
+
+        (
+            BytesN::from_array(env, &signing_key.verifying_key().to_bytes()),
+            BytesN::from_array(env, &signature.to_bytes()),
         )
-        .unwrap();
+    }
+
+    #[test]
+    fn test_verify_valid_signature_succeeds() {
+        let env = Env::default();
+        let market_id = 1u32;
+        let outcome = true;
+        let (pubkey, signature) = generate_keypair_and_sign(&env, market_id, outcome);
+
+        let result = verify_oracle_signature(&env, market_id, outcome, &signature, &pubkey);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn test_verify_signature_wrong_outcome_fails() {
+        let env = Env::default();
+        let market_id = 1u32;
+        let (pubkey, signature) = generate_keypair_and_sign(&env, market_id, true);
+
+        // Signature was produced for outcome=true; verifying against false must fail.
+        let result = verify_oracle_signature(&env, market_id, false, &signature, &pubkey);
+        assert_eq!(result, Err(ContractError::InvalidSignature));
+    }
+
+    #[test]
+    fn test_verify_signature_wrong_market_id_fails() {
+        let env = Env::default();
+        let outcome = true;
+        let (pubkey, signature) = generate_keypair_and_sign(&env, 1u32, outcome);
+
+        // Signature was produced for market_id=1; verifying against 2 must fail.
+        let result = verify_oracle_signature(&env, 2u32, outcome, &signature, &pubkey);
+        assert_eq!(result, Err(ContractError::InvalidSignature));
+    }
+
+    #[test]
+    fn test_verify_signature_from_different_keypair_fails() {
+        let env = Env::default();
+        let market_id = 1u32;
+        let outcome = true;
+        let (_pubkey, signature) = generate_keypair_and_sign(&env, market_id, outcome);
+        let (other_pubkey, _other_signature) = generate_keypair_and_sign(&env, market_id, outcome);
+
+        // Signature was produced by a different keypair than `other_pubkey`.
+        let result = verify_oracle_signature(&env, market_id, outcome, &signature, &other_pubkey);
+        assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 }

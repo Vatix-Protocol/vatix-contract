@@ -303,6 +303,58 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct TradeExecutedEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub user: Address,
+    pub quantity: i128,
+    pub price_bps: i128,
+    pub side_yes: bool,
+    pub executed_at: u64,
+}
+
+/// Emit an event when a trade is executed (shares bought or sold).
+///
+/// Publishes a [`TradeExecutedEvent`] to the Soroban event stream indexed by
+/// `market_id` and `user` to allow efficient off-chain indexing of trades
+/// by market or trader.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `market_id` - Market identifier
+/// * `user` - Address of the user executing the trade
+/// * `quantity` - Number of shares traded (always positive)
+/// * `price_bps` - Market price in basis points (0–10_000)
+/// * `side_yes` - `true` for YES side, `false` for NO side
+/// * `executed_at` - Unix timestamp when the trade was executed
+///
+/// # Example
+/// ```ignore
+/// emit_trade_executed(&env, 1, &user, 100, 5_000, true, env.ledger().timestamp());
+/// ```
+pub fn emit_trade_executed(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    quantity: i128,
+    price_bps: i128,
+    side_yes: bool,
+    executed_at: u64,
+) {
+    TradeExecutedEvent {
+        market_id,
+        user: user.clone(),
+        quantity,
+        price_bps,
+        side_yes,
+        executed_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct ValidationFailedEvent {
     #[topic]
@@ -381,7 +433,6 @@ pub fn emit_position_settled(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct OracleSignatureVerifiedEvent {
     #[topic]
     pub market_id: u32,
@@ -406,7 +457,6 @@ pub struct OracleSignatureVerifiedEvent {
 /// ```ignore
 /// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
 /// ```
-#[allow(dead_code)]
 pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, verified_at: u64) {
     OracleSignatureVerifiedEvent {
         market_id,
@@ -453,21 +503,38 @@ pub fn emit_fee_calculated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TreasurySetEvent {
+pub struct AdminTransferProposedEvent {
     #[topic]
-    pub treasury: Address,
-    pub set_at: u64,
+    pub current_admin: Address,
+    #[topic]
+    pub pending_admin: Address,
+    pub proposed_at: u64,
 }
 
-/// Emit an event when the admin registers or replaces the treasury contract.
-///
-/// # Arguments
-/// * `env` - Soroban environment
-/// * `treasury` - Address of the treasury contract that will receive fees
-pub fn emit_treasury_set(env: &Env, treasury: &Address) {
-    TreasurySetEvent {
-        treasury: treasury.clone(),
-        set_at: env.ledger().timestamp(),
+pub fn emit_admin_transfer_proposed(env: &Env, current_admin: &Address, pending_admin: &Address) {
+    AdminTransferProposedEvent {
+        current_admin: current_admin.clone(),
+        pending_admin: pending_admin.clone(),
+        proposed_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferAcceptedEvent {
+    #[topic]
+    pub old_admin: Address,
+    #[topic]
+    pub new_admin: Address,
+    pub accepted_at: u64,
+}
+
+pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
+    AdminTransferAcceptedEvent {
+        old_admin: old_admin.clone(),
+        new_admin: new_admin.clone(),
+        accepted_at: env.ledger().timestamp(),
     }
     .publish(env);
 }

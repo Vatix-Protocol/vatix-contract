@@ -85,7 +85,8 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     // --- buy YES shares so the resolved position has a payout ---
     let yes_shares = 100 * STROOPS_PER_USDC;
     client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
-    assert_event_emitted(&env, "position_updated_event");
+    // The last emitted event should be trade_executed
+    assert_event_emitted(&env, "trade_executed_event");
 
     // --- resolve the market (YES wins) ---
     let market_id_str = String::from_str(&env, "1");
