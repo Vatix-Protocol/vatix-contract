@@ -343,4 +343,40 @@ impl MarketContract {
     pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
         settlement::settle_position(&env, &user, market_id)
     }
+
+    /// Return the full [`Market`] struct for a given market ID.
+    ///
+    /// Read-only query suitable for off-chain indexers, frontends, and
+    /// cross-contract callers.
+    ///
+    /// # Returns
+    /// The [`Market`] on success.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — no market with this ID exists.
+    pub fn get_market(env: Env, market_id: u32) -> Result<Market, ContractError> {
+        storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)
+    }
+
+    /// Return the [`Position`] for a given user in a given market.
+    ///
+    /// Read-only query suitable for off-chain indexers, frontends, and
+    /// cross-contract callers.
+    ///
+    /// # Returns
+    /// The [`Position`] on success.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — the market does not exist
+    /// - [`ContractError::NoPositionFound`] — the user has no position in this market
+    pub fn get_position(
+        env: Env,
+        user: Address,
+        market_id: u32,
+    ) -> Result<Position, ContractError> {
+        if !storage::has_market(&env, market_id) {
+            return Err(ContractError::MarketNotFound);
+        }
+        storage::get_position(&env, market_id, &user).ok_or(ContractError::NoPositionFound)
+    }
 }

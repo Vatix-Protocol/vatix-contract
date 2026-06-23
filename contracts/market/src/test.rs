@@ -734,4 +734,116 @@ mod test {
             Err(ContractError::InvalidQuantity)
         );
     }
+
+    // ========== get_market query tests ==========
+
+    #[test]
+    fn test_get_market_returns_market() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let market = client.get_market(&market_id);
+        assert_eq!(market.id, market_id);
+        assert_eq!(market.question, question);
+        assert_eq!(market.end_time, end_time);
+        assert_eq!(market.oracle_pubkey, oracle_pubkey);
+        assert_eq!(market.status, MarketStatus::Active);
+        assert_eq!(market.result, None);
+        assert_eq!(market.creator, admin);
+        assert_eq!(market.collateral_token, collateral_token);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_get_market_not_found() {
+        let (_env, _admin, client, _contract_id) = create_test_contract();
+        client.get_market(&999);
+    }
+
+    // ========== get_position query tests ==========
+
+    #[test]
+    fn test_get_position_returns_position() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        env.mock_all_auths();
+
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        let deposit = 1000i128;
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+        sac.mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        let position = client.get_position(&user, &market_id);
+        assert_eq!(position.market_id, market_id);
+        assert_eq!(position.user, user);
+        assert_eq!(position.total_deposited, deposit);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_get_position_market_not_found() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let user = Address::generate(&env);
+        client.get_position(&user, &999);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_get_position_not_found() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        client.get_position(&user, &market_id);
+    }
 }
