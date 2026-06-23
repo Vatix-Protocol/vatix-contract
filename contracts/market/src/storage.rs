@@ -19,7 +19,12 @@ pub enum StorageKey {
     Market(u32),
     Position(u32, Address),
     Admin,
+    PendingAdmin,
     MarketCounter,
+    /// Address of the deployed treasury contract.
+    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
+    /// only routed there when this key is populated and fee_amount > 0.
+    TreasuryContract,
 }
 
 // --- Version helpers ---
@@ -116,10 +121,22 @@ pub fn has_admin(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Admin)
 }
 
-pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
-    assert_version(env)?;
-    Ok(env
-        .storage()
+pub fn get_pending_admin(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::PendingAdmin)
+}
+
+pub fn set_pending_admin(env: &Env, admin: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingAdmin, admin);
+}
+
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingAdmin);
+}
+
+pub fn get_next_market_id(env: &Env) -> u32 {
+    env.storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
         .unwrap_or(0))
@@ -131,6 +148,26 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     Ok(next_id)
+}
+
+// --- Treasury Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&StorageKey::TreasuryContract)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::TreasuryContract, treasury);
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .has(&StorageKey::TreasuryContract)
 }
 
 #[cfg(test)]
