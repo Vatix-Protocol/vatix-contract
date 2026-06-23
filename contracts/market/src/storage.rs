@@ -11,6 +11,7 @@ pub enum StorageKey {
     Market(u32),
     Position(u32, Address),
     Admin,
+    PendingAdmin,
     MarketCounter,
 }
 
@@ -71,6 +72,20 @@ pub fn set_admin(env: &Env, admin: &Address) {
 /// already called), `false` on a freshly deployed contract.
 pub fn has_admin(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Admin)
+}
+
+pub fn get_pending_admin(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::PendingAdmin)
+}
+
+pub fn set_pending_admin(env: &Env, admin: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingAdmin, admin);
+}
+
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingAdmin);
 }
 
 pub fn get_next_market_id(env: &Env) -> u32 {

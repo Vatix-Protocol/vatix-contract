@@ -80,6 +80,54 @@ impl MarketContract {
         Ok(())
     }
 
+    /// Begin a two-step admin transfer by nominating a new admin address.
+    ///
+    /// Only the current admin may call this. The nominated address becomes the
+    /// pending admin and must confirm the transfer by calling [`accept_admin`].
+    /// Calling this again before acceptance overwrites the previous nomination.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – contract is not initialized or `current_admin` is not the stored admin
+    pub fn propose_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
+        if !storage::has_admin(&env) {
+            return Err(ContractError::NotAdmin);
+        }
+        let stored_admin = storage::get_admin(&env);
+        if current_admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        current_admin.require_auth();
+        storage::set_pending_admin(&env, &new_admin);
+        events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Complete a two-step admin transfer by accepting a pending nomination.
+    ///
+    /// Must be called by the address that was nominated via [`propose_admin`].
+    /// On success the caller becomes the new admin and the pending nomination
+    /// is cleared.
+    ///
+    /// # Errors
+    /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
+    /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
+        if new_admin != pending {
+            return Err(ContractError::Unauthorized);
+        }
+        new_admin.require_auth();
+        let old_admin = storage::get_admin(&env);
+        storage::set_admin(&env, &new_admin);
+        storage::clear_pending_admin(&env);
+        events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
+        Ok(())
+    }
+
     pub fn initialize_market(
         env: Env,
         creator: Address,
