@@ -22,6 +22,7 @@ mod test {
         // Initialize admin in storage - MUST wrap in as_contract
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         (env, admin, client, contract_id)
@@ -29,7 +30,9 @@ mod test {
 
     fn get_market_from_storage(env: &Env, contract_id: &Address, market_id: u32) -> Market {
         env.as_contract(contract_id, || {
-            storage::get_market(env, market_id).expect("Market should exist")
+            storage::get_market(env, market_id)
+                .expect("version check failed")
+                .expect("Market should exist")
         })
     }
 
@@ -318,10 +321,10 @@ mod test {
 
         // Manually set market to resolved status
         env.as_contract(&contract_id, || {
-            let mut market = storage::get_market(&env, market_id).unwrap();
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
             market.status = MarketStatus::Resolved;
             market.result = Some(true);
-            storage::set_market(&env, market_id, &market);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Try to resolve again - should fail
@@ -510,6 +513,7 @@ mod test {
 
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         env.mock_all_auths();
@@ -596,6 +600,7 @@ mod test {
 
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         env.mock_all_auths();
@@ -683,10 +688,10 @@ mod test {
 
         // Force the market into a resolved state.
         env.as_contract(&contract_id, || {
-            let mut market = storage::get_market(&env, market_id).unwrap();
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
             market.status = MarketStatus::Resolved;
             market.result = Some(true);
-            storage::set_market(&env, market_id, &market);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         let yes = 10 * STROOPS_PER_USDC;
@@ -703,7 +708,7 @@ mod test {
 
         // Advance the ledger past the market end_time.
         let end_time = env.as_contract(&contract_id, || {
-            storage::get_market(&env, market_id).unwrap().end_time
+            storage::get_market(&env, market_id).unwrap().unwrap().end_time
         });
         env.ledger().set_timestamp(end_time + 1);
 

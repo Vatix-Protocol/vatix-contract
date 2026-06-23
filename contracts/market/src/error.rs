@@ -144,6 +144,13 @@ pub enum ContractError {
     ///
     /// The operation would exceed the maximum value for the data type.
     ArithmeticOverflow = 60,
+
+    // ========== Upgrade Errors (70-79) ==========
+    /// Storage layout version does not match the current contract version.
+    ///
+    /// A migration must be performed before the contract can be used.
+    /// On testnet, redeploy and reinitialize the contract.
+    UpgradeRequired = 70,
 }
 
 #[cfg(test)]

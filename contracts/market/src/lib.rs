@@ -78,6 +78,7 @@ impl MarketContract {
             return Err(ContractError::AlreadyInitialized);
         }
         storage::set_admin(&env, &admin);
+        storage::set_version(&env);
         events::emit_contract_initialized(&env, &admin);
         Ok(())
     }
@@ -140,7 +141,7 @@ impl MarketContract {
     ) -> Result<u32, ContractError> {
         // 1. Verify creator is admin
         creator.require_auth();
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if creator != admin {
             return Err(ContractError::NotAdmin);
         }
@@ -156,7 +157,7 @@ impl MarketContract {
         }
 
         // 3. Generate market ID
-        let market_id = storage::increment_market_id(&env);
+        let market_id = storage::increment_market_id(&env)?;
 
         // 4. Create Market struct
         let market = Market {
@@ -172,7 +173,7 @@ impl MarketContract {
         };
 
         // 5. Store market
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         // 6. Emit event
         events::emit_market_created(&env, market_id, &creator, &question, end_time);
@@ -258,7 +259,7 @@ impl MarketContract {
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
-            storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
@@ -276,7 +277,7 @@ impl MarketContract {
         // Step 3: Update market (status, outcome, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         // Step 4: Record resolution time and emit event
         let resolved_at = env.ledger().timestamp();
@@ -334,7 +335,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -348,7 +349,7 @@ impl MarketContract {
         // 4. Enforce that deposited collateral covers any increase in the lock.
         //    Negative-share deltas are left for positions::update_position to
         //    reject (it also emits a PositionLimitExceeded event).
-        let position = storage::get_position(&env, market_id, &user)
+        let position = storage::get_position(&env, market_id, &user)?
             .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
         let new_yes = position.yes_shares + yes_delta;
         let new_no = position.no_shares + no_delta;

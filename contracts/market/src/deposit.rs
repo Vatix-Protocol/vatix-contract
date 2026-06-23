@@ -55,7 +55,7 @@ pub fn deposit_collateral(
     // Validation
     validation::validate_collateral_amount(amount)?;
 
-    let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+    let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
     if market.status != MarketStatus::Active {
         return Err(ContractError::MarketNotActive);
@@ -80,7 +80,7 @@ pub fn deposit_collateral(
     // 1. User deposits USDC into specific market
     // 2. Collateral locked to this market only
     // 3. User must deposit separately for each market they want to trade
-    let mut position = storage::get_position(&env, market_id, &user).unwrap_or_else(|| Position {
+    let mut position = storage::get_position(&env, market_id, &user)?.unwrap_or_else(|| Position {
         market_id,
         user: user.clone(),
         yes_shares: 0,
@@ -105,7 +105,7 @@ pub fn deposit_collateral(
         .ok_or(ContractError::ArithmeticOverflow)?;
 
     // Persist updated position
-    storage::set_position(&env, market_id, &user, &position);
+    storage::set_position(&env, market_id, &user, &position)?;
 
     // TODO(#issue): consider batching deposit events for gas efficiency
     // Emit event
@@ -150,7 +150,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -175,7 +176,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -195,6 +197,10 @@ mod tests {
         let user = Address::generate(&env);
         let market_id = 999; // Nonexistent market ID
         let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+        });
 
         // Mock auth
         env.mock_all_auths();
@@ -221,7 +227,8 @@ mod tests {
         market.result = Some(true);
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -248,7 +255,8 @@ mod tests {
         market.status = MarketStatus::Canceled;
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -273,7 +281,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -300,7 +309,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -314,7 +324,7 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount);
         // locked_collateral is share-based and is untouched by deposit; see
@@ -339,7 +349,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -353,7 +364,7 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(position.yes_shares, 0);
         assert_eq!(position.no_shares, 0);
@@ -369,7 +380,7 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount + second_deposit);
         assert_eq!(position.locked_collateral, 0);

@@ -59,13 +59,13 @@ pub fn withdraw_unused_collateral(
 
     validation::validate_collateral_amount(amount)?;
 
-    let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+    let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
     if market.status != MarketStatus::Active {
         return Err(ContractError::MarketNotActive);
     }
 
-    let mut position = storage::get_position(&env, market_id, &user)
+    let mut position = storage::get_position(&env, market_id, &user)?
         .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
 
     if position.total_deposited == 0 {
@@ -136,7 +136,7 @@ pub fn withdraw_unused_collateral(
         .checked_sub(total_required)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
-    storage::set_position(&env, market_id, &user, &position);
+    storage::set_position(&env, market_id, &user, &position)?;
 
     token_client.transfer(&contract_address, &user, &amount);
 
@@ -179,7 +179,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -201,7 +202,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -219,6 +221,10 @@ mod tests {
         let user = Address::generate(&env);
         let market_id = 999u32;
         let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+        });
 
         env.mock_all_auths();
 
@@ -241,7 +247,8 @@ mod tests {
         market.status = MarketStatus::Resolved;
         market.result = Some(true);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -273,8 +280,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
         });
 
         env.mock_all_auths();
@@ -306,8 +314,9 @@ mod tests {
             is_settled: false,
         };
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
         });
 
         env.mock_all_auths();
@@ -329,7 +338,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
             // No position - available = 0
         });
 
@@ -363,8 +373,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
         });
 
         env.mock_all_auths();
@@ -401,8 +412,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
         });
 
         env.mock_all_auths();
@@ -418,7 +430,7 @@ mod tests {
 
         // Position total_deposited reduced by withdrawn amount
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 60);
     }
@@ -444,8 +456,9 @@ mod tests {
             is_settled: false,
         };
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
         });
 
         env.mock_all_auths();
