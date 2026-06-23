@@ -391,4 +391,40 @@ impl MarketContract {
     pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
         settlement::settle_position(&env, &user, market_id)
     }
+
+    /// Register the treasury contract address for protocol fee routing.
+    ///
+    /// Once set, any non-zero withdrawal fee computed during
+    /// [`withdraw_unused_collateral`] will be transferred to this address and
+    /// recorded via the treasury's `collect_fee` entry point.
+    ///
+    /// Calling this a second time replaces the previous address, enabling
+    /// seamless treasury upgrades without redeploying the market contract.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address.
+    /// * `treasury` - Address of the deployed treasury contract.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
+    pub fn set_treasury(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env);
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury(&env, &treasury);
+        events::emit_treasury_set(&env, &treasury);
+        Ok(())
+    }
+
+    /// Return the registered treasury contract address, if any.
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        storage::get_treasury(&env)
+    }
 }

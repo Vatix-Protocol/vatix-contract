@@ -16,7 +16,7 @@ use crate::types::{MarketStatus, Position};
 use crate::validation;
 
 use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, IntoVal, Symbol, Val, Vec};
 
 /// Withdraw unused collateral from a market.
 ///
@@ -73,6 +73,9 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
+    let contract_address = env.current_contract_address();
+    let token_client = TokenClient::new(&env, &market.collateral_token);
+
     // TODO(#85): fee deduction should be applied here before computing available collateral
     // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock = position.locked_collateral;
@@ -84,8 +87,36 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // Emit fee calculation event (fee_amount is 0 until #85 is implemented)
-    emit_fee_calculated(&env, market_id, &user, 0, available);
+    // TODO(#85): replace 0 with real fee computation once issue #85 is resolved.
+    let fee_amount: i128 = 0;
+
+    // Emit fee calculation event.
+    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+
+    // Route non-zero fees to the treasury contract if one has been registered.
+    // This plumbing fires automatically once issue #85 produces a real fee_amount > 0.
+    if fee_amount > 0 {
+        if let Some(treasury_addr) = storage::get_treasury(&env) {
+            // Transfer the fee portion from this contract to the treasury.
+            token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
+
+            // Notify the treasury to record the fee in its accounting ledger.
+            // We use env.invoke_contract to avoid a compile-time crate dependency
+            // on the treasury contract while its client ABI stabilises.
+            let args: Vec<Val> = soroban_sdk::vec![
+                &env,
+                contract_address.into_val(&env),
+                market.collateral_token.clone().into_val(&env),
+                market_id.into_val(&env),
+                fee_amount.into_val(&env),
+            ];
+            let _: () = env.invoke_contract(
+                &treasury_addr,
+                &Symbol::new(&env, "collect_fee"),
+                args,
+            );
+        }
+    }
 
     if amount > available {
         return Err(ContractError::InsufficientCollateral);
@@ -98,8 +129,6 @@ pub fn withdraw_unused_collateral(
 
     storage::set_position(&env, market_id, &user, &position);
 
-    let contract_address = env.current_contract_address();
-    let token_client = TokenClient::new(&env, &market.collateral_token);
     token_client.transfer(&contract_address, &user, &amount);
 
     // TODO(#issue): consider batching withdrawal events for gas efficiency
