@@ -76,33 +76,51 @@ pub fn withdraw_unused_collateral(
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
 
-    // TODO(#85): fee deduction should be applied here before computing available collateral
-    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
     let required_lock = position.locked_collateral;
 
-    // Available collateral is total deposited (after fee) minus the amount required to back shares.
+    // Compute the protocol fee on the requested withdrawal using the configured
+    // fee rate (basis points). A zero (or unset) rate yields a zero fee.
+    let fee_rate_bps = storage::get_fee_rate_bps(&env);
+    validation::validate_fee_rate_bps(fee_rate_bps)?;
+    let fee_amount = if fee_rate_bps > 0 {
+        validation::calculate_fee(amount, fee_rate_bps)?
+    } else {
+        0
+    };
+
+    // Collateral available to withdraw is what remains after reserving the fee
+    // and the amount locked to back the user's current YES/NO shares.
+    let total_deposited_after_fee = position
+        .total_deposited
+        .checked_sub(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
     let available = if total_deposited_after_fee > required_lock {
         total_deposited_after_fee - required_lock
     } else {
         0
     };
 
-    // TODO(#85): replace 0 with real fee computation once issue #85 is resolved.
-    let fee_amount: i128 = 0;
-
-    // Emit fee calculation event.
+    // Record the fee calculation for off-chain indexers. The emitted amount is
+    // now non-zero whenever a fee rate is configured.
     emit_fee_calculated(&env, market_id, &user, fee_amount, available);
 
-    // Route non-zero fees to the treasury contract if one has been registered.
-    // This plumbing fires automatically once issue #85 produces a real fee_amount > 0.
+    // The user must have `amount + fee_amount` of unlocked collateral so that
+    // the net transfer to them remains exactly `amount`.
+    let total_required = amount
+        .checked_add(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    if total_required > available {
+        return Err(ContractError::InsufficientCollateral);
+    }
+
+    // Route a non-zero fee to the treasury contract when one is registered:
+    // transfer the fee tokens, then record the deposit via the treasury's
+    // `collect_fee` entry point. `invoke_contract` is used (rather than a
+    // compile-time client) to avoid a hard crate dependency on the treasury.
     if fee_amount > 0 {
         if let Some(treasury_addr) = storage::get_treasury(&env) {
-            // Transfer the fee portion from this contract to the treasury.
             token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
 
-            // Notify the treasury to record the fee in its accounting ledger.
-            // We use env.invoke_contract to avoid a compile-time crate dependency
-            // on the treasury contract while its client ABI stabilises.
             let args: Vec<Val> = soroban_sdk::vec![
                 &env,
                 contract_address.into_val(&env),
@@ -116,18 +134,6 @@ pub fn withdraw_unused_collateral(
                 args,
             );
         }
-    }
-
-    // The user must have `amount + fee_amount` of unlocked collateral so that
-    // the net transfer to them remains exactly `amount`.
-    let total_required = amount
-        .checked_add(fee_amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
-
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
-
-    if total_required > available {
-        return Err(ContractError::InsufficientCollateral);
     }
 
     // Deduct the full amount (including fee) from the user's deposited balance.

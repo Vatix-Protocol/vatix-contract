@@ -170,6 +170,16 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
     Ok(n)
 }
 
+/// Validates a configured withdrawal fee rate (in basis points).
+///
+/// The fee rate must lie within the inclusive 0–10_000 bps range (0%–100%).
+///
+/// # Errors
+/// - `InvalidPrice`: `fee_rate_bps` is outside the 0–10_000 range.
+pub fn validate_fee_rate_bps(fee_rate_bps: i128) -> Result<(), ContractError> {
+    validate_market_price(fee_rate_bps)
+}
+
 /// Calculate fee with validation guard
 ///
 /// # Arguments
