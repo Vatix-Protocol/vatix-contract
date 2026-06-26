@@ -24,6 +24,10 @@ pub struct Market {
     pub collateral_token: Address,
     /// Current market price in basis points (0–10_000). Updated on every trade.
     pub price_bps: i128,
+    /// Address of the resolver who resolved this market (only set when status is Resolved).
+    pub resolver: Option<Address>,
+    /// Timestamp when the market was resolved (only set when status is Resolved).
+    pub resolved_at: Option<u64>,
 }
 
 /// Tracks the position and shares of a specific user in a market.

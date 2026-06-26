@@ -171,6 +171,8 @@ impl MarketContract {
             created_at: current_time,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
         };
 
         // 5. Store market
@@ -253,10 +255,12 @@ impl MarketContract {
     /// Emits MarketResolved event with the authorized oracle public key as resolver.
     pub fn resolve_market(
         env: Env,
+        resolver: Address,
         market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
@@ -275,17 +279,20 @@ impl MarketContract {
         )?;
         events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
 
-        // Step 3: Update market (status, outcome, persist)
+        // Step 3: Update market (status, outcome, resolver, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
+        market.resolver = Some(resolver.clone());
+        let resolved_at = env.ledger().timestamp();
+        market.resolved_at = Some(resolved_at);
         storage::set_market(&env, market_id, &market)?;
 
-        // Step 4: Record resolution time and emit event
-        let resolved_at = env.ledger().timestamp();
+        // Step 4: Emit event
         events::emit_market_resolved(
             &env,
             market_id,
             &market.oracle_pubkey,
+            &resolver,
             outcome,
             resolved_at,
         );

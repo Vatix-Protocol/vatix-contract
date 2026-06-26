@@ -293,11 +293,12 @@ mod test {
     fn test_resolve_market_not_found() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
+        let resolver = Address::generate(&env);
         let non_existent_market_id = String::from_str(&env, "999");
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
 
-        client.resolve_market(&non_existent_market_id, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &non_existent_market_id, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -328,10 +329,11 @@ mod test {
         });
 
         // Try to resolve again - should fail
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -355,10 +357,11 @@ mod test {
 
         // Bad signature must surface as the typed InvalidSignature error
         // (#20), not an uncaught host trap.
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -378,10 +381,11 @@ mod test {
             &collateral_token,
         );
 
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
-        let result = client.try_resolve_market(&market_id_str, &outcome, &invalid_signature);
+        let result = client.try_resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
 
         assert_eq!(
             result,
@@ -423,13 +427,15 @@ mod test {
         assert_eq!(market_before.result, None);
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify market is now Resolved
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market_after.status, MarketStatus::Resolved);
         assert_eq!(market_after.result, Some(outcome));
+        assert_eq!(market_after.resolver, Some(resolver));
     }
 
     #[test]
@@ -485,8 +491,9 @@ mod test {
         env.events().all();
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify event was emitted
         let events = env.events().all();
@@ -496,6 +503,7 @@ mod test {
         let market = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
+        assert_eq!(market.resolver, Some(resolver));
     }
 
     #[test]
