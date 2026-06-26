@@ -139,7 +139,7 @@ pub fn get_next_market_id(env: &Env) -> u32 {
     env.storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0))
+        .unwrap_or(0)
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
@@ -183,19 +183,6 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
-}
-
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::Treasury)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
 }
 
 #[cfg(test)]
@@ -285,6 +272,9 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         env.as_contract(&contract_id, || {
@@ -351,6 +341,9 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         let position = Position {

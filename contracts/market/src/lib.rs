@@ -20,7 +20,7 @@ pub mod types;
 mod validation;
 
 use crate::error::ContractError;
-use crate::types::{Market, MarketStatus, Position};
+use crate::types::{AdapterType, Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 
 #[contract]
@@ -173,6 +173,7 @@ impl MarketContract {
             price_bps: 5_000,
             resolver: None,
             resolved_at: None,
+            adapter_type: crate::types::AdapterType::Ed25519,
         };
 
         // 5. Store market
@@ -269,13 +270,14 @@ impl MarketContract {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
-        oracle::verify_oracle_signature(
+        // Step 2: Verify outcome using the configured adapter for this market.
+        oracle::verify_market_outcome(
             &env,
             market_id,
+            &market,
+            market.adapter_type.clone(),
             outcome,
             &signature,
-            &market.oracle_pubkey,
         )?;
         events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
 
