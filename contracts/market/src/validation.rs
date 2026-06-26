@@ -1,4 +1,5 @@
 use crate::error::ContractError;
+use crate::types::MarketStatus;
 use soroban_sdk::String;
 
 /// Guard function to validate input before processing.
@@ -121,6 +122,31 @@ pub fn validate_outcome(outcome: bool) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Validates that a market may be administratively canceled.
+///
+/// Cancellation is only permitted while a market is still open, i.e. before it
+/// has been resolved by the oracle. This encodes the cancel policy in one place
+/// so the contract entry point stays declarative.
+///
+/// # Arguments
+/// * `status` - Current [`MarketStatus`] of the market being canceled
+///
+/// # Returns
+/// `Ok(())` when the market is [`MarketStatus::Active`] and can be canceled.
+///
+/// # Errors
+/// - [`ContractError::MarketAlreadyResolved`] – the market is already resolved
+///   and its outcome is final, so it can no longer be canceled.
+/// - [`ContractError::MarketNotActive`] – the market is already canceled; the
+///   operation is a no-op and is rejected to surface the redundant call.
+pub fn validate_cancelable(status: &MarketStatus) -> Result<(), ContractError> {
+    match status {
+        MarketStatus::Active => Ok(()),
+        MarketStatus::Resolved => Err(ContractError::MarketAlreadyResolved),
+        MarketStatus::Canceled => Err(ContractError::MarketNotActive),
+    }
+}
+
 /// Parse a decimal market_id string to u32 (e.g. "1", "42").
 /// Returns InvalidQuantity if empty, non-digit, or overflow.
 pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
@@ -142,6 +168,16 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
             .ok_or(ContractError::InvalidQuantity)?;
     }
     Ok(n)
+}
+
+/// Validates a configured withdrawal fee rate (in basis points).
+///
+/// The fee rate must lie within the inclusive 0–10_000 bps range (0%–100%).
+///
+/// # Errors
+/// - `InvalidPrice`: `fee_rate_bps` is outside the 0–10_000 range.
+pub fn validate_fee_rate_bps(fee_rate_bps: i128) -> Result<(), ContractError> {
+    validate_market_price(fee_rate_bps)
 }
 
 /// Calculate fee with validation guard
@@ -384,6 +420,27 @@ mod tests {
         assert_eq!(
             calculate_fee(i128::MAX, 10000),
             Err(ContractError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn test_validate_cancelable_active_ok() {
+        assert!(validate_cancelable(&MarketStatus::Active).is_ok());
+    }
+
+    #[test]
+    fn test_validate_cancelable_resolved_fails() {
+        assert_eq!(
+            validate_cancelable(&MarketStatus::Resolved),
+            Err(ContractError::MarketAlreadyResolved)
+        );
+    }
+
+    #[test]
+    fn test_validate_cancelable_already_canceled_fails() {
+        assert_eq!(
+            validate_cancelable(&MarketStatus::Canceled),
+            Err(ContractError::MarketNotActive)
         );
     }
 }

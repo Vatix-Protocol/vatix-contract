@@ -21,13 +21,13 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
-    /// Address of the deployed outcome token contract.
-    /// Set by the admin via `set_outcome_token_contract`.
-    OutcomeTokenContract,
-    /// Address of the deployed treasury contract.
-    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
-    /// only routed there when this key is populated and fee_amount > 0.
-    TreasuryContract,
+    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
+    /// path to compute the protocol fee; defaults to 0 when unset.
+    FeeRateBps,
+    /// Address of the deployed treasury contract that protocol fees are routed
+    /// to. Optional — fees are only forwarded when this is populated and the
+    /// computed fee_amount is greater than zero.
+    Treasury,
 }
 
 // --- Version helpers ---
@@ -138,8 +138,10 @@ pub fn clear_pending_admin(env: &Env) {
     env.storage().persistent().remove(&StorageKey::PendingAdmin);
 }
 
-pub fn get_next_market_id(env: &Env) -> u32 {
-    env.storage()
+pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
         .unwrap_or(0)
@@ -151,44 +153,6 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     Ok(next_id)
-}
-
-// --- Treasury Storage ---
-
-pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&StorageKey::OutcomeTokenContract)
-}
-
-pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::OutcomeTokenContract, contract);
-}
-
-pub fn has_outcome_token_contract(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .has(&StorageKey::OutcomeTokenContract)
-}
-
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&StorageKey::TreasuryContract)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Address) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::TreasuryContract, treasury);
-}
-
-pub fn has_treasury(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .has(&StorageKey::TreasuryContract)
 }
 
 // --- Fee Config Storage ---
