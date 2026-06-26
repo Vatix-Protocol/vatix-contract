@@ -22,6 +22,7 @@ mod validation;
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use vatix_outcome_token_contract::{OutcomeTokenContractClient, types::TokenKind};
 
 #[contract]
 pub struct MarketContract;
@@ -487,9 +488,30 @@ impl MarketContract {
                     positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
                 })?;
 
+        // 5a. Mint or burn outcome tokens for the updated position.
+        if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
+            let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
+            if yes_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta)?;
+            } else if yes_delta < 0 {
+                token_client.burn(
+                    &market_id,
+                    &user,
+                    &TokenKind::Yes,
+                    &(-yes_delta),
+                )?;
+            }
+
+            if no_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta)?;
+            } else if no_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta))?;
+            }
+        }
+
         // 6. Persist the updated price so withdraw and other callers see it
         market.price_bps = market_price;
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         Ok(result)
     }
@@ -550,6 +572,29 @@ impl MarketContract {
         storage::set_treasury(&env, &treasury);
         events::emit_treasury_set(&env, &treasury);
         Ok(())
+    }
+
+    /// Register the deployed outcome-token contract address used by this
+    /// market contract to mint and burn outcome tokens for position updates.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_outcome_token_contract(
+        env: Env,
+        admin: Address,
+        outcome_token_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_outcome_token_contract(&env, &outcome_token_contract);
+        Ok(())
+    }
+
+    /// Return the registered outcome-token contract address, if any.
+    pub fn get_outcome_token_contract(env: Env) -> Option<Address> {
+        storage::get_outcome_token_contract(&env)
     }
 
     /// Return the registered treasury contract address, if any.
