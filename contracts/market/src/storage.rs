@@ -21,6 +21,9 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
+    /// Address of the deployed outcome token contract.
+    /// Set by the admin via `set_outcome_token_contract`.
+    OutcomeTokenContract,
     /// Address of the deployed treasury contract.
     /// Set by the admin via `set_treasury`; optional — withdrawal fees are
     /// only routed there when this key is populated and fee_amount > 0.
@@ -139,7 +142,7 @@ pub fn get_next_market_id(env: &Env) -> u32 {
     env.storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0))
+        .unwrap_or(0)
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
@@ -151,6 +154,24 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
 }
 
 // --- Treasury Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .instance()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::OutcomeTokenContract, contract);
+}
+
+pub fn has_outcome_token_contract(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .has(&StorageKey::OutcomeTokenContract)
+}
 
 pub fn get_treasury(env: &Env) -> Option<Address> {
     env.storage()
@@ -183,19 +204,6 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
-}
-
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::Treasury)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
 }
 
 #[cfg(test)]
