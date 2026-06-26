@@ -293,6 +293,20 @@ impl MarketContract {
         Ok(())
     }
 
+    /// Verify an oracle signature for a given market without performing the
+    /// resolution state change. This is exposed so companion contracts (e.g.
+    /// `ResolutionContract`) can validate candidate signatures before
+    /// persisting them.
+    pub fn verify_signature(
+        env: Env,
+        market_id: u32,
+        outcome: bool,
+        signature: BytesN<64>,
+    ) -> Result<(), ContractError> {
+        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        crate::oracle::verify_oracle_signature(&env, market_id, outcome, &signature, &market.oracle_pubkey)
+    }
+
     /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
     ///
     /// This is the on-chain entry point for the share-trading logic implemented
