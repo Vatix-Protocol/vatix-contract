@@ -99,7 +99,7 @@ impl MarketContract {
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
@@ -375,7 +375,7 @@ impl MarketContract {
 
         // 6. Persist the updated price so withdraw and other callers see it
         market.price_bps = market_price;
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         Ok(result)
     }
@@ -429,11 +429,11 @@ impl MarketContract {
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        storage::set_treasury(&env, &treasury);
+        storage::set_treasury(&env, &Some(treasury.clone()));
         events::emit_treasury_set(&env, &treasury);
         Ok(())
     }
@@ -441,5 +441,56 @@ impl MarketContract {
     /// Return the registered treasury contract address, if any.
     pub fn get_treasury(env: Env) -> Option<Address> {
         storage::get_treasury(&env)
+    }
+
+    /// Return a read-only view of a market by its ID.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
+    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
+    pub fn get_market(env: Env, market_id: u32) -> Result<crate::types::Market, ContractError> {
+        storage::get_market(&env, market_id)?
+            .ok_or(ContractError::MarketNotFound)
+    }
+
+    /// Cancel an active market, preventing further deposits and withdrawals.
+    ///
+    /// Only the admin may cancel a market. The market must be in `Active` status.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address.
+    /// * `market_id` - The market to cancel.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — caller is not the stored admin.
+    /// - [`ContractError::MarketNotFound`] — no market with the given ID.
+    /// - [`ContractError::MarketNotActive`] — market is already resolved or canceled.
+    ///
+    /// # Events
+    /// Emits `MarketCanceled` with the market ID and canceling admin.
+    pub fn cancel_market(
+        env: Env,
+        admin: Address,
+        market_id: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+
+        if market.status != crate::types::MarketStatus::Active {
+            return Err(ContractError::MarketNotActive);
+        }
+
+        market.status = crate::types::MarketStatus::Canceled;
+        storage::set_market(&env, market_id, &market)?;
+
+        events::emit_market_canceled(&env, market_id, &admin);
+        Ok(())
     }
 }

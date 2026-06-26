@@ -557,6 +557,41 @@ pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasurySetEvent {
+    #[topic]
+    pub treasury: Address,
+    pub set_at: u64,
+}
+
+pub fn emit_treasury_set(env: &Env, treasury: &Address) {
+    TreasurySetEvent {
+        treasury: treasury.clone(),
+        set_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketCanceledEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub canceled_by: Address,
+    pub canceled_at: u64,
+}
+
+pub fn emit_market_canceled(env: &Env, market_id: u32, canceled_by: &Address) {
+    MarketCanceledEvent {
+        market_id,
+        canceled_by: canceled_by.clone(),
+        canceled_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -76,9 +76,21 @@ pub fn withdraw_unused_collateral(
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
 
-    // TODO(#85): fee deduction should be applied here before computing available collateral
-    // See: https://github.com/Vatix-Protocol/vatix-contract/issues/85
+    let fee_rate_bps = storage::get_fee_rate_bps(&env);
+    let fee_amount: i128 = if fee_rate_bps > 0 {
+        amount
+            .checked_mul(fee_rate_bps)
+            .ok_or(ContractError::ArithmeticOverflow)?
+            / 10_000
+    } else {
+        0
+    };
+
     let required_lock = position.locked_collateral;
+    let total_deposited_after_fee = position
+        .total_deposited
+        .checked_sub(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
 
     // Available collateral is total deposited (after fee) minus the amount required to back shares.
     let available = if total_deposited_after_fee > required_lock {
@@ -87,22 +99,16 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // TODO(#85): replace 0 with real fee computation once issue #85 is resolved.
-    let fee_amount: i128 = 0;
-
-    // Emit fee calculation event.
     emit_fee_calculated(&env, market_id, &user, fee_amount, available);
 
+    if amount > available {
+        return Err(ContractError::InsufficientCollateral);
+    }
+
     // Route non-zero fees to the treasury contract if one has been registered.
-    // This plumbing fires automatically once issue #85 produces a real fee_amount > 0.
     if fee_amount > 0 {
         if let Some(treasury_addr) = storage::get_treasury(&env) {
-            // Transfer the fee portion from this contract to the treasury.
             token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
-
-            // Notify the treasury to record the fee in its accounting ledger.
-            // We use env.invoke_contract to avoid a compile-time crate dependency
-            // on the treasury contract while its client ABI stabilises.
             let args: Vec<Val> = soroban_sdk::vec![
                 &env,
                 contract_address.into_val(&env),
@@ -118,22 +124,12 @@ pub fn withdraw_unused_collateral(
         }
     }
 
-    // The user must have `amount + fee_amount` of unlocked collateral so that
-    // the net transfer to them remains exactly `amount`.
-    let total_required = amount
+    let total_deducted = amount
         .checked_add(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
-
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
-
-    if total_required > available {
-        return Err(ContractError::InsufficientCollateral);
-    }
-
-    // Deduct the full amount (including fee) from the user's deposited balance.
     position.total_deposited = position
         .total_deposited
-        .checked_sub(total_required)
+        .checked_sub(total_deducted)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
     storage::set_position(&env, market_id, &user, &position)?;
@@ -513,7 +509,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 60); // 100 - 40 - 0 = 60
     }
@@ -560,7 +556,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 0); // 100 - 50 - 50 = 0
     }
@@ -646,7 +642,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
@@ -702,7 +698,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
