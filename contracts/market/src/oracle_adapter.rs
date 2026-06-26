@@ -109,6 +109,10 @@ impl OracleAdapter for ReflectorAdapter {
         // TODO(#323): Cross-contract call to fetch the price and evaluate
         // the resolution condition.
         unimplemented!("Reflector adapter — tracked in #323")
+        // Adapter unimplemented for Reflector integration; return a
+        // typed `InvalidSignature` rather than panicking so callers receive
+        // a recoverable `ContractError`.
+        Err(ContractError::InvalidSignature)
     }
 }
 
@@ -195,6 +199,37 @@ impl OracleAdapter for PythAdapter {
             return Err(ContractError::InvalidSignature);
         }
         Ok(())
+        // Adapter unimplemented for Pyth integration; return a typed
+        // `InvalidSignature` rather than panicking so callers receive a
+        // recoverable `ContractError`.
+        Err(ContractError::InvalidSignature)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+
+    #[test]
+    fn reflector_adapter_returns_invalid_signature() {
+        let env = Env::default();
+        let adapter = ReflectorAdapter {
+            contract_id: Address::generate(&env),
+        };
+        let res = adapter.verify_outcome(&env, 1u32, true, &Bytes::new(&env));
+        assert_eq!(res, Err(ContractError::InvalidSignature));
+    }
+
+    #[test]
+    fn pyth_adapter_returns_invalid_signature() {
+        let env = Env::default();
+        let adapter = PythAdapter {
+            contract_id: Address::generate(&env),
+            price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
+        };
+        let res = adapter.verify_outcome(&env, 1u32, true, &Bytes::new(&env));
+        assert_eq!(res, Err(ContractError::InvalidSignature));
     }
 }
 

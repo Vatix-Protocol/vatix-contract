@@ -92,7 +92,22 @@ pub fn withdraw_unused_collateral(
         .checked_sub(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
-    // Available collateral is total deposited (after fee) minus the amount required to back shares.
+    // Compute the protocol fee on the requested withdrawal using the configured
+    // fee rate (basis points). A zero (or unset) rate yields a zero fee.
+    let fee_rate_bps = storage::get_fee_rate_bps(&env);
+    validation::validate_fee_rate_bps(fee_rate_bps)?;
+    let fee_amount = if fee_rate_bps > 0 {
+        validation::calculate_fee(amount, fee_rate_bps)?
+    } else {
+        0
+    };
+
+    // Collateral available to withdraw is what remains after reserving the fee
+    // and the amount locked to back the user's current YES/NO shares.
+    let total_deposited_after_fee = position
+        .total_deposited
+        .checked_sub(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
     let available = if total_deposited_after_fee > required_lock {
         total_deposited_after_fee - required_lock
     } else {
@@ -109,6 +124,27 @@ pub fn withdraw_unused_collateral(
     if fee_amount > 0 {
         if let Some(treasury_addr) = storage::get_treasury(&env) {
             token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
+    // Record the fee calculation for off-chain indexers. The emitted amount is
+    // now non-zero whenever a fee rate is configured.
+    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+
+    // The user must have `amount + fee_amount` of unlocked collateral so that
+    // the net transfer to them remains exactly `amount`.
+    let total_required = amount
+        .checked_add(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    if total_required > available {
+        return Err(ContractError::InsufficientCollateral);
+    }
+
+    // Route a non-zero fee to the treasury contract when one is registered:
+    // transfer the fee tokens, then record the deposit via the treasury's
+    // `collect_fee` entry point. `invoke_contract` is used (rather than a
+    // compile-time client) to avoid a hard crate dependency on the treasury.
+    if fee_amount > 0 {
+        if let Some(treasury_addr) = storage::get_treasury(&env) {
+            token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
+
             let args: Vec<Val> = soroban_sdk::vec![
                 &env,
                 contract_address.into_val(&env),
@@ -127,6 +163,7 @@ pub fn withdraw_unused_collateral(
     let total_deducted = amount
         .checked_add(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
+    // Deduct the full amount (including fee) from the user's deposited balance.
     position.total_deposited = position
         .total_deposited
         .checked_sub(total_deducted)

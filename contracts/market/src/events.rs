@@ -240,6 +240,41 @@ pub fn emit_market_resolved(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+pub struct MarketCanceledEvent {
+    #[topic]
+    pub market_id: u32,
+    pub canceler: Address,
+    pub canceled_at: u64,
+}
+
+/// Emit a MarketCanceled event
+///
+/// Publishes a [`MarketCanceledEvent`] to the Soroban event stream when an
+/// admin halts a market before resolution. The event is indexed by `market_id`
+/// as a topic so off-chain indexers can detect canceled markets and surface
+/// collateral-reclaim flows to affected users.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `market_id` - Unique identifier of the canceled market
+/// * `canceler` - Admin address that canceled the market
+/// * `canceled_at` - Unix timestamp (ledger time) when the cancellation occurred
+///
+/// # Example
+/// ```ignore
+/// emit_market_canceled(&env, 1, &admin, env.ledger().timestamp());
+/// ```
+pub fn emit_market_canceled(env: &Env, market_id: u32, canceler: &Address, canceled_at: u64) {
+    MarketCanceledEvent {
+        market_id,
+        canceler: canceler.clone(),
+        canceled_at,
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
 pub struct PositionLimitExceededEvent {
     #[topic]
     pub market_id: u32,
@@ -725,6 +760,44 @@ mod tests {
         assert_eq!(resolver_val, resolver);
         assert_eq!(outcome_val, outcome);
         assert_eq!(resolved_at_val, resolved_at);
+    }
+
+    #[test]
+    fn test_emit_market_canceled() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let canceler = Address::generate(&env);
+        let canceled_at = 1234567890u64;
+
+        env.as_contract(&contract_id, || {
+            emit_market_canceled(&env, market_id, &canceler, canceled_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "market_canceled_event"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let canceler_val: Address = data
+            .get(Symbol::new(&env, "canceler"))
+            .unwrap()
+            .into_val(&env);
+        let canceled_at_val: u64 = data
+            .get(Symbol::new(&env, "canceled_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(canceler_val, canceler);
+        assert_eq!(canceled_at_val, canceled_at);
     }
 
     #[test]

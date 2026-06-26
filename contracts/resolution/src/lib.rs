@@ -11,6 +11,7 @@ mod test;
 use crate::error::ContractError;
 use crate::types::{CandidateStatus, ResolutionCandidate, ResolutionConfig};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use soroban_sdk::{IntoVal, Symbol, Val, Vec};
 
 const MIN_CHALLENGE_WINDOW_SECONDS: u64 = 60;
 const MAX_CHALLENGE_WINDOW_SECONDS: u64 = 14 * 24 * 60 * 60;
@@ -95,12 +96,27 @@ impl ResolutionContract {
         challenge_window_seconds: u64,
     ) -> Result<u32, ContractError> {
         proposer.require_auth();
-        storage::get_config(&env);
+        let config = storage::get_config(&env);
         validate_uri(&evidence_uri)?;
         validate_challenge_window(challenge_window_seconds)?;
         if storage::get_candidate_id_for_market(&env, market_id).is_some() {
             return Err(ContractError::CandidateAlreadyExists);
         }
+
+        // Verify the provided oracle signature by delegating to the market
+        // contract's `verify_signature` entrypoint. This ensures proposals are
+        // rejected early if the signature does not verify.
+        let args: Vec<Val> = soroban_sdk::vec![&env,
+            market_id.into_val(&env),
+            outcome.into_val(&env),
+            signature.clone().into_val(&env),
+        ];
+        let verification: Result<(), ContractError> = env.invoke_contract(
+            &config.market_contract,
+            &Symbol::new(&env, "verify_signature"),
+            args,
+        );
+        verification?;
 
         let proposed_at = env.ledger().timestamp();
         let candidate = ResolutionCandidate {

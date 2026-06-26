@@ -26,6 +26,13 @@ pub enum StorageKey {
     /// only routed there when this key is populated and fee_amount > 0.
     Treasury,
     FeeRateBps,
+    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
+    /// path to compute the protocol fee; defaults to 0 when unset.
+    FeeRateBps,
+    /// Address of the deployed treasury contract that protocol fees are routed
+    /// to. Optional — fees are only forwarded when this is populated and the
+    /// computed fee_amount is greater than zero.
+    Treasury,
 }
 
 // --- Version helpers ---
@@ -137,11 +144,12 @@ pub fn clear_pending_admin(env: &Env) {
 }
 
 pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
+    assert_version(env)?;
     Ok(env
         .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0))
+        .unwrap_or(0)
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
