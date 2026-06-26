@@ -9,6 +9,7 @@ mod test {
         testutils::{Address as _, BytesN as _, Events, Ledger},
         Address, BytesN, Env, String,
     };
+    use vatix_resolution_contract::{ResolutionContract, ResolutionContractClient};
 
     fn create_test_contract<'a>() -> (Env, Address, MarketContractClient<'a>, Address) {
         let env = Env::default();
@@ -893,6 +894,97 @@ mod test {
 
         client.propose_admin(&admin, &new_admin);
         client.accept_admin(&attacker);
+    }
+
+    #[test]
+    fn test_set_treasury_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let treasury = Address::generate(&env);
+
+        client.set_treasury(&admin, &treasury);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_treasury(&env).unwrap(), treasury);
+        });
+    }
+
+    #[test]
+    fn test_set_outcome_token_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let outcome_token_contract = Address::generate(&env);
+
+        client.set_outcome_token_contract(&admin, &outcome_token_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_outcome_token_contract(&env).unwrap(), outcome_token_contract);
+        });
+    }
+
+    #[test]
+    fn test_set_resolution_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let resolution_contract = Address::generate(&env);
+
+        client.set_resolution_contract(&admin, &resolution_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_resolution_contract(&env).unwrap(), resolution_contract);
+        });
+    }
+
+    #[test]
+    fn test_non_admin_cannot_set_optional_integration_contracts() {
+        use crate::error::ContractError;
+
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let stranger = Address::generate(&env);
+        let address = Address::generate(&env);
+
+        assert_eq!(client.try_set_treasury(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_outcome_token_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_resolution_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn test_resolution_contract_requires_finalized_candidate_before_resolve() {
+        use crate::error::ContractError;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let collateral_token = Address::generate(&env);
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        let resolution_addr = env.register(ResolutionContract, ());
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .initialize(&admin, &Address::generate(&env), &contract_id);
+
+        client.set_resolution_contract(&admin, &resolution_addr);
+
+        let (_oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, true);
+
+        let proposer = Address::generate(&env);
+        let evidence = String::from_str(&env, "evidence://uri");
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .propose(&proposer, &market_id, &true, &signature, &evidence, &60);
+
+        let market_id_str = String::from_str(&env, &market_id.to_string());
+        assert_eq!(
+            client.try_resolve_market(&market_id_str, &true, &signature),
+            Err(Ok(ContractError::ResolutionNotFinalized))
+        );
     }
 
     #[test]
