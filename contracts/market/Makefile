@@ -1,16 +1,20 @@
+# Canonical build/test entrypoints for the market contract.
+#
+# `build` is the single source of truth for producing the deployable WASM:
+# `stellar contract build`. CI (.github/workflows/ci.yml) and the deploy
+# scripts (scripts/deploy-testnet.sh) both build through this same command so
+# the artefact path (target/wasm32v1-none/release/*.wasm) never drifts between
+# local, CI, and deploy.
+
 default: build
 
 all: test
 
-# TODO: Replace this echo guard with the real test invocation once the test suite
-#       is defined. The real implementation should run `cargo test` to execute all
-#       unit and integration tests under `contracts/market/src/`.
+# Run the full unit + integration test suite for the contract.
 test: build
 	cargo test
 
-# TODO: Replace this echo guard with the real WASM build command once the contract
-#       build pipeline is finalized. The real implementation should compile the
-#       contract to a `.wasm` binary deployable to the Stellar network.
+# Compile the contract to its deployable WASM binary.
 build:
 	stellar contract build
 	@ls -l target/wasm32v1-none/release/*.wasm
