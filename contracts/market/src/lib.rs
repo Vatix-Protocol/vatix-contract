@@ -22,6 +22,7 @@ mod validation;
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use vatix_outcome_token_contract::{OutcomeTokenContractClient, types::TokenKind};
 
 #[contract]
 pub struct MarketContract;
@@ -293,18 +294,118 @@ impl MarketContract {
         Ok(())
     }
 
-    /// Verify an oracle signature for a given market without performing the
-    /// resolution state change. This is exposed so companion contracts (e.g.
-    /// `ResolutionContract`) can validate candidate signatures before
-    /// persisting them.
-    pub fn verify_signature(
+    /// Cancel a market before it is resolved, halting all further trading.
+    ///
+    /// Only the stored admin may call this. The market must still be
+    /// [`MarketStatus::Active`]; a resolved market has a final outcome and an
+    /// already-canceled market is rejected to surface the redundant call.
+    /// Once canceled, deposits and position updates are rejected (both already
+    /// require an `Active` status), and affected users may reclaim their
+    /// collateral via [`withdraw_canceled_collateral`].
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address (authorizes the call)
+    /// * `market_id` - Identifier of the market to cancel
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin
+    /// - [`ContractError::MarketNotFound`] – the market does not exist
+    /// - [`ContractError::MarketAlreadyResolved`] – the market is already resolved
+    /// - [`ContractError::MarketNotActive`] – the market is already canceled
+    ///
+    /// # Events
+    /// Emits [`MarketCanceledEvent`] with `market_id`, `canceler`, and
+    /// `canceled_at` on success.
+    pub fn cancel_market(
         env: Env,
+        admin: Address,
         market_id: u32,
-        outcome: bool,
-        signature: BytesN<64>,
     ) -> Result<(), ContractError> {
-        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
-        crate::oracle::verify_oracle_signature(&env, market_id, outcome, &signature, &market.oracle_pubkey)
+        // 1. Authorization: only the stored admin may cancel a market.
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        // 2. Load the market and enforce the cancel policy (Active only).
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        validation::validate_cancelable(&market.status)?;
+
+        // 3. Transition to Canceled and persist.
+        market.status = MarketStatus::Canceled;
+        storage::set_market(&env, market_id, &market)?;
+
+        // 4. Emit the cancellation event for off-chain indexers.
+        events::emit_market_canceled(&env, market_id, &admin, env.ledger().timestamp());
+
+        Ok(())
+    }
+
+    /// Reclaim deposited collateral from a canceled market.
+    ///
+    /// When a market is canceled before resolution there is no winning outcome,
+    /// so each user is made whole by returning the full collateral they have
+    /// deposited in that market. The user's position balances are zeroed and the
+    /// collateral (SAC) tokens are transferred from the contract back to them.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User reclaiming their collateral (must authorize the call)
+    /// * `market_id` - Identifier of the canceled market
+    ///
+    /// # Returns
+    /// The amount of collateral refunded to the user, in stroops.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] – the market does not exist
+    /// - [`ContractError::MarketNotActive`] – the market is not canceled, so the
+    ///   reclaim path does not apply
+    /// - [`ContractError::NoPositionFound`] – the user has no position in the market
+    /// - [`ContractError::InsufficientCollateral`] – the user has no collateral to reclaim
+    ///
+    /// # Events
+    /// Emits `CollateralWithdrawn` with the refunded amount and the user's new
+    /// (zero) total.
+    pub fn withdraw_canceled_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+    ) -> Result<i128, ContractError> {
+        // 1. Authorization: only the position owner may reclaim their collateral.
+        user.require_auth();
+
+        // 2. The reclaim path is exclusive to canceled markets.
+        let market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status != MarketStatus::Canceled {
+            return Err(ContractError::MarketNotActive);
+        }
+
+        // 3. Load the user's position and the full deposited balance.
+        let mut position = storage::get_position(&env, market_id, &user)?
+            .ok_or(ContractError::NoPositionFound)?;
+        let refund = position.total_deposited;
+        if refund <= 0 {
+            return Err(ContractError::InsufficientCollateral);
+        }
+
+        // 4. Refund the collateral from the contract back to the user.
+        let contract_address = env.current_contract_address();
+        let token_client = soroban_sdk::token::Client::new(&env, &market.collateral_token);
+        token_client.transfer(&contract_address, &user, &refund);
+
+        // 5. Zero out the position balances now that the collateral has left.
+        position.total_deposited = 0;
+        position.locked_collateral = 0;
+        storage::set_position(&env, market_id, &user, &position)?;
+
+        // 6. Reuse the collateral-withdrawn event so indexers track the refund.
+        events::emit_collateral_withdrawn(&env, &user, market_id, refund, position.total_deposited);
+
+        Ok(refund)
     }
 
     /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
@@ -387,9 +488,30 @@ impl MarketContract {
                     positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
                 })?;
 
+        // 5a. Mint or burn outcome tokens for the updated position.
+        if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
+            let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
+            if yes_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta)?;
+            } else if yes_delta < 0 {
+                token_client.burn(
+                    &market_id,
+                    &user,
+                    &TokenKind::Yes,
+                    &(-yes_delta),
+                )?;
+            }
+
+            if no_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta)?;
+            } else if no_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta))?;
+            }
+        }
+
         // 6. Persist the updated price so withdraw and other callers see it
         market.price_bps = market_price;
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
         Ok(result)
     }
@@ -450,6 +572,29 @@ impl MarketContract {
         storage::set_treasury(&env, &treasury);
         events::emit_treasury_set(&env, &treasury);
         Ok(())
+    }
+
+    /// Register the deployed outcome-token contract address used by this
+    /// market contract to mint and burn outcome tokens for position updates.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_outcome_token_contract(
+        env: Env,
+        admin: Address,
+        outcome_token_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_outcome_token_contract(&env, &outcome_token_contract);
+        Ok(())
+    }
+
+    /// Return the registered outcome-token contract address, if any.
+    pub fn get_outcome_token_contract(env: Env) -> Option<Address> {
+        storage::get_outcome_token_contract(&env)
     }
 
     /// Return the registered treasury contract address, if any.

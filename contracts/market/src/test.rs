@@ -907,4 +907,212 @@ mod test {
         let result = client.try_accept_admin(&first_nominee);
         assert!(result.is_err());
     }
+
+    // ========== cancel_market tests ==========
+
+    /// Register a market backed by a real Stellar asset, mint `deposit` to a
+    /// fresh user, and deposit it so cancel and collateral-reclaim flows can be
+    /// exercised end to end.
+    ///
+    /// Returns `(env, admin, user, client, contract_id, market_id, collateral_token)`.
+    fn setup_admin_market_with_deposit<'a>(
+        deposit: i128,
+    ) -> (
+        Env,
+        Address,
+        Address,
+        MarketContractClient<'a>,
+        Address,
+        u32,
+        Address,
+    ) {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        env.mock_all_auths();
+
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        (
+            env,
+            admin,
+            user,
+            client,
+            contract_id,
+            market_id,
+            collateral_token,
+        )
+    }
+
+    #[test]
+    fn test_cancel_market_success() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        let market = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market.status, MarketStatus::Canceled);
+    }
+
+    #[test]
+    fn test_cancel_market_emits_event() {
+        let (env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        env.events().all(); // clear setup events
+        client.cancel_market(&admin, &market_id);
+
+        let events = env.events().all();
+        assert!(events.len() > 0, "MarketCanceled event should be emitted");
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_cancel_market_non_admin_fails() {
+        let (env, _admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        let attacker = Address::generate(&env);
+        client.cancel_market(&attacker, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_cancel_market_not_found_fails() {
+        let (_env, admin, _user, client, _contract_id, _market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &999u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn test_cancel_market_already_resolved_fails() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Force the market into a resolved state; a final outcome can't be canceled.
+        env.as_contract(&contract_id, || {
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
+            market.status = MarketStatus::Resolved;
+            market.result = Some(true);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        client.cancel_market(&admin, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_cancel_market_already_canceled_fails() {
+        let (_env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+        // A second cancellation is a no-op and must be rejected.
+        client.cancel_market(&admin, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_deposit_rejected_after_cancel() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let (env, admin, user, client, _contract_id, market_id, collateral_token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        // A fresh deposit into the canceled market must fail with MarketNotActive.
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &500);
+        client.deposit_collateral(&user, &market_id, &500);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_update_position_rejected_after_cancel() {
+        let (_env, admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+        // Trading is halted once a market is canceled.
+        client.update_position(&user, &market_id, &100i128, &0i128, &5_000i128);
+    }
+
+    #[test]
+    fn test_withdraw_canceled_collateral_refunds_user() {
+        let deposit = 1_000i128;
+        let (env, admin, user, client, contract_id, market_id, collateral_token) =
+            setup_admin_market_with_deposit(deposit);
+
+        client.cancel_market(&admin, &market_id);
+
+        let refunded = client.withdraw_canceled_collateral(&user, &market_id);
+        assert_eq!(refunded, deposit);
+
+        // The user's position is zeroed once the collateral has been returned.
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
+        });
+        assert_eq!(position.total_deposited, 0);
+        assert_eq!(position.locked_collateral, 0);
+
+        // The collateral lands back in the user's wallet.
+        let token_client = soroban_sdk::token::Client::new(&env, &collateral_token);
+        assert_eq!(token_client.balance(&user), deposit);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_withdraw_canceled_collateral_rejects_active_market() {
+        let (_env, _admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Market is still active, so the canceled-reclaim path does not apply.
+        client.withdraw_canceled_collateral(&user, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_withdraw_canceled_collateral_no_position_fails() {
+        let (env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        // A user who never deposited has no position to reclaim.
+        let stranger = Address::generate(&env);
+        client.withdraw_canceled_collateral(&stranger, &market_id);
+    }
 }

@@ -13,10 +13,47 @@
 /// // Use `params` to initialize the contract under test, then assert events:
 /// // assert_event_emitted(&env, "market_created");
 /// ```
+use ed25519_dalek::{Signer, SigningKey};
+use rand::rngs::OsRng;
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
     Address, BytesN, Env, IntoVal, String,
 };
+use vatix_market_contract::{oracle, storage, MarketContract};
+
+/// Stroops per USDC (1 USDC = 10^7 stroops), shared across integration tests.
+pub const STROOPS_PER_USDC: i128 = 10_000_000;
+
+/// Register the `MarketContract` and bootstrap its admin and storage version.
+///
+/// Returns `(admin, contract_id)`. The storage version must be set or any
+/// market/position read or write returns `ContractError::UpgradeRequired`.
+pub fn register_contract(env: &Env) -> (Address, Address) {
+    let contract_id = env.register(MarketContract, ());
+    let admin = Address::generate(env);
+    env.as_contract(&contract_id, || {
+        storage::set_admin(env, &admin);
+        storage::set_version(env);
+    });
+    (admin, contract_id)
+}
+
+/// Generate an oracle Ed25519 keypair, returning the on-chain public key and
+/// the signing key used to sign a market resolution.
+pub fn oracle_keypair(env: &Env) -> (BytesN<32>, SigningKey) {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let pubkey = BytesN::from_array(env, &signing_key.verifying_key().to_bytes());
+    (pubkey, signing_key)
+}
+
+/// Sign a market resolution outcome with the oracle signing key, producing a
+/// signature the contract's `resolve_market` will accept. Mirrors the on-chain
+/// message construction in `oracle::construct_oracle_message`.
+pub fn sign_outcome(env: &Env, key: &SigningKey, market_id: u32, outcome: bool) -> BytesN<64> {
+    let message = oracle::construct_oracle_message(env, market_id, outcome);
+    let signature = key.sign(message.to_array().as_slice());
+    BytesN::from_array(env, &signature.to_bytes())
+}
 
 /// Failure reasons for the integration test harness.
 ///
