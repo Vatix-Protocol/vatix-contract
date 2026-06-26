@@ -50,7 +50,7 @@ fn create_market_then_deposit_collateral() {
 
     // The created market is persisted with the expected parameters.
     let market = env.as_contract(&contract_id, || {
-        storage::get_market(&env, market_id).expect("market should exist")
+        storage::get_market(&env, market_id).expect("version check ok").expect("market should exist")
     });
     assert_eq!(market.collateral_token, collateral_token);
 
@@ -62,7 +62,7 @@ fn create_market_then_deposit_collateral() {
     assert_event_emitted(&env, "collateral_deposited_event");
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
     });
     assert_eq!(position.total_deposited, deposit);
 }

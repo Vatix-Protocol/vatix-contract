@@ -21,8 +21,9 @@ mod validation;
 
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, IntoVal, String, Symbol};
 use vatix_outcome_token_contract::{OutcomeTokenContractClient, types::TokenKind};
+use vatix_resolution_contract::types::CandidateStatus as ResolutionCandidateStatus;
 
 #[contract]
 pub struct MarketContract;
@@ -100,7 +101,7 @@ impl MarketContract {
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
@@ -125,7 +126,7 @@ impl MarketContract {
             return Err(ContractError::Unauthorized);
         }
         new_admin.require_auth();
-        let old_admin = storage::get_admin(&env);
+        let old_admin = storage::get_admin(&env)?;
         storage::set_admin(&env, &new_admin);
         storage::clear_pending_admin(&env);
         events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
@@ -261,9 +262,36 @@ impl MarketContract {
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
-            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
+        }
+
+        // Step 1b: If a resolution contract is registered, require a finalized candidate.
+        if let Some(resolution_contract) = storage::get_resolution_contract(&env) {
+            // Call resolution_contract.get_candidate_id_for_market(market_id)
+            let args: soroban_sdk::Vec<soroban_sdk::Val> =
+                soroban_sdk::vec![&env, market_id.into_val(&env)];
+            let candidate_id: Option<u32> = env.invoke_contract(
+                &resolution_contract,
+                &Symbol::new(&env, "get_candidate_id_for_market"),
+                args,
+            );
+            let candidate_id = candidate_id.ok_or(ContractError::ResolutionNotFinalized)?;
+
+            // Call resolution_contract.get_candidate(candidate_id) and require Finalized status.
+            let args2: soroban_sdk::Vec<soroban_sdk::Val> =
+                soroban_sdk::vec![&env, candidate_id.into_val(&env)];
+            let candidate: Option<vatix_resolution_contract::types::ResolutionCandidate> =
+                env.invoke_contract(
+                    &resolution_contract,
+                    &Symbol::new(&env, "get_candidate"),
+                    args2,
+                );
+            let candidate = candidate.ok_or(ContractError::ResolutionNotFinalized)?;
+            if candidate.status != ResolutionCandidateStatus::Finalized {
+                return Err(ContractError::ResolutionNotFinalized);
+            }
         }
 
         // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
@@ -451,7 +479,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
+        let mut market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -492,20 +520,15 @@ impl MarketContract {
         if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
             let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
             if yes_delta > 0 {
-                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta)?;
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta);
             } else if yes_delta < 0 {
-                token_client.burn(
-                    &market_id,
-                    &user,
-                    &TokenKind::Yes,
-                    &(-yes_delta),
-                )?;
+                token_client.burn(&market_id, &user, &TokenKind::Yes, &(-yes_delta));
             }
 
             if no_delta > 0 {
-                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta)?;
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta);
             } else if no_delta < 0 {
-                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta))?;
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta));
             }
         }
 
@@ -565,7 +588,7 @@ impl MarketContract {
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
@@ -595,6 +618,32 @@ impl MarketContract {
     /// Return the registered outcome-token contract address, if any.
     pub fn get_outcome_token_contract(env: Env) -> Option<Address> {
         storage::get_outcome_token_contract(&env)
+    }
+
+    /// Register the resolution contract that gates `resolve_market`.
+    ///
+    /// When set, `resolve_market` will call into this contract to verify that
+    /// a finalized candidate exists for the market before accepting a resolution.
+    /// Pass `None` (by omitting the storage entry) to remove the gate.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_resolution_contract(
+        env: Env,
+        admin: Address,
+        resolution_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_resolution_contract(&env, &resolution_contract);
+        Ok(())
+    }
+
+    /// Return the registered resolution contract address, if any.
+    pub fn get_resolution_contract(env: Env) -> Option<Address> {
+        storage::get_resolution_contract(&env)
     }
 
     /// Return the registered treasury contract address, if any.

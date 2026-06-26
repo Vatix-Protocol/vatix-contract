@@ -69,7 +69,7 @@ fn deposit_with_zero_shares_has_zero_locked_collateral() {
     let (env, contract_id, market_id, user) = setup_market(deposit);
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
     });
 
     assert_eq!(position.yes_shares, 0);
@@ -92,7 +92,7 @@ fn withdraw_uses_real_trade_price_not_hardcoded_fifty_fifty() {
     client.update_position(&user, &market_id, &yes_shares, &0i128, &6_000i128);
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
     });
     assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
 
@@ -107,7 +107,7 @@ fn withdraw_uses_real_trade_price_not_hardcoded_fifty_fifty() {
     client.withdraw_unused_collateral(&user, &market_id, &(40 * STROOPS_PER_USDC));
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
     });
     assert_eq!(position.total_deposited, 60 * STROOPS_PER_USDC);
     assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
@@ -131,7 +131,7 @@ fn property_locked_collateral_never_exceeds_total_deposited() {
             let price = rng.gen_range(1u64..=9_999) as i128;
 
             let position = env.as_contract(&contract_id, || {
-                storage::get_position(&env, market_id, &user).expect("position should exist")
+                storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
             });
 
             match rng.gen_range(0u32..3) {
@@ -157,7 +157,7 @@ fn property_locked_collateral_never_exceeds_total_deposited() {
             }
 
             let position = env.as_contract(&contract_id, || {
-                storage::get_position(&env, market_id, &user).expect("position should exist")
+                storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
             });
 
             assert!(

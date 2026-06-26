@@ -95,12 +95,12 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
 
     // --- settle the user's winning position ---
     let payout = env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
+        let market = storage::get_market(&env, market_id).expect("version check ok").expect("market should exist");
         let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist");
         let payout = settlement::execute_settlement(&env, &mut position, &market)
             .expect("settlement should succeed");
-        storage::set_position(&env, market_id, &user, &position);
+        storage::set_position(&env, market_id, &user, &position).unwrap();
         payout
     });
 
@@ -108,7 +108,7 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     assert_event_emitted(&env, "position_settled_event");
 
     let settled = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
     });
     assert!(settled.is_settled);
 }
@@ -149,9 +149,9 @@ fn settlement_before_resolution_is_rejected() {
 
     // Settling an Active (unresolved) market must fail with MarketNotResolved (#3).
     env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
+        let market = storage::get_market(&env, market_id).expect("version check ok").expect("market should exist");
         let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist");
         settlement::execute_settlement(&env, &mut position, &market).unwrap();
     });
 }

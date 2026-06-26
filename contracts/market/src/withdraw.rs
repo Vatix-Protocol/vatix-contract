@@ -503,8 +503,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 0); // 0 bps
         });
 
@@ -519,7 +519,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 60); // 100 - 40 - 0 = 60
     }
@@ -548,8 +548,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
         });
 
@@ -566,7 +566,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 0); // 100 - 50 - 50 = 0
     }
@@ -591,8 +591,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
         });
 
@@ -632,8 +632,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
             // no treasury address is set
         });
@@ -652,7 +652,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
@@ -688,10 +688,10 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury.clone()));
+            storage::set_treasury(&env, &treasury);
         });
 
         env.mock_all_auths();
@@ -708,7 +708,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
