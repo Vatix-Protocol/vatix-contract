@@ -137,6 +137,9 @@ mod tests {
             created_at: 0,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         }
     }
 

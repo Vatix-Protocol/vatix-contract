@@ -200,7 +200,8 @@ pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount
 pub struct MarketResolvedEvent {
     #[topic]
     pub market_id: u32,
-    pub resolver: BytesN<32>,
+    pub oracle_pubkey: BytesN<32>,
+    pub resolver: Address,
     pub outcome: bool,
     pub resolved_at: u64,
 }
@@ -214,23 +215,26 @@ pub struct MarketResolvedEvent {
 /// # Arguments
 /// * env - Contract environment
 /// * market_id - Unique identifier of the resolved market
-/// * resolver - Oracle public key that resolved the market
+/// * oracle_pubkey - Oracle public key used to verify the resolution signature
+/// * resolver - Address of the resolver who submitted the resolution
 /// * outcome - Market outcome (true = YES won, false = NO won)
 /// * resolved_at - Unix timestamp when market was resolved
 ///
 /// # Example
 /// ```ignore
-/// emit_market_resolved(&env, 1, &oracle_pubkey, true, env.ledger().timestamp());
+/// emit_market_resolved(&env, 1, &oracle_pubkey, &resolver_address, true, env.ledger().timestamp());
 /// ```
 pub fn emit_market_resolved(
     env: &Env,
     market_id: u32,
-    resolver: &BytesN<32>,
+    oracle_pubkey: &BytesN<32>,
+    resolver: &Address,
     outcome: bool,
     resolved_at: u64,
 ) {
     MarketResolvedEvent {
         market_id,
+        oracle_pubkey: oracle_pubkey.clone(),
         resolver: resolver.clone(),
         outcome,
         resolved_at,
@@ -597,11 +601,32 @@ pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &
 pub struct TreasurySetEvent {
     #[topic]
     pub treasury: Address,
+    pub set_at: u64,
 }
 
 pub fn emit_treasury_set(env: &Env, treasury: &Address) {
     TreasurySetEvent {
         treasury: treasury.clone(),
+        set_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketCanceledEvent {
+    #[topic]
+    pub market_id: u32,
+    #[topic]
+    pub canceled_by: Address,
+    pub canceled_at: u64,
+}
+
+pub fn emit_market_canceled(env: &Env, market_id: u32, canceled_by: &Address) {
+    MarketCanceledEvent {
+        market_id,
+        canceled_by: canceled_by.clone(),
+        canceled_at: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -703,12 +728,13 @@ mod tests {
         let contract_id = env.register(MarketContract, ());
 
         let market_id = 1u32;
-        let resolver = BytesN::from_array(&env, &[1u8; 32]);
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let resolver = Address::generate(&env);
         let outcome = true;
         let resolved_at = 1234567890u64;
 
         env.as_contract(&contract_id, || {
-            emit_market_resolved(&env, market_id, &resolver, outcome, resolved_at);
+            emit_market_resolved(&env, market_id, &oracle_pubkey, &resolver, outcome, resolved_at);
         });
 
         let events = env.events().all();

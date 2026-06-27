@@ -26,7 +26,7 @@
 //! the expected `keccak_hex` before sending signatures to the contract.
 
 use crate::error::ContractError;
-use crate::types::Market;
+use crate::types::{AdapterType, Market};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use soroban_sdk::{Bytes, BytesN, Env};
 
@@ -111,6 +111,25 @@ pub fn validate_oracle_authorization(
     }
 }
 
+/// Verify that the market outcome is valid according to the configured oracle adapter.
+///
+/// For `AdapterType::Ed25519`, this verifies the provided signature against the
+/// market's `oracle_pubkey`. Other adapter types are not yet implemented and
+/// currently return `UnauthorizedOracle` to prevent accidental silent success.
+pub fn verify_market_outcome(
+    env: &Env,
+    market_id: u32,
+    market: &Market,
+    adapter_type: AdapterType,
+    outcome: bool,
+    proof: &BytesN<64>,
+) -> Result<(), ContractError> {
+    match adapter_type {
+        AdapterType::Ed25519 => verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey),
+        AdapterType::Reflector | AdapterType::Pyth => Err(ContractError::UnauthorizedOracle),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -134,6 +153,9 @@ mod tests {
             created_at: 0,
             collateral_token: Address::generate(env),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         }
     }
 
