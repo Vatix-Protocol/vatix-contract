@@ -163,8 +163,22 @@ jobs:
           node-version: "22"
           cache: "pnpm"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Stellar CLI
+        run: |
+          curl -L https://github.com/stellar/stellar-cli/releases/download/v21.4.0/stellar-cli-21.4.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv stellar /usr/local/bin/
+          stellar --version
+
       - name: Install dependencies
         run: pnpm install
+
+      - name: Generate TypeScript bindings
+        run: pnpm build:bindings
 
       - name: Lint web app
         run: pnpm --filter web lint
