@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, Env};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 1;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 pub enum StorageKey {
@@ -164,6 +164,34 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     Ok(next_id)
+}
+
+// --- Treasury Storage ---
+
+/// Return the registered treasury contract address, if any.
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+/// Register (or replace) the treasury contract address for protocol fee routing.
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+// --- Outcome Token Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
 }
 
 // --- Fee Config Storage ---
@@ -399,6 +427,7 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
+            assert_eq!(m.resolution_price, market.resolution_price);
 
             // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());

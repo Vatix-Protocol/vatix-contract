@@ -26,7 +26,7 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: contracts/market
+          workspaces: . -> target
       
       # Format check enforces consistent code style across the project using rustfmt.
       # Configuration is defined in contracts/market/rustfmt.toml to ensure all
@@ -70,6 +70,16 @@ jobs:
       # public contract function to maintain coverage.
       - name: Tests
         run: cd contracts/market && cargo test
+
+      # Runs the workspace-level integration tests located in tests/.
+      # These tests exercise cross-contract behaviour (Market ↔ Treasury) and the
+      # full prediction-market lifecycle (create → deposit → trade → resolve → settle)
+      # using live Soroban testutils environments — no storage mocking.
+      # They are compiled as integration test binaries (not inline unit tests), so
+      # `--tests` targets only files under tests/ and avoids re-running the unit
+      # tests already covered by the step above.
+      - name: Workspace integration tests
+        run: cargo test --workspace --tests
 
       # Restore saved proptest regression cases from previous CI runs so that
       # any previously-found failing inputs are always re-checked.

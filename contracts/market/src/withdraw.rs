@@ -696,15 +696,22 @@ mod tests {
     #[test]
     fn test_withdraw_fee_routes_to_treasury() {
         use soroban_sdk::token::StellarAssetClient;
+        use vatix_treasury_contract::{TreasuryContract, TreasuryContractClient};
 
         let env = setup_env();
+        env.mock_all_auths();
+
         let user = Address::generate(&env);
-        let treasury = Address::generate(&env);
+        let admin = Address::generate(&env);
         let market_id = 1u32;
         let token_admin = Address::generate(&env);
         let token = env.register_stellar_asset_contract_v2(token_admin.clone());
         let collateral_token = token.address();
         let contract_id = env.register(crate::MarketContract, ());
+
+        // Register a real treasury so cross-contract collect_fee works.
+        let treasury_id = env.register(TreasuryContract, ());
+        TreasuryContractClient::new(&env, &treasury_id).initialize(&admin, &contract_id);
 
         let market = create_test_market(&env, market_id, &collateral_token);
         let position = Position {
@@ -723,8 +730,6 @@ mod tests {
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
             storage::set_treasury(&env, &treasury);
         });
-
-        env.mock_all_auths();
 
         let token_client = StellarAssetClient::new(&env, &collateral_token);
         token_client.mint(&contract_id, &100);
@@ -746,7 +751,7 @@ mod tests {
         assert_eq!(user_token_client.balance(&user), 40);
 
         // Treasury receives 4
-        assert_eq!(user_token_client.balance(&treasury), 4);
+        assert_eq!(user_token_client.balance(&treasury_id), 4);
 
         // Contract balance decreases by 44 (original 100 - 44 = 56)
         assert_eq!(user_token_client.balance(&contract_id), 56);
