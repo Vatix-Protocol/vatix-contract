@@ -1,5 +1,4 @@
-//! Workspace integration tests for market creation and collateral deposit
-//! through the public `MarketContract` client.
+//! Workspace integration tests for market creation and collateral deposit.
 
 #[allow(dead_code)]
 mod helpers;
@@ -11,8 +10,6 @@ use vatix_market_contract::{storage, MarketContract, MarketContractClient};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
-/// Register the contract and configure its admin, returning the env, the admin
-/// address, and the contract id.
 fn init_contract() -> (Env, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -20,6 +17,7 @@ fn init_contract() -> (Env, Address, Address) {
     let contract_id = env.register(MarketContract, ());
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
     });
 
@@ -48,13 +46,13 @@ fn create_market_then_deposit_collateral() {
     assert_eq!(market_id, 1);
     assert_event_emitted(&env, "market_created_event");
 
-    // The created market is persisted with the expected parameters.
     let market = env.as_contract(&contract_id, || {
-        storage::get_market(&env, market_id).expect("market should exist")
+        storage::get_market(&env, market_id)
+            .unwrap()
+            .expect("market should exist")
     });
     assert_eq!(market.collateral_token, collateral_token);
 
-    // Deposit collateral and confirm the position total is tracked.
     let user = Address::generate(&env);
     let deposit = 25 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
@@ -62,7 +60,9 @@ fn create_market_then_deposit_collateral() {
     assert_event_emitted(&env, "collateral_deposited_event");
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .expect("position should exist")
     });
     assert_eq!(position.total_deposited, deposit);
 }
@@ -76,7 +76,6 @@ fn non_admin_cannot_create_market() {
     let non_admin = Address::generate(&env);
     let params = MarketParams::default_valid(&env);
 
-    // A caller that is not the stored admin must be rejected with NotAdmin (#41).
     client.initialize_market(
         &non_admin,
         &params.question,
@@ -173,4 +172,60 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
 
     // Settling a second time is rejected (position already settled).
     assert!(client.try_settle_position(&user, &market_id).is_err());
+}
+
+// --- #373: duplicate market_id creation is rejected ---
+
+/// Each call to `initialize_market` must assign a fresh, unique ID.
+/// Manually forcing a duplicate by writing directly to storage and then
+/// calling `initialize_market` again must be rejected.
+#[test]
+fn duplicate_market_id_creation_is_rejected() {
+    use vatix_market_contract::{
+        error::ContractError,
+        types::{Market, MarketStatus},
+    };
+    use soroban_sdk::{BytesN, String};
+
+    let (env, admin, contract_id) = init_contract();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    // Bootstrap storage version (init_contract doesn't set it).
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+    let collateral_token = token.address();
+
+    let params = MarketParams::default_valid(&env);
+
+    // Create market normally → gets ID 1.
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &collateral_token,
+    );
+    assert_eq!(market_id, 1);
+
+    // Manually reset the counter back to 0 so the next increment produces ID 1 again,
+    // while market 1 is already in storage — this simulates a counter rollback.
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&storage::StorageKey::MarketCounter, &0u32);
+    });
+
+    // A second call must be rejected because market ID 1 already exists.
+    let result = client.try_initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &collateral_token,
+    );
+    assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
 }
