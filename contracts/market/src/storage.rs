@@ -257,6 +257,9 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         env.as_contract(&contract_id, || {
@@ -323,6 +326,9 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         let position = Position {

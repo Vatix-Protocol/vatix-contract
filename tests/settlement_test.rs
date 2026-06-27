@@ -89,8 +89,9 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     assert_event_emitted(&env, "trade_executed_event");
 
     // --- resolve the market (YES wins) ---
+    let resolver = Address::generate(&env);
     let market_id_str = String::from_str(&env, "1");
-    client.resolve_market(&market_id_str, &outcome, &signature);
+    client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
     assert_event_emitted(&env, "market_resolved_event");
 
     // --- settle the user's winning position ---
