@@ -173,3 +173,59 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     // Settling a second time is rejected (position already settled).
     assert!(client.try_settle_position(&user, &market_id).is_err());
 }
+
+// --- #373: duplicate market_id creation is rejected ---
+
+/// Each call to `initialize_market` must assign a fresh, unique ID.
+/// Manually forcing a duplicate by writing directly to storage and then
+/// calling `initialize_market` again must be rejected.
+#[test]
+fn duplicate_market_id_creation_is_rejected() {
+    use vatix_market_contract::{
+        error::ContractError,
+        types::{Market, MarketStatus},
+    };
+    use soroban_sdk::{BytesN, String};
+
+    let (env, admin, contract_id) = init_contract();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    // Bootstrap storage version (init_contract doesn't set it).
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+    let collateral_token = token.address();
+
+    let params = MarketParams::default_valid(&env);
+
+    // Create market normally → gets ID 1.
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &collateral_token,
+    );
+    assert_eq!(market_id, 1);
+
+    // Manually reset the counter back to 0 so the next increment produces ID 1 again,
+    // while market 1 is already in storage — this simulates a counter rollback.
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&storage::StorageKey::MarketCounter, &0u32);
+    });
+
+    // A second call must be rejected because market ID 1 already exists.
+    let result = client.try_initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &collateral_token,
+    );
+    assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
+}
