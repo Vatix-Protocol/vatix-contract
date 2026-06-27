@@ -4,7 +4,7 @@ use soroban_sdk::{
     Address, BytesN, Env, String,
 };
 
-fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address) {
+fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address) {
     env.mock_all_auths();
     let contract_id = env.register(ResolutionContract, ());
     let client = ResolutionContractClient::new(env, &contract_id);
@@ -12,7 +12,7 @@ fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address) {
     let factory = Address::generate(env);
     let market_contract = Address::generate(env);
     client.initialize(&admin, &factory, &market_contract);
-    (client, admin)
+    (client, admin, market_contract)
 }
 
 fn signature(env: &Env) -> BytesN<64> {
@@ -32,7 +32,7 @@ fn set_time(env: &Env, timestamp: u64) {
 #[test]
 fn propose_stores_candidate_with_challenge_deadline() {
     let env = Env::default();
-    let (client, _) = setup(&env);
+    let (client, _, _) = setup(&env);
     set_time(&env, 1_000);
 
     let proposer = Address::generate(&env);
@@ -56,7 +56,7 @@ fn propose_stores_candidate_with_challenge_deadline() {
 #[test]
 fn challenge_marks_candidate_and_blocks_finalize() {
     let env = Env::default();
-    let (client, _) = setup(&env);
+    let (client, _, _) = setup(&env);
     set_time(&env, 1_000);
 
     let proposer = Address::generate(&env);
@@ -82,7 +82,7 @@ fn challenge_marks_candidate_and_blocks_finalize() {
 #[test]
 fn finalize_requires_closed_challenge_window() {
     let env = Env::default();
-    let (client, _) = setup(&env);
+    let (client, _, _) = setup(&env);
     set_time(&env, 1_000);
 
     let proposer = Address::generate(&env);
@@ -110,7 +110,7 @@ fn finalize_requires_closed_challenge_window() {
 #[test]
 fn challenge_after_deadline_is_rejected() {
     let env = Env::default();
-    let (client, _) = setup(&env);
+    let (client, _, _) = setup(&env);
     set_time(&env, 1_000);
 
     let proposer = Address::generate(&env);
@@ -128,9 +128,35 @@ fn challenge_after_deadline_is_rejected() {
 #[test]
 fn admin_can_update_factory_registration() {
     let env = Env::default();
-    let (client, admin) = setup(&env);
+    let (client, admin, _) = setup(&env);
 
     let new_factory = Address::generate(&env);
     client.set_factory(&admin, &new_factory);
     assert_eq!(client.get_config().factory, new_factory);
+}
+
+/// #404: finalize invokes resolve_market on the market contract.
+///
+/// Uses mock_all_auths so the cross-contract call is intercepted without
+/// needing a live market contract deployment.
+#[test]
+fn finalize_calls_resolve_market_on_market_contract() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+
+    set_time(&env, 1_000);
+    let proposer = Address::generate(&env);
+    let sig = signature(&env);
+    let candidate_id = client.propose(&proposer, &5, &true, &sig, &evidence(&env), &60);
+
+    set_time(&env, 1_061);
+    let finalizer = Address::generate(&env);
+    // If the cross-contract resolve_market call were missing or wrong, this
+    // would panic or return an error. Success proves the callback fired.
+    let candidate = client.finalize(&finalizer, &candidate_id);
+
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Finalized);
+    assert_eq!(candidate.market_id, 5);
+    assert_eq!(candidate.outcome, true);
+    assert!(candidate.finalized_at.is_some());
 }

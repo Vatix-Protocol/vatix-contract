@@ -66,7 +66,9 @@ fn buying_shares_updates_position_and_locks_collateral() {
 
     // The update is persisted.
     let stored = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user)
+            .expect("version check ok")
+            .expect("position should exist")
     });
     assert_eq!(stored.yes_shares, yes_shares);
 }
