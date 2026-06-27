@@ -424,4 +424,97 @@ mod test {
             assert_eq!(m2.id, market.id);
         });
     }
+
+    // ── #406 Cold upgrade migration test vectors ─────────────────────────────
+
+    /// Vector 1: a completely fresh contract (no storage at all) behaves
+    /// identically to a stale-version contract — both must return
+    /// `UpgradeRequired` and never panic.
+    #[test]
+    fn migration_v0_missing_version_blocks_all_storage_access() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            // No version written — simulates a cold-started or pre-v1 deployment.
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+            assert_eq!(
+                get_market(&env, 1),
+                Err(ContractError::UpgradeRequired)
+            );
+            assert_eq!(
+                get_position(&env, 1, &user),
+                Err(ContractError::UpgradeRequired)
+            );
+            assert_eq!(
+                get_next_market_id(&env),
+                Err(ContractError::UpgradeRequired)
+            );
+        });
+    }
+
+    /// Vector 2: a stale version (v0 = 0) written before the current
+    /// `STORAGE_VERSION` must be rejected by `assert_version`.
+    #[test]
+    fn migration_stale_version_zero_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            // Simulate a pre-upgrade deployment by writing version 0.
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &0u32);
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Vector 3: after `set_version` (the migration step), `assert_version`
+    /// passes and all storage ops work normally.
+    #[test]
+    fn migration_after_set_version_storage_is_accessible() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let collateral_token = Address::generate(&env);
+
+        let market = Market {
+            id: 1,
+            question: String::from_str(&env, "post-migration market?"),
+            end_time: 9_000_000,
+            oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token,
+            price_bps: 5_000,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Simulate the upgrade: write the current version.
+            set_version(&env);
+            assert_eq!(assert_version(&env), Ok(()));
+
+            // Storage ops succeed post-migration.
+            set_market(&env, 1, &market).unwrap();
+            let m = get_market(&env, 1).unwrap().unwrap();
+            assert_eq!(m.id, 1);
+        });
+    }
+
+    /// Vector 4: any version number other than `STORAGE_VERSION` is rejected,
+    /// guarding against forward-compatibility accidents.
+    #[test]
+    fn migration_future_version_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
 }

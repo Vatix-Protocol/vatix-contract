@@ -15,6 +15,8 @@ mod withdraw;
 #[allow(dead_code)]
 pub mod storage;
 mod test;
+#[cfg(test)]
+mod withdraw_fuzz;
 pub mod types;
 #[allow(dead_code)]
 mod validation;
