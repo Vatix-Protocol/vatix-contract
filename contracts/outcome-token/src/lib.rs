@@ -133,4 +133,12 @@ impl OutcomeTokenContract {
     pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
         storage::get_total_supply(&env, market_id, &kind)
     }
+
+    /// Return the number of decimal places used by this token.
+    ///
+    /// Aligned with the Stellar Asset Contract (SAC) standard: 7 decimals,
+    /// meaning 1 token = 10_000_000 stroops.
+    pub fn decimals(_env: Env) -> u32 {
+        7
+    }
 }

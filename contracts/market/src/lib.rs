@@ -15,6 +15,8 @@ mod withdraw;
 #[allow(dead_code)]
 pub mod storage;
 mod test;
+#[cfg(test)]
+mod withdraw_fuzz;
 pub mod types;
 #[allow(dead_code)]
 mod validation;
@@ -565,7 +567,7 @@ impl MarketContract {
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
