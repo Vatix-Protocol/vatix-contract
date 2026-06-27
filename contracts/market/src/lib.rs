@@ -20,7 +20,7 @@ pub mod types;
 mod validation;
 
 use crate::error::ContractError;
-use crate::types::{Market, MarketStatus, Position};
+use crate::types::{AdapterType, Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 use vatix_outcome_token_contract::{OutcomeTokenContractClient, types::TokenKind};
 
@@ -172,6 +172,9 @@ impl MarketContract {
             created_at: current_time,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: crate::types::AdapterType::Ed25519,
         };
 
         // 5. Store market
@@ -254,10 +257,12 @@ impl MarketContract {
     /// Emits MarketResolved event with the authorized oracle public key as resolver.
     pub fn resolve_market(
         env: Env,
+        resolver: Address,
         market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
@@ -266,27 +271,31 @@ impl MarketContract {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
-        oracle::verify_oracle_signature(
+        // Step 2: Verify outcome using the configured adapter for this market.
+        oracle::verify_market_outcome(
             &env,
             market_id,
+            &market,
+            market.adapter_type.clone(),
             outcome,
             &signature,
-            &market.oracle_pubkey,
         )?;
         events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
 
-        // Step 3: Update market (status, outcome, persist)
+        // Step 3: Update market (status, outcome, resolver, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
+        market.resolver = Some(resolver.clone());
+        let resolved_at = env.ledger().timestamp();
+        market.resolved_at = Some(resolved_at);
         storage::set_market(&env, market_id, &market)?;
 
-        // Step 4: Record resolution time and emit event
-        let resolved_at = env.ledger().timestamp();
+        // Step 4: Emit event
         events::emit_market_resolved(
             &env,
             market_id,
             &market.oracle_pubkey,
+            &resolver,
             outcome,
             resolved_at,
         );

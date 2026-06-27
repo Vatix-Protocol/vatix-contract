@@ -78,8 +78,10 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
     assert_event_emitted(&env, "trade_executed_event");
 
+    // --- resolve the market (YES wins) ---
+    let resolver = Address::generate(&env);
     let market_id_str = String::from_str(&env, "1");
-    client.resolve_market(&market_id_str, &outcome, &signature);
+    client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
     assert_event_emitted(&env, "market_resolved_event");
 
     let payout = env.as_contract(&contract_id, || {
