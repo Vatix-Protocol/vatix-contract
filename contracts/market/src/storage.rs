@@ -28,6 +28,9 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
+    /// Address of the deployed outcome-token contract used to mint/burn
+    /// outcome tokens for position updates.
+    OutcomeTokenContract,
 }
 
 // --- Version helpers ---
@@ -144,7 +147,7 @@ pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
         .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
@@ -168,6 +171,39 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Treasury Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage()
+            .persistent()
+            .set(&StorageKey::Treasury, addr),
+        None => env.storage()
+            .persistent()
+            .remove(&StorageKey::Treasury),
+    }
+}
+
+// --- Outcome Token Contract Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
 }
 
 #[cfg(test)]
@@ -388,6 +424,61 @@ mod test {
             // Market slot is unchanged after position write
             let m2 = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m2.id, market.id);
+        });
+    }
+
+    #[test]
+    fn test_treasury_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let treasury_addr = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            // Initially no treasury is set
+            assert_eq!(get_treasury(&env), None);
+
+            // Set treasury address
+            set_treasury(&env, &Some(treasury_addr.clone()));
+            assert_eq!(get_treasury(&env), Some(treasury_addr.clone()));
+
+            // Clear treasury address
+            set_treasury(&env, &None);
+            assert_eq!(get_treasury(&env), None);
+        });
+    }
+
+    #[test]
+    fn test_outcome_token_contract_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let token_contract_addr = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            // Initially no outcome token contract is set
+            assert_eq!(get_outcome_token_contract(&env), None);
+
+            // Set outcome token contract address
+            set_outcome_token_contract(&env, &token_contract_addr);
+            assert_eq!(get_outcome_token_contract(&env), Some(token_contract_addr.clone()));
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            // Initially defaults to 0
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            // Set fee rate to 50 bps (0.5%)
+            set_fee_rate_bps(&env, 50);
+            assert_eq!(get_fee_rate_bps(&env), 50);
+
+            // Update to 100 bps (1%)
+            set_fee_rate_bps(&env, 100);
+            assert_eq!(get_fee_rate_bps(&env), 100);
         });
     }
 }

@@ -100,7 +100,7 @@ impl MarketContract {
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
@@ -125,7 +125,7 @@ impl MarketContract {
             return Err(ContractError::Unauthorized);
         }
         new_admin.require_auth();
-        let old_admin = storage::get_admin(&env);
+        let old_admin = storage::get_admin(&env)?;
         storage::set_admin(&env, &new_admin);
         storage::clear_pending_admin(&env);
         events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
@@ -261,7 +261,7 @@ impl MarketContract {
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
-            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
@@ -451,7 +451,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;;
+        let mut market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -492,20 +492,20 @@ impl MarketContract {
         if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
             let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
             if yes_delta > 0 {
-                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta)?;
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta);
             } else if yes_delta < 0 {
                 token_client.burn(
                     &market_id,
                     &user,
                     &TokenKind::Yes,
                     &(-yes_delta),
-                )?;
+                );
             }
 
             if no_delta > 0 {
-                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta)?;
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta);
             } else if no_delta < 0 {
-                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta))?;
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta));
             }
         }
 
@@ -565,12 +565,12 @@ impl MarketContract {
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        storage::set_treasury(&env, &treasury);
-        events::emit_treasury_set(&env, &treasury);
+        storage::set_treasury(&env, &Some(treasury.clone()));
+        events::emit_treasury_set(&env, &Some(treasury));
         Ok(())
     }
 
