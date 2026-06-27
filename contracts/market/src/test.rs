@@ -9,6 +9,7 @@ mod test {
         testutils::{Address as _, BytesN as _, Events, Ledger},
         Address, BytesN, Env, String,
     };
+    use vatix_resolution_contract::{ResolutionContract, ResolutionContractClient};
 
     fn create_test_contract<'a>() -> (Env, Address, MarketContractClient<'a>, Address) {
         let env = Env::default();
@@ -293,11 +294,12 @@ mod test {
     fn test_resolve_market_not_found() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
+        let resolver = Address::generate(&env);
         let non_existent_market_id = String::from_str(&env, "999");
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
 
-        client.resolve_market(&non_existent_market_id, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &non_existent_market_id, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -328,10 +330,11 @@ mod test {
         });
 
         // Try to resolve again - should fail
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -355,10 +358,11 @@ mod test {
 
         // Bad signature must surface as the typed InvalidSignature error
         // (#20), not an uncaught host trap.
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -378,10 +382,11 @@ mod test {
             &collateral_token,
         );
 
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
-        let result = client.try_resolve_market(&market_id_str, &outcome, &invalid_signature);
+        let result = client.try_resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
 
         assert_eq!(
             result,
@@ -423,13 +428,15 @@ mod test {
         assert_eq!(market_before.result, None);
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify market is now Resolved
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market_after.status, MarketStatus::Resolved);
         assert_eq!(market_after.result, Some(outcome));
+        assert_eq!(market_after.resolver, Some(resolver));
     }
 
     #[test]
@@ -485,8 +492,9 @@ mod test {
         env.events().all();
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify event was emitted
         let events = env.events().all();
@@ -496,6 +504,7 @@ mod test {
         let market = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
+        assert_eq!(market.resolver, Some(resolver));
     }
 
     #[test]
@@ -641,7 +650,7 @@ mod test {
 
         // The persisted position matches the returned one
         let stored = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(stored.yes_shares, yes);
         assert_eq!(stored.locked_collateral, 60 * STROOPS_PER_USDC);
@@ -893,6 +902,97 @@ mod test {
 
         client.propose_admin(&admin, &new_admin);
         client.accept_admin(&attacker);
+    }
+
+    #[test]
+    fn test_set_treasury_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let treasury = Address::generate(&env);
+
+        client.set_treasury(&admin, &treasury);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_treasury(&env).unwrap(), treasury);
+        });
+    }
+
+    #[test]
+    fn test_set_outcome_token_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let outcome_token_contract = Address::generate(&env);
+
+        client.set_outcome_token_contract(&admin, &outcome_token_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_outcome_token_contract(&env).unwrap(), outcome_token_contract);
+        });
+    }
+
+    #[test]
+    fn test_set_resolution_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let resolution_contract = Address::generate(&env);
+
+        client.set_resolution_contract(&admin, &resolution_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_resolution_contract(&env).unwrap(), resolution_contract);
+        });
+    }
+
+    #[test]
+    fn test_non_admin_cannot_set_optional_integration_contracts() {
+        use crate::error::ContractError;
+
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let stranger = Address::generate(&env);
+        let address = Address::generate(&env);
+
+        assert_eq!(client.try_set_treasury(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_outcome_token_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_resolution_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn test_resolution_contract_requires_finalized_candidate_before_resolve() {
+        use crate::error::ContractError;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let collateral_token = Address::generate(&env);
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        let resolution_addr = env.register(ResolutionContract, ());
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .initialize(&admin, &Address::generate(&env), &contract_id);
+
+        client.set_resolution_contract(&admin, &resolution_addr);
+
+        let (_oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, true);
+
+        let proposer = Address::generate(&env);
+        let evidence = String::from_str(&env, "evidence://uri");
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .propose(&proposer, &market_id, &true, &signature, &evidence, &60);
+
+        let market_id_str = String::from_str(&env, &market_id.to_string());
+        assert_eq!(
+            client.try_resolve_market(&market_id_str, &true, &signature),
+            Err(Ok(ContractError::ResolutionNotFinalized))
+        );
     }
 
     #[test]

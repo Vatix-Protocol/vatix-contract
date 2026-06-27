@@ -15,6 +15,7 @@ soroban-sdk = { workspace = true }
 # Used for oracle signature verification - see contracts/market/src/oracle.rs.
 ed25519-dalek = { version = "2.2.0", default-features = false }
 vatix-outcome-token-contract = { path = "../outcome-token" }
+vatix-resolution-contract = { path = "../resolution" }
 
 [features]
 # Enables the oracle_adapter module (trait + Ed25519/Reflector/Pyth stubs).

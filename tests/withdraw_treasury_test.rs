@@ -40,9 +40,10 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
     });
 
     let treasury_addr = env.register(TreasuryContract, ());
-    TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &market_addr);
+    TreasuryContractClient::new(&env, &treasury_addr)
+        .initialize(&admin, &market_addr);
 
-    MarketContractClient::new(&env, &market_addr).set_treasury_contract(&admin, &treasury_addr);
+    MarketContractClient::new(&env, &market_addr).set_treasury(&admin, &treasury_addr);
 
     let token_admin = Address::generate(&env);
     let collateral_token = env
@@ -143,7 +144,6 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     env.as_contract(&market_addr, || {
         storage::set_admin(&env, &admin);
         storage::set_version(&env);
-        // No fee rate set → defaults to 0 bps, full amount returned to user.
     });
     let market = MarketContractClient::new(&env, &market_addr);
 
@@ -188,8 +188,7 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
     let collected = fee_for(withdraw_amount);
 
     let fee_recipient = Address::generate(&env);
-    treasury
-        .withdraw_fees(&admin, &token, &fee_recipient, &collected);
+    treasury.withdraw_fees(&admin, &token, &fee_recipient, &collected);
 
     assert_eq!(
         treasury.token_balance(&token),
@@ -212,22 +211,12 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
 
 #[test]
 fn non_admin_cannot_withdraw_treasury_fees() {
-    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
-    let market = MarketContractClient::new(&env, &market_addr);
+    let (env, _market_addr, treasury_addr, _admin, token) = setup_with_treasury();
     let treasury = TreasuryContractClient::new(&env, &treasury_addr);
 
-    let market_id = open_market(&env, &market, &admin, &token);
-
-    let user = Address::generate(&env);
-    let deposit = 100 * STROOPS_PER_USDC;
-    StellarAssetClient::new(&env, &token).mint(&user, &deposit);
-    market.deposit_collateral(&user, &market_id, &deposit);
-    market.withdraw_unused_collateral(&user, &market_id, &deposit);
-
-    let collected = fee_for(deposit);
     let imposter = Address::generate(&env);
     let err = treasury
-        .try_withdraw_fees(&imposter, &token, &imposter, &collected)
+        .try_withdraw_fees(&imposter, &token, &imposter, &1i128)
         .unwrap_err()
         .unwrap();
 
