@@ -5,6 +5,10 @@
 # scripts (scripts/deploy-testnet.sh) both build through this same command so
 # the artefact path (target/wasm32v1-none/release/*.wasm) never drifts between
 # local, CI, and deploy.
+#
+# IMPORTANT: Do not use `cargo build --target wasm32-unknown-unknown` directly.
+# That produces different artifacts and breaks consistency guarantees.
+# Always use `stellar contract build` or `make build`.
 
 default: build
 
@@ -14,10 +18,18 @@ all: test
 test: build
 	cargo test
 
-# Compile the contract to its deployable WASM binary.
+# Compile the contract to its deployable WASM binary using the canonical command.
+# This is the ONLY way contracts should be built for deployment.
+# Output: target/wasm32v1-none/release/vatix_market_contract.wasm
 build:
 	stellar contract build
-	@ls -l target/wasm32v1-none/release/*.wasm
+	@echo "WASM artifact:"
+	@ls -lh target/wasm32v1-none/release/*.wasm
+
+# Verify the WASM build is reproducible by displaying its hash.
+# Compare this hash across environments to ensure consistency.
+verify:
+	@bash ../../scripts/verify-wasm-hash.sh contracts/market
 
 fmt:
 	cargo fmt --all

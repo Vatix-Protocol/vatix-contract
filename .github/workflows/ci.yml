@@ -95,13 +95,35 @@ jobs:
           name: proptest-regressions
           path: contracts/market/src/.proptest-regressions
           if-no-files-found: ignore
+
+      # Install Stellar CLI for canonical contract building.
+      # The CLI is required for `stellar contract build`, which is the single
+      # source of truth for producing deployable WASM across Makefile, CI, and
+      # deployment scripts. This ensures artifact consistency.
+      - name: Install Stellar CLI
+        run: |
+          curl -L https://github.com/stellar/stellar-cli/releases/download/v21.4.0/stellar-cli-21.4.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv stellar /usr/local/bin/
+          stellar --version
       
-      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
-      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
-      # contracts/market/Makefile; run `cd contracts/market && make build` locally
-      # to reproduce this check and see the output WASM size.
+      # Build the contract using the canonical command: `stellar contract build`.
+      # This mirrors the Makefile target and deploy-testnet.sh flow, ensuring that
+      # the WASM artifact produced here is byte-for-byte identical to what would be
+      # deployed to the network. The artifact is written to:
+      #   target/wasm32v1-none/release/*.wasm
+      #
+      # Previously, CI used `cargo build --target wasm32-unknown-unknown` which
+      # produces different artifacts and creates a mismatch risk. Now unified on
+      # `stellar contract build` everywhere.
       - name: Build
-        run: cd contracts/market && cargo build --target wasm32-unknown-unknown
+        run: cd contracts/market && stellar contract build
+
+      # Verify the WASM artifact was created at the expected path
+      - name: Verify WASM artifact
+        run: |
+          ls -lh target/wasm32v1-none/release/*.wasm
+          echo "WASM artifact size:"
+          du -h target/wasm32v1-none/release/*.wasm
 
       # deploy.sh is a guard script that echoes deployment intent without
       # performing a real on-chain deployment. Running it in CI verifies the
