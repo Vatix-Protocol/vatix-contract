@@ -89,6 +89,13 @@ pub enum ContractError {
     /// Outcome must be a valid boolean value.
     InvalidOutcome = 22,
 
+    /// Reflector oracle returned no price for the requested asset.
+    ///
+    /// Occurs when `lastprice(asset)` returns `None` — the asset may be
+    /// unsupported, the oracle may not have a recent price, or the Reflector
+    /// node network may be temporarily disconnected.
+    OraclePriceUnavailable = 23,
+
     // ========== Validation Errors (30-39) ==========
     /// Price is out of valid range (must be between 0 and 1).
     ///
@@ -178,6 +185,7 @@ mod tests {
         assert_eq!(ContractError::InvalidSignature as u32, 20);
         assert_eq!(ContractError::UnauthorizedOracle as u32, 21);
         assert_eq!(ContractError::InvalidOutcome as u32, 22);
+        assert_eq!(ContractError::OraclePriceUnavailable as u32, 23);
         assert_eq!(ContractError::InvalidPrice as u32, 30);
         assert_eq!(ContractError::InvalidQuantity as u32, 31);
         assert_eq!(ContractError::InvalidTimestamp as u32, 32);
