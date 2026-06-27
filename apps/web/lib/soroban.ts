@@ -1,43 +1,30 @@
 /**
- * Thin Soroban RPC helpers.
+ * Soroban RPC helpers using @stellar/stellar-sdk.
  *
- * No stellar-sdk — uses the JSON-RPC HTTP API directly.
  * All config comes from Next.js public env vars.
  */
 
-export const CONTRACT_ID =
-  process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
+import {
+  Contract,
+  Networks,
+  nativeToScVal,
+  SorobanRpc,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
+
+export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
 
 export const SOROBAN_RPC_URL =
-  process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
+  process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
+  "https://soroban-testnet.stellar.org";
 
 export const NETWORK_PASSPHRASE =
   process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ??
-  "Test SDF Network ; September 2015";
+  Networks.TESTNET;
 
 export const HORIZON_URL =
-  process.env.NEXT_PUBLIC_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
-
-// ---------------------------------------------------------------------------
-// RPC helpers
-// ---------------------------------------------------------------------------
-
-interface RpcResponse<T> {
-  result?: T;
-  error?: { message: string };
-}
-
-async function rpc<T>(method: string, params: unknown): Promise<T> {
-  const res = await fetch(SOROBAN_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-  });
-  const json: RpcResponse<T> = await res.json();
-  if (json.error) throw new Error(json.error.message);
-  if (!json.result) throw new Error("Empty RPC result");
-  return json.result;
-}
+  process.env.NEXT_PUBLIC_HORIZON_URL ??
+  "https://horizon-testnet.stellar.org";
 
 // ---------------------------------------------------------------------------
 // Market reads (contract or indexer)
@@ -66,10 +53,19 @@ export async function fetchContractMarkets(): Promise<GetMarketsResult> {
     return { markets: [] };
   }
   try {
-    return await rpc<GetMarketsResult>("getContractData", {
-      contract: CONTRACT_ID,
-      key: "MARKETS",
-    });
+    const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+    // `getContractData` is a low-level key/value read; the actual key depends
+    // on your indexer. Adjust StorageKey to match your contract's storage layout.
+    const result = await server.getContractData(
+      CONTRACT_ID,
+      nativeToScVal("MARKETS"),
+      SorobanRpc.Durability.Persistent,
+    );
+    if (!result || !result.val) {
+      return { markets: [] };
+    }
+    // Deserialisation depends on your indexer schema; return empty until wired.
+    return { markets: [] };
   } catch {
     return { markets: [] };
   }
@@ -78,12 +74,6 @@ export async function fetchContractMarkets(): Promise<GetMarketsResult> {
 // ---------------------------------------------------------------------------
 // Signed invocations
 // ---------------------------------------------------------------------------
-
-interface SimulateResult {
-  transactionData: string;
-  results: Array<{ xdr: string }>;
-  minResourceFee: string;
-}
 
 interface SendResult {
   hash: string;
@@ -94,9 +84,11 @@ interface SendResult {
  * Invoke a contract function using Freighter for signing.
  *
  * Flow:
- *   1. Build an unsigned transaction XDR via Soroban RPC simulateTransaction
- *   2. Sign with Freighter
- *   3. Submit the signed XDR via Soroban RPC sendTransaction
+ *   1. Fetch the caller's account from Horizon (sequence number)
+ *   2. Build an unsigned InvokeHostFunction transaction via stellar-sdk
+ *   3. Simulate via Soroban RPC (fills resource fees)
+ *   4. Sign with Freighter
+ *   5. Submit via Soroban RPC
  */
 export async function invokeContract(
   functionName: "deposit" | "withdraw",
@@ -104,55 +96,50 @@ export async function invokeContract(
 ): Promise<{ hash: string }> {
   if (!CONTRACT_ID) {
     throw new Error(
-      "NEXT_PUBLIC_CONTRACT_ID is not set. " +
-        "Add it to your .env.local file.",
+      "NEXT_PUBLIC_CONTRACT_ID is not set. Add it to your .env.local file.",
     );
   }
 
-  // 1. Simulate to obtain a ready-to-sign transaction XDR
-  const simulateParams = {
-    transaction: buildInvokeXdr(functionName, args),
-    resourceConfig: { instructionLeeway: 3000000 },
-  };
-  const sim = await rpc<SimulateResult>(
-    "simulateTransaction",
-    simulateParams,
-  );
+  const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
 
-  // 2. Sign with Freighter
+  // 1. Load source account (needed for sequence number)
+  const account = await server.getAccount(args.address);
+
+  // 2. Build the transaction
+  const contract = new Contract(CONTRACT_ID);
+  const tx = new TransactionBuilder(account, {
+    fee: "100",
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      contract.call(
+        functionName,
+        nativeToScVal(args.address, { type: "address" }),
+        nativeToScVal(BigInt(args.amount), { type: "i128" }),
+      ),
+    )
+    .setTimeout(30)
+    .build();
+
+  // 3. Simulate to get resource fees and footprint
+  const sim = await server.simulateTransaction(tx);
+  if (SorobanRpc.Api.isSimulationError(sim)) {
+    throw new Error(`Simulation failed: ${sim.error}`);
+  }
+  const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
+
+  // 4. Sign with Freighter
   const { signTransaction } = await import("@stellar/freighter-api");
-  const { signedTxXdr, error } = await signTransaction(
-    sim.transactionData,
-    { networkPassphrase: NETWORK_PASSPHRASE, address: args.address },
-  );
+  const { signedTxXdr, error } = await signTransaction(preparedTx.toXDR(), {
+    networkPassphrase: NETWORK_PASSPHRASE,
+    address: args.address,
+  });
   if (error) throw new Error(error.message);
 
-  // 3. Submit
-  const sent = await rpc<SendResult>("sendTransaction", {
-    transaction: signedTxXdr,
-  });
+  // 5. Submit
+  const sent = await server.sendTransaction(
+    TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE),
+  ) as SendResult;
 
   return { hash: sent.hash };
-}
-
-// ---------------------------------------------------------------------------
-// Minimal XDR builder for invokeHostFunction
-//
-// Encodes a simple contract call as a Stellar transaction envelope XDR.
-// For production, replace this with @stellar/stellar-sdk's TransactionBuilder.
-// ---------------------------------------------------------------------------
-
-function buildInvokeXdr(
-  fn: string,
-  { amount, address }: { amount: string; address: string },
-): string {
-  // Base-64 encoded placeholder XDR that carries the intent.
-  // The Soroban RPC simulateTransaction call will validate and enrich it.
-  const payload = JSON.stringify({
-    contract: CONTRACT_ID,
-    function: fn,
-    args: [address, amount],
-    network: NETWORK_PASSPHRASE,
-  });
-  return Buffer.from(payload).toString("base64");
 }

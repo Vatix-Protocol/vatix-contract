@@ -9,6 +9,18 @@ pub enum MarketStatus {
     Canceled,
 }
 
+/// Represents the oracle adapter type used for market resolution.
+///
+/// This enum determines which oracle adapter (Ed25519, Reflector, or Pyth)
+/// will be used to verify the outcome when resolving the market.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum AdapterType {
+    Ed25519,
+    Reflector,
+    Pyth,
+}
+
 /// Core structure containing all relevant information for a Market.
 #[derive(Clone, Debug)]
 #[contracttype]
@@ -24,10 +36,12 @@ pub struct Market {
     pub collateral_token: Address,
     /// Current market price in basis points (0–10_000). Updated on every trade.
     pub price_bps: i128,
-    /// Price threshold for Reflector-based resolution (in Reflector's native
-    /// price units). The market resolves YES if `lastprice >= resolution_price`,
-    /// NO if `lastprice < resolution_price`. `None` for Ed25519-signed markets.
-    pub resolution_price: Option<i128>,
+    /// Address of the resolver who resolved this market (only set when status is Resolved).
+    pub resolver: Option<Address>,
+    /// Timestamp when the market was resolved (only set when status is Resolved).
+    pub resolved_at: Option<u64>,
+    /// Oracle adapter type used for resolving this market.
+    pub adapter_type: AdapterType,
 }
 
 /// Tracks the position and shares of a specific user in a market.
