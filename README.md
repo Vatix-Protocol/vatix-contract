@@ -12,21 +12,21 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 |---|---|---|---|
 | **Market** | `contracts/market` | ✅ Implemented | Market creation, position trading, oracle resolution, and settlement |
 | **Treasury** | `contracts/treasury` | ✅ Implemented | Protocol fee collection from withdrawal events; admin-controlled fee withdrawal |
-| **Outcome Token** | `contracts/outcome-token` | 🚧 Planned | Fungible SAC-compatible tokens representing YES/NO market outcomes |
-| **Resolution** | `contracts/resolution` | 🚧 Planned | Standalone oracle-based outcome resolution with dispute window |
+| **Outcome Token** | `contracts/outcome-token` | ✅ Implemented | Fungible SAC-compatible tokens representing YES/NO market outcomes |
+| **Resolution** | `contracts/resolution` | ✅ Implemented | Standalone oracle-based outcome resolution with dispute window |
 
-### Treasury → Market integration
+### Optional Market integrations
 
-The Treasury contract is linked to the Market contract via `set_treasury_contract`. Once registered:
+The Market contract can optionally wire supporting modules via admin-configured contract addresses. Once registered:
 
-1. Every `withdraw_unused_collateral` call deducts a 0.5% protocol fee (`FEE_BPS = 50`).
-2. The fee is forwarded to the Treasury contract via a cross-contract `collect_fee` call.
-3. The Treasury emits a `FeeCollected` event and accumulates a running total.
-4. The admin can drain accumulated fees at any time via `withdraw_fees`.
+1. `set_treasury` registers a Treasury contract address that receives fee deposits from `withdraw_unused_collateral`.
+2. `set_outcome_token_contract` registers an Outcome Token contract that mints/burns tokens when market positions change.
+3. `set_resolution_contract` registers a Resolution contract that gates `resolve_market` until a candidate is finalized.
+4. When configured, `withdraw_unused_collateral` computes a fee, transfers it to the Treasury, and records it via `collect_fee`.
 - **Market Contract**: Market creation, trading, and settlement logic
-- **Outcome Token**: Fungible tokens representing market outcomes
-- **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
 - **Treasury**: Fee collection and protocol management
+- **Outcome Token**: Mint/burn YES/NO outcome share tokens
+- **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
 
 ## Contract Status
 
@@ -35,7 +35,7 @@ The Treasury contract is linked to the Market contract via `set_treasury_contrac
 | Market | `contracts/market` | ✅ Complete | Trading, deposit, withdraw, settlement |
 | Outcome Token | `contracts/outcome-token` | ✅ Complete | Mint/burn YES/NO tokens; callable only by market contract |
 | Resolution | `contracts/resolution` | ✅ Complete | Challenge-window lifecycle for oracle candidates |
-| Treasury | — | 🔲 Not started | Fee collection and protocol management |
+| Treasury | `contracts/treasury` | ✅ Complete | Fee collection, custody, and admin withdrawal |
 
 ## Tech Stack
 
@@ -111,6 +111,7 @@ pnpm build:web
 ```bash
 # Prerequisites: Rust toolchain, Soroban CLI
 cd contracts/market && cargo build
+cd ../treasury && cargo build
 cd ../outcome-token && cargo build
 cd ../resolution && cargo build
 ```

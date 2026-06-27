@@ -2,7 +2,7 @@ use crate::error::ContractError;
 use crate::storage;
 use crate::types::{Market, MarketStatus, Position};
 use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Calculate payout for a position based on market outcome
 ///
@@ -140,6 +140,65 @@ pub fn settle_position(env: &Env, user: &Address, market_id: u32) -> Result<i128
     Ok(payout)
 }
 
+/// Settle multiple users' positions in a single call for a resolved market.
+///
+/// Iterates over `users`, calling [`settle_position`] for each. Positions that
+/// are already settled, not found, or encounter any other per-user error are
+/// skipped — the batch continues and the total payout across all successfully
+/// settled positions is returned.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `market_id` - Market identifier (must be resolved)
+/// * `users` - List of user addresses to settle
+///
+/// # Returns
+/// Total payout transferred across all settled positions, in stroops.
+///
+/// # Errors
+/// - [`ContractError::MarketNotFound`] – the market does not exist
+/// - [`ContractError::MarketNotResolved`] – the market is not resolved; in this
+///   case no individual settlements are attempted
+pub fn batch_settle_positions(
+    env: &Env,
+    market_id: u32,
+    users: Vec<Address>,
+) -> Result<i128, ContractError> {
+    // Validate the market once before iterating users.
+    let market = storage::get_market(env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+    if market.status != MarketStatus::Resolved {
+        return Err(ContractError::MarketNotResolved);
+    }
+
+    let mut total_payout: i128 = 0;
+
+    for user in users.iter() {
+        let Ok(Some(mut position)) = storage::get_position(env, market_id, &user) else {
+            continue;
+        };
+
+        // Skip already-settled positions and any unexpected state.
+        let Ok(payout) = execute_settlement(env, &mut position, &market) else {
+            continue;
+        };
+
+        // Persist the settled flag; skip if storage fails.
+        if storage::set_position(env, market_id, &user, &position).is_err() {
+            continue;
+        }
+
+        if payout > 0 {
+            let contract_address = env.current_contract_address();
+            let token_client = TokenClient::new(env, &market.collateral_token);
+            token_client.transfer(&contract_address, &user, &payout);
+        }
+
+        total_payout = total_payout.saturating_add(payout);
+    }
+
+    Ok(total_payout)
+}
+
 /// Calculate what a user would receive if they settled now
 ///
 /// # Arguments
@@ -187,6 +246,9 @@ mod tests {
             created_at: 0,
             collateral_token: Address::generate(env),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         }
     }
 
@@ -468,5 +530,271 @@ mod tests {
         // The market is still Active, so settlement must be rejected (#3).
         let result = client.try_settle_position(&user, &market_id);
         assert_eq!(result, Err(Ok(ContractError::MarketNotResolved)));
+    }
+
+    // --- #372: batch_settle_positions tests ---
+
+    /// Helper: full setup returning env, contract_id, client, market_id, and a
+    /// collateral token client — the market is resolved YES.
+    fn setup_resolved_market() -> (
+        soroban_sdk::Env,
+        soroban_sdk::Address, // contract_id
+        u32,                  // market_id
+        soroban_sdk::Address, // collateral_token
+    ) {
+        use crate::MarketContract;
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+        use soroban_sdk::{String, token::StellarAssetClient};
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        let outcome = true;
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let question = String::from_str(&env, "Batch settle test?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id =
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        // Mint and deposit for two users with YES shares
+        for _ in 0..2u8 {
+            let u = Address::generate(&env);
+            sac.mint(&u, &(100_000_000i128));
+            client.deposit_collateral(&u, &market_id, &(100_000_000i128));
+            client.update_position(&u, &market_id, &(100_000_000i128), &0i128, &5_000i128);
+        }
+
+        // Resolve YES
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &signature);
+
+        (env, contract_id, market_id, collateral_token)
+    }
+
+    #[test]
+    fn test_batch_settle_rejects_unresolved_market() {
+        use crate::MarketContract;
+        use soroban_sdk::String;
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let question = String::from_str(&env, "Still active?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id =
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        let users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        let result = env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, market_id, users)
+        });
+        assert_eq!(result, Err(ContractError::MarketNotResolved));
+    }
+
+    #[test]
+    fn test_batch_settle_returns_market_not_found_for_missing_market() {
+        use crate::MarketContract;
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(MarketContract, ());
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+        });
+
+        let users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        let result = env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, 999, users)
+        });
+        assert_eq!(result, Err(ContractError::MarketNotFound));
+    }
+
+    #[test]
+    fn test_batch_settle_skips_missing_positions() {
+        let (env, contract_id, market_id, _) = setup_resolved_market();
+        let ghost = Address::generate(&env);
+        let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        users.push_back(ghost);
+
+        let total = env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, market_id, users)
+        });
+        // Ghost has no position — batch returns 0, not an error.
+        assert_eq!(total, Ok(0));
+    }
+
+    #[test]
+    fn test_batch_settle_settles_multiple_users() {
+        use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+        use soroban_sdk::String;
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        const DEPOSIT: i128 = 100_000_000;
+        const SHARES: i128 = 100_000_000;
+        const STROOPS_PER_USDC: i128 = 10_000_000;
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+        let token_client = TokenClient::new(&env, &collateral_token);
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let question = String::from_str(&env, "Batch settle multi user?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token,
+        );
+
+        // Create two users, both buy YES shares.
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        for u in [&user1, &user2] {
+            sac.mint(u, &DEPOSIT);
+            client.deposit_collateral(u, &market_id, &DEPOSIT);
+            client.update_position(u, &market_id, &SHARES, &0i128, &5_000i128);
+        }
+
+        // Resolve YES.
+        let outcome = true;
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &outcome, &signature);
+
+        // Batch settle both users.
+        let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        users.push_back(user1.clone());
+        users.push_back(user2.clone());
+
+        let total_payout = env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, market_id, users)
+        })
+        .expect("batch settle should succeed");
+
+        // Both users should receive SHARES each.
+        assert_eq!(total_payout, SHARES * 2);
+        assert_eq!(token_client.balance(&user1), SHARES);
+        assert_eq!(token_client.balance(&user2), SHARES);
+
+        // Both positions are now marked settled.
+        for u in [&user1, &user2] {
+            let pos = env.as_contract(&contract_id, || {
+                storage::get_position(&env, market_id, u)
+                    .unwrap()
+                    .expect("position should exist")
+            });
+            assert!(pos.is_settled);
+        }
+    }
+
+    #[test]
+    fn test_batch_settle_skips_already_settled() {
+        use soroban_sdk::String;
+        use soroban_sdk::token::StellarAssetClient;
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        const DEPOSIT: i128 = 50_000_000;
+        const SHARES: i128 = 50_000_000;
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        StellarAssetClient::new(&env, &collateral_token).mint(&Address::generate(&env), &0);
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin,
+            &String::from_str(&env, "Skip settled?"),
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &DEPOSIT);
+        client.deposit_collateral(&user, &market_id, &DEPOSIT);
+        client.update_position(&user, &market_id, &SHARES, &0i128, &5_000i128);
+
+        let outcome = true;
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        client.resolve_market(&String::from_str(&env, "1"), &outcome, &signature);
+
+        // Settle once through the normal path.
+        client.settle_position(&user, &market_id);
+
+        // Batch settling the same user a second time must produce 0 payout,
+        // not an error.
+        let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        users.push_back(user.clone());
+        let second = env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, market_id, users)
+        });
+        assert_eq!(second, Ok(0));
     }
 }
