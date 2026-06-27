@@ -33,6 +33,12 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
+    /// Address of the deployed outcome-token contract. When set, `update_position`
+    /// mints/burns outcome tokens to reflect share balance changes.
+    OutcomeTokenContract,
+    /// Address of the deployed resolution contract. When set, `resolve_market`
+    /// requires a finalized candidate from this contract before accepting the outcome.
+    ResolutionContract,
 }
 
 // --- Version helpers ---
@@ -149,7 +155,7 @@ pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
         .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {

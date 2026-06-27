@@ -533,8 +533,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 0); // 0 bps
         });
 
@@ -578,8 +578,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
         });
 
@@ -621,8 +621,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
         });
 
@@ -662,8 +662,8 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
             // no treasury address is set
         });
@@ -718,10 +718,10 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury.clone()));
+            storage::set_treasury(&env, &treasury);
         });
 
         env.mock_all_auths();

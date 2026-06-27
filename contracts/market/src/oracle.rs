@@ -132,6 +132,8 @@ pub fn verify_market_outcome(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+    use std::format;
     use super::*;
     use crate::types::MarketStatus;
     use soroban_sdk::{
@@ -373,7 +375,7 @@ mod tests {
             "test vector signature must verify on-chain"
         );
 
-        let to_hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{:02x}", x)).collect() };
+        let to_hex = |b: &[u8]| -> std::string::String { b.iter().map(|x| format!("{:02x}", x)).collect() };
 
         let mut raw = [0u8; 5];
         raw[..4].copy_from_slice(&market_id.to_be_bytes());
