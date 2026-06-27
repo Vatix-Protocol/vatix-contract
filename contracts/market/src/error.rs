@@ -158,6 +158,13 @@ pub enum ContractError {
     /// A migration must be performed before the contract can be used.
     /// On testnet, redeploy and reinitialize the contract.
     UpgradeRequired = 70,
+
+    // ========== Resolution Errors (80-89) ==========
+    /// A resolution contract is registered but no finalized candidate exists
+    /// for this market, or the candidate has been challenged.
+    ///
+    /// Call `ResolutionContract::finalize` first, then retry `resolve_market`.
+    ResolutionNotFinalized = 80,
 }
 
 #[cfg(test)]

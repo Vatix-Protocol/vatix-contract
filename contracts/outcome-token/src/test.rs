@@ -179,3 +179,13 @@ fn non_admin_cannot_update_market_contract() {
         Err(Ok(ContractError::Unauthorized))
     );
 }
+
+// ── decimals ────────────────────────────────────────────────────────────────
+
+/// #405: decimals() returns 7 to match the Stellar Asset Contract (SAC) standard.
+#[test]
+fn decimals_returns_seven() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    assert_eq!(client.decimals(), 7u32);
+}
