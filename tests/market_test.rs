@@ -1,5 +1,4 @@
-//! Workspace integration tests for market creation and collateral deposit
-//! through the public `MarketContract` client.
+//! Workspace integration tests for market creation and collateral deposit.
 
 #[allow(dead_code)]
 mod helpers;
@@ -11,8 +10,6 @@ use vatix_market_contract::{storage, MarketContract, MarketContractClient};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
-/// Register the contract and configure its admin, returning the env, the admin
-/// address, and the contract id.
 fn init_contract() -> (Env, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -20,6 +17,7 @@ fn init_contract() -> (Env, Address, Address) {
     let contract_id = env.register(MarketContract, ());
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
     });
 
@@ -48,13 +46,13 @@ fn create_market_then_deposit_collateral() {
     assert_eq!(market_id, 1);
     assert_event_emitted(&env, "market_created_event");
 
-    // The created market is persisted with the expected parameters.
     let market = env.as_contract(&contract_id, || {
-        storage::get_market(&env, market_id).expect("market should exist")
+        storage::get_market(&env, market_id)
+            .unwrap()
+            .expect("market should exist")
     });
     assert_eq!(market.collateral_token, collateral_token);
 
-    // Deposit collateral and confirm the position total is tracked.
     let user = Address::generate(&env);
     let deposit = 25 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
@@ -62,7 +60,9 @@ fn create_market_then_deposit_collateral() {
     assert_event_emitted(&env, "collateral_deposited_event");
 
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .expect("position should exist")
     });
     assert_eq!(position.total_deposited, deposit);
 }
@@ -76,7 +76,6 @@ fn non_admin_cannot_create_market() {
     let non_admin = Address::generate(&env);
     let params = MarketParams::default_valid(&env);
 
-    // A caller that is not the stored admin must be rejected with NotAdmin (#41).
     client.initialize_market(
         &non_admin,
         &params.question,
