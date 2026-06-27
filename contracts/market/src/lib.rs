@@ -100,7 +100,7 @@ impl MarketContract {
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
@@ -125,7 +125,7 @@ impl MarketContract {
             return Err(ContractError::Unauthorized);
         }
         new_admin.require_auth();
-        let old_admin = storage::get_admin(&env);
+        let old_admin = storage::get_admin(&env)?;
         storage::set_admin(&env, &new_admin);
         storage::clear_pending_admin(&env);
         events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
@@ -172,6 +172,7 @@ impl MarketContract {
             created_at: current_time,
             collateral_token,
             price_bps: 5_000,
+            resolution_price: None,
         };
 
         // 5. Store market
@@ -559,13 +560,13 @@ impl MarketContract {
     ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
-    pub fn set_treasury(
+    pub fn set_treasury_contract(
         env: Env,
         admin: Address,
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }

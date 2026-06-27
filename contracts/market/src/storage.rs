@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, Env};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 1;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 pub enum StorageKey {
@@ -28,6 +28,9 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
+    /// Address of the deployed outcome-token contract used to mint/burn
+    /// outcome tokens for position updates. Optional.
+    OutcomeTokenContract,
 }
 
 // --- Version helpers ---
@@ -144,7 +147,7 @@ pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
         .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
@@ -153,6 +156,34 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     Ok(next_id)
+}
+
+// --- Treasury Storage ---
+
+/// Return the registered treasury contract address, if any.
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+/// Register (or replace) the treasury contract address for protocol fee routing.
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+// --- Outcome Token Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
 }
 
 // --- Fee Config Storage ---
@@ -257,6 +288,7 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolution_price: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -323,6 +355,7 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolution_price: Some(50_000_0000000i128),
         };
 
         let position = Position {
@@ -365,6 +398,7 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
+            assert_eq!(m.resolution_price, market.resolution_price);
 
             // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());

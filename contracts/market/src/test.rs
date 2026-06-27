@@ -777,7 +777,7 @@ mod test {
         client.accept_admin(&new_admin);
 
         env.as_contract(&contract_id, || {
-            assert_eq!(storage::get_admin(&env), new_admin);
+            assert_eq!(storage::get_admin(&env).unwrap(), new_admin);
             assert!(
                 storage::get_pending_admin(&env).is_none(),
                 "pending admin should be cleared after acceptance"

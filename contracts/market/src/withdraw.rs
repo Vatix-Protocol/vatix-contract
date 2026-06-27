@@ -173,6 +173,7 @@ mod tests {
             created_at: 0,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolution_price: None,
         }
     }
 
@@ -503,8 +504,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 0); // 0 bps
         });
 
@@ -519,7 +521,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 60); // 100 - 40 - 0 = 60
     }
@@ -548,8 +550,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
         });
 
@@ -566,7 +569,7 @@ mod tests {
         assert!(result.is_ok());
 
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 0); // 100 - 50 - 50 = 0
     }
@@ -591,8 +594,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
         });
 
@@ -632,8 +636,9 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
             // no treasury address is set
         });
@@ -652,7 +657,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
@@ -666,15 +671,22 @@ mod tests {
     #[test]
     fn test_withdraw_fee_routes_to_treasury() {
         use soroban_sdk::token::StellarAssetClient;
+        use vatix_treasury_contract::{TreasuryContract, TreasuryContractClient};
 
         let env = setup_env();
+        env.mock_all_auths();
+
         let user = Address::generate(&env);
-        let treasury = Address::generate(&env);
+        let admin = Address::generate(&env);
         let market_id = 1u32;
         let token_admin = Address::generate(&env);
         let token = env.register_stellar_asset_contract_v2(token_admin.clone());
         let collateral_token = token.address();
         let contract_id = env.register(crate::MarketContract, ());
+
+        // Register a real treasury so cross-contract collect_fee works.
+        let treasury_id = env.register(TreasuryContract, ());
+        TreasuryContractClient::new(&env, &treasury_id).initialize(&admin, &contract_id);
 
         let market = create_test_market(&env, market_id, &collateral_token);
         let position = Position {
@@ -688,13 +700,12 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury.clone()));
+            storage::set_treasury(&env, &treasury_id);
         });
-
-        env.mock_all_auths();
 
         let token_client = StellarAssetClient::new(&env, &collateral_token);
         token_client.mint(&contract_id, &100);
@@ -708,7 +719,7 @@ mod tests {
 
         // Position reduced by 44 (40 withdrawal + 4 fee)
         let updated = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(updated.total_deposited, 56);
 
@@ -716,7 +727,7 @@ mod tests {
         assert_eq!(user_token_client.balance(&user), 40);
 
         // Treasury receives 4
-        assert_eq!(user_token_client.balance(&treasury), 4);
+        assert_eq!(user_token_client.balance(&treasury_id), 4);
 
         // Contract balance decreases by 44 (original 100 - 44 = 56)
         assert_eq!(user_token_client.balance(&contract_id), 56);
