@@ -278,11 +278,14 @@ mod tests {
             end_time: 0,
             oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
             status: types::MarketStatus::Resolved,
-            collateral_token: <Address as TestAddress>::generate(env),
+            result: None,
             creator: <Address as TestAddress>::generate(env),
             created_at: 0,
-            result: None,
+            collateral_token: <Address as TestAddress>::generate(env),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         }
     }
 

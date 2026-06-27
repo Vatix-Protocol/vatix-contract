@@ -21,6 +21,11 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
+    /// Address of the deployed treasury contract.
+    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
+    /// only routed there when this key is populated and fee_amount > 0.
+    Treasury,
+    FeeRateBps,
     /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
     /// path to compute the protocol fee; defaults to 0 when unset.
     FeeRateBps,
@@ -28,9 +33,12 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
-    /// Address of the deployed outcome-token contract used to mint/burn
-    /// position tokens. Optional — token minting is skipped when unset.
+    /// Address of the deployed outcome-token contract. When set, `update_position`
+    /// mints/burns outcome tokens to reflect share balance changes.
     OutcomeTokenContract,
+    /// Address of the deployed resolution contract. When set, `resolve_market`
+    /// requires a finalized candidate from this contract before accepting the outcome.
+    ResolutionContract,
 }
 
 // --- Version helpers ---
@@ -173,30 +181,21 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
 }
 
-// --- Treasury Storage ---
-
 pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage().persistent().get(&StorageKey::Treasury)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Address) {
     env.storage()
         .persistent()
-        .set(&StorageKey::Treasury, treasury);
+        .get(&StorageKey::Treasury)
 }
 
-// --- Outcome Token Contract Storage ---
-
-pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::OutcomeTokenContract)
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
 }
 
-pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::OutcomeTokenContract, contract);
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
 }
 
 #[cfg(test)]
@@ -286,6 +285,9 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         env.as_contract(&contract_id, || {
@@ -352,6 +354,9 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         let position = Position {
