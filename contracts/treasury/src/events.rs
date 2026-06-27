@@ -1,13 +1,8 @@
-//! Event emission functions for the Vatix Treasury contract.
-//!
-//! All events are published to the Soroban event stream and indexed by the
-//! topics marked with `#[topic]`. Off-chain indexers can filter on these
-//! topics to reconstruct treasury activity without scanning all contract
-//! storage.
+//! Event emission helpers for the Vatix Treasury contract.
 
 use soroban_sdk::{contractevent, Address, Env};
 
-// ── Initialization ─────────────────────────────────────────────────────────
+// ── Initialization ────────────────────────────────────────────────────────────
 
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -15,78 +10,104 @@ pub struct TreasuryInitializedEvent {
     #[topic]
     pub admin: Address,
     #[topic]
-    pub authorized_market: Address,
+    pub market_contract: Address,
     pub initialized_at: u64,
 }
 
-/// Emit when the treasury is bootstrapped for the first time.
-pub fn emit_treasury_initialized(env: &Env, admin: &Address, authorized_market: &Address) {
+pub fn emit_treasury_initialized(env: &Env, admin: &Address, market_contract: &Address) {
     TreasuryInitializedEvent {
         admin: admin.clone(),
-        authorized_market: authorized_market.clone(),
+        market_contract: market_contract.clone(),
         initialized_at: env.ledger().timestamp(),
     }
     .publish(env);
 }
 
-// ── Fee collection ─────────────────────────────────────────────────────────
+// ── Fee collection ────────────────────────────────────────────────────────────
 
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct FeeCollectedEvent {
-    /// The SAC token address in which the fee was denominated.
+    /// Market that generated the fee.
+    #[topic]
+    pub market_id: u32,
+    /// Token in which the fee was paid.
     #[topic]
     pub token: Address,
-    /// Source market contract that triggered the collection.
-    #[topic]
-    pub market: Address,
-    /// Fee amount in stroops (1 USDC = 10^7 stroops).
-    pub amount: i128,
-    /// Running total of fees accumulated for this token.
-    pub cumulative: i128,
-    pub collected_at: u64,
+    /// Fee collected in this call (stroops).
+    pub fee_amount: i128,
+    /// Current custodied balance of `token` after this call.
+    pub new_token_balance: i128,
+    /// Cumulative fees for `token` after this call (monotone).
+    pub new_cumulative_fees: i128,
 }
 
-/// Emit when the market contract transfers a protocol fee into the treasury.
 pub fn emit_fee_collected(
     env: &Env,
+    market_id: u32,
     token: &Address,
-    market: &Address,
-    amount: i128,
-    cumulative: i128,
+    fee_amount: i128,
+    new_token_balance: i128,
+    new_cumulative_fees: i128,
 ) {
     FeeCollectedEvent {
+        market_id,
         token: token.clone(),
-        market: market.clone(),
-        amount,
-        cumulative,
-        collected_at: env.ledger().timestamp(),
+        fee_amount,
+        new_token_balance,
+        new_cumulative_fees,
     }
     .publish(env);
 }
 
-// ── Admin withdrawal ───────────────────────────────────────────────────────
+// ── Admin withdrawal ──────────────────────────────────────────────────────────
 
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct FeesWithdrawnEvent {
     #[topic]
-    pub admin: Address,
-    #[topic]
     pub token: Address,
+    #[topic]
     pub to: Address,
     pub amount: i128,
-    pub withdrawn_at: u64,
+    pub remaining_token_balance: i128,
 }
 
-/// Emit when the admin withdraws accumulated fees to an external address.
-pub fn emit_fees_withdrawn(env: &Env, admin: &Address, token: &Address, to: &Address, amount: i128) {
+pub fn emit_fees_withdrawn(
+    env: &Env,
+    token: &Address,
+    to: &Address,
+    amount: i128,
+    remaining_token_balance: i128,
+) {
     FeesWithdrawnEvent {
-        admin: admin.clone(),
         token: token.clone(),
         to: to.clone(),
         amount,
-        withdrawn_at: env.ledger().timestamp(),
+        remaining_token_balance,
+    }
+    .publish(env);
+}
+
+// ── Market contract rotation ──────────────────────────────────────────────────
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketContractUpdatedEvent {
+    #[topic]
+    pub old_market_contract: Address,
+    #[topic]
+    pub new_market_contract: Address,
+}
+
+pub fn emit_market_contract_updated(
+    env: &Env,
+    old_market_contract: &Address,
+    new_market_contract: &Address,
+) {
+    MarketContractUpdatedEvent {
+        old_market_contract: old_market_contract.clone(),
+        new_market_contract: new_market_contract.clone(),
     }
     .publish(env);
 }

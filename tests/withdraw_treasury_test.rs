@@ -36,15 +36,15 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
     env.as_contract(&market_addr, || {
         storage::set_version(&env);
         storage::set_admin(&env, &admin);
+        storage::set_version(&env);
+        storage::set_fee_rate_bps(&env, FEE_BPS);
     });
 
     let treasury_addr = env.register(TreasuryContract, ());
     TreasuryContractClient::new(&env, &treasury_addr)
         .initialize(&admin, &market_addr);
 
-    let market = MarketContractClient::new(&env, &market_addr);
-    market.set_treasury_contract(&admin, &treasury_addr);
-    market.set_fee_rate(&admin, &FEE_BPS);
+    MarketContractClient::new(&env, &market_addr).set_treasury(&admin, &treasury_addr);
 
     let token_admin = Address::generate(&env);
     let collateral_token = env
@@ -102,6 +102,11 @@ fn withdraw_routes_half_percent_fee_to_treasury() {
         expected_fee,
         "treasury holds the 50 bps fee"
     );
+    assert_eq!(
+        treasury.total_collected(),
+        expected_fee,
+        "cumulative counter updated"
+    );
 }
 
 #[test]
@@ -124,6 +129,7 @@ fn multiple_withdrawals_accumulate_fees() {
     market.withdraw_unused_collateral(&user, &market_id, &w2);
 
     let total_fee = fee_for(w1) + fee_for(w2);
+    assert_eq!(treasury.total_collected(), total_fee);
     assert_eq!(treasury.token_balance(&token), total_fee);
 }
 
@@ -139,6 +145,7 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     env.as_contract(&market_addr, || {
         storage::set_version(&env);
         storage::set_admin(&env, &admin);
+        storage::set_version(&env);
     });
     let market = MarketContractClient::new(&env, &market_addr);
 
@@ -200,6 +207,11 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
         "live balance drained after admin withdrawal"
     );
     assert_eq!(
+        treasury.total_collected(),
+        collected,
+        "cumulative counter is monotone and does not decrease"
+    );
+    assert_eq!(
         TokenClient::new(&env, &token).balance(&fee_recipient),
         collected,
         "fee recipient holds the withdrawn amount"
@@ -210,30 +222,18 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
 
 #[test]
 fn non_admin_cannot_withdraw_treasury_fees() {
-    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
-    let market = MarketContractClient::new(&env, &market_addr);
+    let (env, _market_addr, treasury_addr, _admin, token) = setup_with_treasury();
     let treasury = TreasuryContractClient::new(&env, &treasury_addr);
 
-    let market_id = open_market(&env, &market, &admin, &token);
-
-    let user = Address::generate(&env);
-    let deposit = 100 * STROOPS_PER_USDC;
-    StellarAssetClient::new(&env, &token).mint(&user, &deposit);
-    market.deposit_collateral(&user, &market_id, &deposit);
-    
-    // Withdraw amount that allows for fee
-    let withdraw_amount = 99_500_000; // 99.5 USDC
-    market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
-
-    let collected = fee_for(withdraw_amount);
     let imposter = Address::generate(&env);
     let err = treasury
-        .try_withdraw_fees(&imposter, &token, &imposter, &collected)
+        .try_withdraw_fees(&imposter, &token, &imposter, &1i128)
         .unwrap_err()
         .unwrap();
 
-    assert!(
-        matches!(err, vatix_treasury_contract::TreasuryError::Unauthorized),
+    assert_eq!(
+        err,
+        vatix_treasury_contract::TreasuryError::Unauthorized,
         "imposter must not be allowed to drain the treasury"
     );
 }

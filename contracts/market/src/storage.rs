@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, Env};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 1;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 pub enum StorageKey {
@@ -21,6 +21,11 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
+    /// Address of the deployed treasury contract.
+    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
+    /// only routed there when this key is populated and fee_amount > 0.
+    Treasury,
+    FeeRateBps,
     /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
     /// path to compute the protocol fee; defaults to 0 when unset.
     FeeRateBps,
@@ -28,9 +33,12 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
-    /// Address of the deployed outcome-token contract used to mint and burn
-    /// outcome tokens when positions are updated.
+    /// Address of the deployed outcome-token contract. When set, `update_position`
+    /// mints/burns outcome tokens to reflect share balance changes.
     OutcomeTokenContract,
+    /// Address of the deployed resolution contract. When set, `resolve_market`
+    /// requires a finalized candidate from this contract before accepting the outcome.
+    ResolutionContract,
 }
 
 // --- Version helpers ---
@@ -158,6 +166,34 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
     Ok(next_id)
 }
 
+// --- Treasury Storage ---
+
+/// Return the registered treasury contract address, if any.
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+/// Register (or replace) the treasury contract address for protocol fee routing.
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+// --- Outcome Token Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
+}
+
 // --- Fee Config Storage ---
 
 pub fn get_fee_rate_bps(env: &Env) -> i128 {
@@ -173,8 +209,6 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
 }
 
-// --- Treasury Storage ---
-
 pub fn get_treasury(env: &Env) -> Option<Address> {
     env.storage()
         .persistent()
@@ -182,29 +216,14 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    if let Some(addr) = treasury {
-        env.storage()
-            .persistent()
-            .set(&StorageKey::Treasury, addr);
-    } else {
-        env.storage()
-            .persistent()
-            .remove(&StorageKey::Treasury);
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
     }
 }
 
-// --- Outcome Token Contract Storage ---
-
-pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::OutcomeTokenContract)
-}
-
-pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::OutcomeTokenContract, contract);
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
 }
 
 #[cfg(test)]
@@ -294,6 +313,9 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         env.as_contract(&contract_id, || {
@@ -360,6 +382,9 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         let position = Position {
@@ -402,6 +427,7 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
+            assert_eq!(m.resolution_price, market.resolution_price);
 
             // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());
@@ -425,6 +451,99 @@ mod test {
             // Market slot is unchanged after position write
             let m2 = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m2.id, market.id);
+        });
+    }
+
+    // ── #406 Cold upgrade migration test vectors ─────────────────────────────
+
+    /// Vector 1: a completely fresh contract (no storage at all) behaves
+    /// identically to a stale-version contract — both must return
+    /// `UpgradeRequired` and never panic.
+    #[test]
+    fn migration_v0_missing_version_blocks_all_storage_access() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            // No version written — simulates a cold-started or pre-v1 deployment.
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+            assert_eq!(
+                get_market(&env, 1),
+                Err(ContractError::UpgradeRequired)
+            );
+            assert_eq!(
+                get_position(&env, 1, &user),
+                Err(ContractError::UpgradeRequired)
+            );
+            assert_eq!(
+                get_next_market_id(&env),
+                Err(ContractError::UpgradeRequired)
+            );
+        });
+    }
+
+    /// Vector 2: a stale version (v0 = 0) written before the current
+    /// `STORAGE_VERSION` must be rejected by `assert_version`.
+    #[test]
+    fn migration_stale_version_zero_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            // Simulate a pre-upgrade deployment by writing version 0.
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &0u32);
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Vector 3: after `set_version` (the migration step), `assert_version`
+    /// passes and all storage ops work normally.
+    #[test]
+    fn migration_after_set_version_storage_is_accessible() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let collateral_token = Address::generate(&env);
+
+        let market = Market {
+            id: 1,
+            question: String::from_str(&env, "post-migration market?"),
+            end_time: 9_000_000,
+            oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token,
+            price_bps: 5_000,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Simulate the upgrade: write the current version.
+            set_version(&env);
+            assert_eq!(assert_version(&env), Ok(()));
+
+            // Storage ops succeed post-migration.
+            set_market(&env, 1, &market).unwrap();
+            let m = get_market(&env, 1).unwrap().unwrap();
+            assert_eq!(m.id, 1);
+        });
+    }
+
+    /// Vector 4: any version number other than `STORAGE_VERSION` is rejected,
+    /// guarding against forward-compatibility accidents.
+    #[test]
+    fn migration_future_version_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
         });
     }
 }

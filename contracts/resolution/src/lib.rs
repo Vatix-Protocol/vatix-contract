@@ -177,16 +177,16 @@ impl ResolutionContract {
 
     /// Finalize an unchallenged candidate after its challenge window closes.
     ///
-    /// This does not call `resolve_market` directly. It returns the signed
-    /// candidate payload so the backend/factory can submit
-    /// `market.resolve_market(market_id, outcome, signature)` as the final
-    /// market-state transition.
+    /// After marking the candidate as `Finalized`, immediately invokes
+    /// `resolve_market(market_id, outcome, signature)` on the registered
+    /// market contract so the market state is settled atomically.
     pub fn finalize(
         env: Env,
         finalizer: Address,
         candidate_id: u32,
     ) -> Result<ResolutionCandidate, ContractError> {
         finalizer.require_auth();
+        let config = storage::get_config(&env);
         let mut candidate =
             storage::get_candidate(&env, candidate_id).ok_or(ContractError::CandidateNotFound)?;
 
@@ -204,6 +204,20 @@ impl ResolutionContract {
         candidate.finalized_at = Some(env.ledger().timestamp());
         storage::set_candidate(&env, &candidate);
         events::emit_candidate_finalized(&env, &candidate);
+
+        // Cross-contract callback: resolve the market with the finalized outcome.
+        let args: Vec<Val> = soroban_sdk::vec![
+            &env,
+            candidate.market_id.into_val(&env),
+            candidate.outcome.into_val(&env),
+            candidate.signature.clone().into_val(&env),
+        ];
+        let _: () = env.invoke_contract(
+            &config.market_contract,
+            &Symbol::new(&env, "resolve_market"),
+            args,
+        );
+
         Ok(candidate)
     }
 
