@@ -24,6 +24,10 @@ pub struct Market {
     pub collateral_token: Address,
     /// Current market price in basis points (0–10_000). Updated on every trade.
     pub price_bps: i128,
+    /// Price threshold for Reflector-based resolution (in Reflector's native
+    /// price units). The market resolves YES if `lastprice >= resolution_price`,
+    /// NO if `lastprice < resolution_price`. `None` for Ed25519-signed markets.
+    pub resolution_price: Option<i128>,
 }
 
 /// Tracks the position and shares of a specific user in a market.

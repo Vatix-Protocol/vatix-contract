@@ -283,6 +283,7 @@ mod tests {
             created_at: 0,
             result: None,
             price_bps: 5_000,
+            resolution_price: None,
         }
     }
 
