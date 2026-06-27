@@ -617,6 +617,13 @@ impl MarketContract {
         Ok(())
     }
 
+    /// Return the current withdrawal fee rate in basis points.
+    ///
+    /// Returns 0 if no fee rate has been configured.
+    pub fn get_fee_rate(env: Env) -> i128 {
+        storage::get_fee_rate_bps(&env)
+    }
+
     /// Register the deployed outcome-token contract address used by this
     /// market contract to mint and burn outcome tokens for position updates.
     ///

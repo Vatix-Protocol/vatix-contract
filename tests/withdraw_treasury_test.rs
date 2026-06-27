@@ -34,6 +34,7 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
 
     let market_addr = env.register(MarketContract, ());
     env.as_contract(&market_addr, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
         storage::set_version(&env);
         storage::set_fee_rate_bps(&env, FEE_BPS);
@@ -142,10 +143,14 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     let admin = Address::generate(&env);
     let market_addr = env.register(MarketContract, ());
     env.as_contract(&market_addr, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
         storage::set_version(&env);
     });
     let market = MarketContractClient::new(&env, &market_addr);
+
+    // Set fee rate but no treasury - fee will be retained in contract
+    market.set_fee_rate(&admin, &FEE_BPS);
 
     let token_admin = Address::generate(&env);
     let token = env
@@ -159,12 +164,18 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
 
-    market.withdraw_unused_collateral(&user, &market_id, &deposit);
+    // Calculate how much we can actually withdraw: available - fee
+    // With 50 bps fee: withdraw = deposit / (1 + 0.005) ≈ deposit * 0.995
+    let withdraw_amount = 49_750_000; // leaves room for fee
+    market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
+
+    let expected_fee = fee_for(withdraw_amount);
+    let expected_user_balance = withdraw_amount;
 
     assert_eq!(
         TokenClient::new(&env, &token).balance(&user),
-        deposit,
-        "no treasury → user receives 100% with no fee deducted"
+        expected_user_balance,
+        "no treasury → user receives amount minus fee (fee retained in contract)"
     );
 }
 
@@ -225,4 +236,61 @@ fn non_admin_cannot_withdraw_treasury_fees() {
         vatix_treasury_contract::TreasuryError::Unauthorized,
         "imposter must not be allowed to drain the treasury"
     );
+}
+
+// ── fee rate configuration ────────────────────────────────────────────────────
+
+#[test]
+fn admin_can_set_fee_rate() {
+    let (env, market_addr, _treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+
+    // Initially set to 50 bps by setup
+    assert_eq!(market.get_fee_rate(), FEE_BPS);
+
+    // Admin can change it
+    market.set_fee_rate(&admin, &100); // 1%
+    assert_eq!(market.get_fee_rate(), 100);
+
+    // Admin can disable fees
+    market.set_fee_rate(&admin, &0);
+    assert_eq!(market.get_fee_rate(), 0);
+
+    // Verify withdrawal with zero fee returns full amount
+    let market_id = open_market(&env, &market, &admin, &token);
+    let user = Address::generate(&env);
+    let deposit = 100 * STROOPS_PER_USDC;
+    StellarAssetClient::new(&env, &token).mint(&user, &deposit);
+    market.deposit_collateral(&user, &market_id, &deposit);
+    market.withdraw_unused_collateral(&user, &market_id, &deposit);
+
+    assert_eq!(
+        TokenClient::new(&env, &token).balance(&user),
+        deposit,
+        "zero fee rate → user receives full amount"
+    );
+}
+
+#[test]
+fn non_admin_cannot_set_fee_rate() {
+    let (env, market_addr, _treasury_addr, _admin, _token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let imposter = Address::generate(&env);
+
+    let result = market.try_set_fee_rate(&imposter, &100);
+    assert!(result.is_err(), "non-admin must not be able to set fee rate");
+}
+
+#[test]
+fn invalid_fee_rate_rejected() {
+    let (env, market_addr, _treasury_addr, admin, _token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+
+    // Fee rate > 10000 bps (100%) should be rejected
+    let result = market.try_set_fee_rate(&admin, &10001);
+    assert!(result.is_err(), "fee rate > 10000 bps must be rejected");
+
+    // Negative fee rate should be rejected
+    let result = market.try_set_fee_rate(&admin, &-1);
+    assert!(result.is_err(), "negative fee rate must be rejected");
 }

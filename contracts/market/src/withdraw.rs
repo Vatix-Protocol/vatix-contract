@@ -102,14 +102,9 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // Collateral available to withdraw is what remains after reserving the fee
-    // and the amount locked to back the user's current YES/NO shares.
-    let total_deposited_after_fee = position
-        .total_deposited
-        .checked_sub(fee_amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
-    let available = if total_deposited_after_fee > required_lock {
-        total_deposited_after_fee - required_lock
+    // Calculate collateral available to withdraw (not locked by positions).
+    let available = if position.total_deposited > required_lock {
+        position.total_deposited - required_lock
     } else {
         0
     };
@@ -129,7 +124,7 @@ pub fn withdraw_unused_collateral(
     emit_fee_calculated(&env, market_id, &user, fee_amount, available);
 
     // The user must have `amount + fee_amount` of unlocked collateral so that
-    // the net transfer to them remains exactly `amount`.
+    // the net transfer to them remains exactly `amount` (fee is deducted separately).
     let total_required = amount
         .checked_add(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
@@ -469,7 +464,7 @@ mod tests {
         let updated = env.as_contract(&contract_id, || {
             storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
-        assert_eq!(updated.total_deposited, 60);
+        assert_eq!(updated.total_deposited, 60); // 100 - 40 - 0 = 60
     }
 
     #[test]
@@ -581,6 +576,7 @@ mod tests {
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
+            // No treasury set - fee will be retained in contract
         });
 
         env.mock_all_auths();
@@ -593,12 +589,12 @@ mod tests {
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 50)
         });
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "withdrawal should succeed");
 
         let updated = env.as_contract(&contract_id, || {
             storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
-        assert_eq!(updated.total_deposited, 0); // 100 - 50 - 50 = 0
+        assert_eq!(updated.total_deposited, 0); // 100 - 50 (withdrawal) - 50 (fee) = 0
     }
 
     #[test]
@@ -693,6 +689,8 @@ mod tests {
         assert_eq!(user_token_client.balance(&contract_id), 60);
     }
 
+    /// Test that treasury routing is tested in integration tests (tests/withdraw_treasury_test.rs)
+    /// This unit test just verifies the fee calculation logic without invoking the treasury contract.
     #[test]
     fn test_withdraw_fee_routes_to_treasury() {
         use soroban_sdk::token::StellarAssetClient;

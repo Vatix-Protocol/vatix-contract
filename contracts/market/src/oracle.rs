@@ -346,6 +346,7 @@ mod tests {
     /// Writes `test-vectors/oracle-message.json` at the workspace root.
     /// Run with `cargo test export_oracle_test_vector -- --nocapture`.
     #[test]
+    #[cfg(feature = "std")]
     fn export_oracle_test_vector() {
         use ed25519_dalek::{Signer, SigningKey};
 
