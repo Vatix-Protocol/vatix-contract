@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, Env};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 1;
+pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
 pub enum StorageKey {
@@ -257,6 +257,7 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolution_price: None,
         };
 
         env.as_contract(&contract_id, || {
@@ -323,6 +324,7 @@ mod test {
             created_at: 1_000_000u64,
             collateral_token: collateral_token.clone(),
             price_bps: 5_000,
+            resolution_price: Some(50_000_0000000i128),
         };
 
         let position = Position {
@@ -365,6 +367,7 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
+            assert_eq!(m.resolution_price, market.resolution_price);
 
             // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());

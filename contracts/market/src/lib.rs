@@ -172,6 +172,7 @@ impl MarketContract {
             created_at: current_time,
             collateral_token,
             price_bps: 5_000,
+            resolution_price: None,
         };
 
         // 5. Store market
