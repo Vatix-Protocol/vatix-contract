@@ -160,6 +160,13 @@ impl MarketContract {
         // 3. Generate market ID
         let market_id = storage::increment_market_id(&env)?;
 
+        // Guard: the generated ID must not already be in storage.
+        // Under normal operation this cannot happen (the counter is monotonic),
+        // but we reject explicitly to prevent any accidental overwrite.
+        if storage::has_market(&env, market_id)? {
+            return Err(ContractError::AlreadyInitialized);
+        }
+
         // 4. Create Market struct
         let market = Market {
             id: market_id,
@@ -543,6 +550,35 @@ impl MarketContract {
         settlement::settle_position(&env, &user, market_id)
     }
 
+    /// Settle multiple users' positions in a resolved market in one call.
+    ///
+    /// This is a batched variant of [`settle_position`] intended for operators
+    /// settling many users at once (e.g. a cron job after resolution). Each
+    /// user is settled independently; already-settled or missing positions are
+    /// silently skipped so a single bad entry does not abort the whole batch.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `market_id` - Market identifier (must be resolved)
+    /// * `users` - Addresses to settle
+    ///
+    /// # Returns
+    /// Total collateral (in stroops) transferred across all settled positions.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] - the market does not exist
+    /// - [`ContractError::MarketNotResolved`] - the market is not resolved
+    ///
+    /// # Events
+    /// Emits `PositionSettled` for each successfully settled position.
+    pub fn batch_settle_positions(
+        env: Env,
+        market_id: u32,
+        users: soroban_sdk::Vec<Address>,
+    ) -> Result<i128, ContractError> {
+        settlement::batch_settle_positions(&env, market_id, users)
+    }
+
     /// Register the treasury contract address for protocol fee routing.
     ///
     /// Once set, any non-zero withdrawal fee computed during
@@ -565,7 +601,7 @@ impl MarketContract {
         treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }

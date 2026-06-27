@@ -691,7 +691,7 @@ mod tests {
             storage::set_market(&env, market_id, &market);
             storage::set_position(&env, market_id, &user, &position);
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury.clone()));
+            storage::set_treasury(&env, &treasury);
         });
 
         env.mock_all_auths();

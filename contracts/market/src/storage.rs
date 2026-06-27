@@ -28,6 +28,9 @@ pub enum StorageKey {
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
+    /// Address of the deployed outcome-token contract used for minting and
+    /// burning YES/NO tokens when positions are updated.
+    OutcomeTokenContract,
 }
 
 // --- Version helpers ---
@@ -144,7 +147,7 @@ pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
         .storage()
         .persistent()
         .get(&StorageKey::MarketCounter)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
@@ -168,6 +171,32 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Treasury Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+// --- Outcome Token Contract Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
 }
 
 #[cfg(test)]
