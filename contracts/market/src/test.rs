@@ -641,7 +641,7 @@ mod test {
 
         // The persisted position matches the returned one
         let stored = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(stored.yes_shares, yes);
         assert_eq!(stored.locked_collateral, 60 * STROOPS_PER_USDC);
@@ -777,7 +777,7 @@ mod test {
         client.accept_admin(&new_admin);
 
         env.as_contract(&contract_id, || {
-            assert_eq!(storage::get_admin(&env), new_admin);
+            assert_eq!(storage::get_admin(&env).unwrap(), new_admin);
             assert!(
                 storage::get_pending_admin(&env).is_none(),
                 "pending admin should be cleared after acceptance"
