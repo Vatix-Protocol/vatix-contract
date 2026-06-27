@@ -1,5 +1,4 @@
-//! End-to-end workspace integration test covering the full market lifecycle:
-//! init -> create market -> deposit -> buy shares -> resolve -> settle.
+//! End-to-end workspace integration test covering the full market lifecycle.
 
 #[allow(dead_code)]
 mod helpers;
@@ -13,9 +12,6 @@ use vatix_market_contract::{settlement, storage, MarketContract, MarketContractC
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
-/// Generate an Ed25519 keypair and sign the oracle message for the given
-/// `(market_id, outcome)`, returning the public key and signature the contract
-/// expects in `resolve_market`.
 fn oracle_keypair_and_signature(
     env: &Env,
     market_id: u32,
@@ -45,19 +41,16 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     let contract_id = env.register(MarketContract, ());
     let client = MarketContractClient::new(&env, &contract_id);
 
-    // --- init: configure the contract admin ---
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
     });
 
-    // A real Stellar asset so deposits perform an actual token transfer.
     let token_admin = Address::generate(&env);
     let token = env.register_stellar_asset_contract_v2(token_admin);
     let collateral_token = token.address();
 
-    // --- create market ---
-    // Market IDs are auto-incremented from 1, so we can sign for id 1 up front.
     let outcome = true;
     let (oracle_pubkey, signature) = oracle_keypair_and_signature(&env, 1, outcome);
 
@@ -75,17 +68,14 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     assert_eq!(market_id, 1);
     assert_event_emitted(&env, "market_created_event");
 
-    // --- deposit collateral ---
     let user = Address::generate(&env);
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
     assert_event_emitted(&env, "collateral_deposited_event");
 
-    // --- buy YES shares so the resolved position has a payout ---
     let yes_shares = 100 * STROOPS_PER_USDC;
     client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
-    // The last emitted event should be trade_executed
     assert_event_emitted(&env, "trade_executed_event");
 
     // --- resolve the market (YES wins) ---
@@ -94,14 +84,16 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
     assert_event_emitted(&env, "market_resolved_event");
 
-    // --- settle the user's winning position ---
     let payout = env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
-        let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
+        let market = storage::get_market(&env, market_id)
+            .unwrap()
+            .expect("market should exist");
+        let mut position = storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .expect("position should exist");
         let payout = settlement::execute_settlement(&env, &mut position, &market)
             .expect("settlement should succeed");
-        storage::set_position(&env, market_id, &user, &position);
+        storage::set_position(&env, market_id, &user, &position).unwrap();
         payout
     });
 
@@ -109,7 +101,9 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     assert_event_emitted(&env, "position_settled_event");
 
     let settled = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).expect("position should exist")
+        storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .expect("position should exist")
     });
     assert!(settled.is_settled);
 }
@@ -125,6 +119,7 @@ fn settlement_before_resolution_is_rejected() {
 
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
     });
 
@@ -148,11 +143,13 @@ fn settlement_before_resolution_is_rejected() {
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
 
-    // Settling an Active (unresolved) market must fail with MarketNotResolved (#3).
     env.as_contract(&contract_id, || {
-        let market = storage::get_market(&env, market_id).expect("market should exist");
-        let mut position =
-            storage::get_position(&env, market_id, &user).expect("position should exist");
+        let market = storage::get_market(&env, market_id)
+            .unwrap()
+            .expect("market should exist");
+        let mut position = storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .expect("position should exist");
         settlement::execute_settlement(&env, &mut position, &market).unwrap();
     });
 }

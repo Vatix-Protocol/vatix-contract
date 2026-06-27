@@ -21,6 +21,11 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
+    /// Address of the deployed treasury contract.
+    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
+    /// only routed there when this key is populated and fee_amount > 0.
+    Treasury,
+    FeeRateBps,
     /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
     /// path to compute the protocol fee; defaults to 0 when unset.
     FeeRateBps,
@@ -168,6 +173,23 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
 }
 
 #[cfg(test)]
