@@ -111,7 +111,14 @@ jobs:
       # contracts/market/Makefile; run `cd contracts/market && make build` locally
       # to reproduce this check and see the output WASM size.
       - name: Build
-        run: cd contracts/market && cargo build --target wasm32-unknown-unknown
+        run: cd contracts/market && stellar contract build
+
+      # Verify the WASM artifact was created at the expected path
+      - name: Verify WASM artifact
+        run: |
+          ls -lh target/wasm32v1-none/release/*.wasm
+          echo "WASM artifact size:"
+          du -h target/wasm32v1-none/release/*.wasm
 
       # deploy.sh is a guard script that echoes deployment intent without
       # performing a real on-chain deployment. Running it in CI verifies the
