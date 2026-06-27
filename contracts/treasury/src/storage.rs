@@ -2,19 +2,23 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-// ── Storage keys ──────────────────────────────────────────────────────────
+// ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
 pub enum StorageKey {
-    /// The address that can call `withdraw_fees` and admin operations.
+    /// The address that can call `withdraw_fees` and other admin operations.
     Admin,
     /// The single market contract address allowed to call `collect_fee`.
     AuthorizedMarket,
-    /// Cumulative fees collected, keyed by SAC token address.
+    /// Current custodied balance for a specific token (decreases on withdrawal).
+    TokenBalance(Address),
+    /// Monotonically increasing cumulative fees collected per token (never decreases).
     CumulativeFees(Address),
+    /// Global monotone counter: total of all fees ever collected across all tokens.
+    TotalCollected,
 }
 
-// ── Admin ─────────────────────────────────────────────────────────────────
+// ── Admin ─────────────────────────────────────────────────────────────────────
 
 pub fn has_admin(env: &Env) -> bool {
     env.storage().instance().has(&StorageKey::Admin)
@@ -31,7 +35,7 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&StorageKey::Admin, admin);
 }
 
-// ── Authorized market ─────────────────────────────────────────────────────
+// ── Authorized market ─────────────────────────────────────────────────────────
 
 pub fn get_authorized_market(env: &Env) -> Address {
     env.storage()
@@ -46,9 +50,23 @@ pub fn set_authorized_market(env: &Env, market: &Address) {
         .set(&StorageKey::AuthorizedMarket, market);
 }
 
-// ── Cumulative fees ───────────────────────────────────────────────────────
+// ── Token balance (current, decreasable on withdrawal) ────────────────────────
 
-/// Return the cumulative fees accumulated for a given token (0 if none yet).
+pub fn get_token_balance(env: &Env, token: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::TokenBalance(token.clone()))
+        .unwrap_or(0i128)
+}
+
+pub fn set_token_balance(env: &Env, token: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::TokenBalance(token.clone()), &amount);
+}
+
+// ── Cumulative fees (monotone historical counter per token) ───────────────────
+
 pub fn get_cumulative_fees(env: &Env, token: &Address) -> i128 {
     env.storage()
         .persistent()
@@ -56,9 +74,23 @@ pub fn get_cumulative_fees(env: &Env, token: &Address) -> i128 {
         .unwrap_or(0i128)
 }
 
-/// Overwrite the cumulative fee total for a token.
 pub fn set_cumulative_fees(env: &Env, token: &Address, amount: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::CumulativeFees(token.clone()), &amount);
+}
+
+// ── Global cumulative (sum across all tokens, monotone) ───────────────────────
+
+pub fn get_total_collected(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&StorageKey::TotalCollected)
+        .unwrap_or(0i128)
+}
+
+pub fn set_total_collected(env: &Env, amount: i128) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::TotalCollected, &amount);
 }
