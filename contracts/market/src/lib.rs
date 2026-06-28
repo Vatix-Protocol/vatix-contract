@@ -100,6 +100,7 @@ impl MarketContract {
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
@@ -123,6 +124,7 @@ impl MarketContract {
     /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
     /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
         if new_admin != pending {
             return Err(ContractError::Unauthorized);
@@ -143,6 +145,8 @@ impl MarketContract {
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
     ) -> Result<u32, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Verify creator is admin
         creator.require_auth();
         let admin = storage::get_admin(&env)?;
@@ -217,6 +221,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         deposit::deposit_collateral(env, user, market_id, amount)
     }
 
@@ -244,6 +249,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         withdraw::withdraw_unused_collateral(env, user, market_id, amount)
     }
 
@@ -273,6 +279,7 @@ impl MarketContract {
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
@@ -342,6 +349,8 @@ impl MarketContract {
         admin: Address,
         market_id: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Authorization: only the stored admin may cancel a market.
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
@@ -467,6 +476,7 @@ impl MarketContract {
         no_delta: i128,
         market_price: i128,
     ) -> Result<Position, ContractError> {
+        validation::require_not_paused(&env)?;
         // 1. Authorization
         user.require_auth();
 
@@ -602,6 +612,7 @@ impl MarketContract {
         admin: Address,
         treasury: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -624,6 +635,7 @@ impl MarketContract {
         admin: Address,
         fee_rate_bps: i128,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -648,6 +660,7 @@ impl MarketContract {
         signers: soroban_sdk::Vec<BytesN<32>>,
         quorum: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -686,6 +699,7 @@ impl MarketContract {
         outcome: bool,
         signatures: soroban_sdk::Vec<BytesN<64>>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
 
         let mut market =
@@ -735,6 +749,7 @@ impl MarketContract {
         admin: Address,
         outcome_token_contract: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -821,5 +836,36 @@ impl MarketContract {
         validation::validate_fee_rate_bps(fee_rate_bps)?;
         storage::set_fee_rate_bps(&env, fee_rate_bps);
         Ok(())
+    }
+
+    /// Pause or unpause the contract for emergency maintenance.
+    ///
+    /// When paused, all state-mutating operations (deposit, withdraw, trade,
+    /// resolve, cancel, create market) are rejected with
+    /// [`ContractError::ContractPaused`]. Read-only getters remain available.
+    ///
+    /// Only the stored admin may call this.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
+    pub fn set_paused(
+        env: Env,
+        admin: Address,
+        paused: bool,
+    ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_paused(&env, paused);
+        events::emit_emergency_pause_toggled(&env, paused);
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
     }
 }
