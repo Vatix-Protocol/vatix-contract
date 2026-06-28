@@ -185,6 +185,7 @@ impl MarketContract {
             resolver: None,
             resolved_at: None,
             adapter_type: crate::types::AdapterType::Ed25519,
+            outcome_count: 2,
         };
 
         // 5. Store market
@@ -787,5 +788,57 @@ impl MarketContract {
     pub fn get_market(env: Env, market_id: u32) -> Result<crate::types::Market, ContractError> {
         storage::get_market(&env, market_id)?
             .ok_or(ContractError::MarketNotFound)
+    }
+
+    /// Return the immutable outcome count for a market (always 2 for binary markets).
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
+    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
+    pub fn get_outcome_count(env: Env, market_id: u32) -> Result<u32, ContractError> {
+        let market = storage::get_market(&env, market_id)?
+            .ok_or(ContractError::MarketNotFound)?;
+        Ok(market.outcome_count)
+    }
+
+    /// Cancel an active market, preventing further deposits and withdrawals.
+    ///
+    /// Only the admin may cancel a market. The market must be in `Active` status.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address.
+    /// * `market_id` - The market to cancel.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — caller is not the stored admin.
+    /// - [`ContractError::MarketNotFound`] — no market with the given ID.
+    /// - [`ContractError::MarketNotActive`] — market is already resolved or canceled.
+    ///
+    /// # Events
+    /// Emits `MarketCanceled` with the market ID and canceling admin.
+    pub fn cancel_market(
+        env: Env,
+        admin: Address,
+        market_id: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+
+        if market.status != crate::types::MarketStatus::Active {
+            return Err(ContractError::MarketNotActive);
+        }
+
+        market.status = crate::types::MarketStatus::Canceled;
+        storage::set_market(&env, market_id, &market)?;
+
+        events::emit_market_canceled(&env, market_id, &admin);
+        Ok(())
     }
 }

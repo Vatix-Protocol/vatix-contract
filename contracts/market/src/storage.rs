@@ -3,7 +3,15 @@ use crate::types::{Market, Position};
 use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
 /// Bump this constant whenever the storage layout changes in a breaking way.
-pub const STORAGE_VERSION: u32 = 2;
+/// `initialize()` writes this value; every storage accessor asserts it.
+///
+/// ## Migration procedure (testnet)
+/// 1. Increment `STORAGE_VERSION` in this file.
+/// 2. Redeploy the contract WASM (`make build` then `soroban contract deploy`).
+/// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
+/// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
+///    any call that touches storage will return that error.
+pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
 pub enum StorageKey {
@@ -13,11 +21,15 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
-    /// Withdrawal fee rate in basis points (0–10_000). Defaults to 0 when unset.
-    FeeRateBps,
-    /// Address of the deployed treasury contract for protocol fee routing.
+    /// Address of the deployed treasury contract that protocol fees are routed
+    /// to. Optional — fees are only forwarded when this is populated and the
+    /// computed fee_amount is greater than zero.
     Treasury,
-    /// Address of the deployed outcome-token contract.
+    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
+    /// path to compute the protocol fee; defaults to 0 when unset.
+    FeeRateBps,
+    /// Address of the deployed outcome-token contract. When set, `update_position`
+    /// mints/burns outcome tokens to reflect share balance changes.
     OutcomeTokenContract,
     /// Address of the deployed resolution contract that gates resolve_market.
     ResolutionContract,
@@ -55,7 +67,10 @@ pub fn get_market(env: &Env, market_id: u32) -> Result<Option<Market>, ContractE
 
 pub fn set_market(env: &Env, market_id: u32, market: &Market) -> Result<(), ContractError> {
     assert_version(env)?;
-    env.storage().persistent().set(&StorageKey::Market(market_id), market);
+    crate::validation::validate_outcome_count(market.outcome_count)?;
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Market(market_id), market);
     Ok(())
 }
 
@@ -128,12 +143,31 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
     env.storage().persistent().get(&StorageKey::Treasury)
 }
 
-pub fn set_treasury(env: &Env, treasury: &Address) {
-    env.storage().persistent().set(&StorageKey::Treasury, treasury);
+/// Register (or replace) the treasury contract address for protocol fee routing.
+/// Pass `None` to remove the treasury and disable fee routing.
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
 }
 
 pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
+}
+
+// --- Resolution Contract Storage ---
+
+pub fn get_resolution_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ResolutionContract)
+}
+
+pub fn set_resolution_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ResolutionContract, contract);
 }
 
 // --- Outcome Token Storage ---
@@ -164,29 +198,6 @@ pub fn get_fee_rate_bps(env: &Env) -> i128 {
 
 pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
-}
-
-// --- Multi-signer threshold storage (#378) ---
-
-/// Return the ordered list of oracle public keys forming the signing quorum.
-pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::ThresholdSigners)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
-    env.storage().persistent().set(&StorageKey::ThresholdSigners, signers);
-}
-
-/// Return the minimum number of signatures required. Defaults to 0 (disabled).
-pub fn get_threshold_quorum(env: &Env) -> u32 {
-    env.storage().persistent().get(&StorageKey::ThresholdQuorum).unwrap_or(0)
-}
-
-pub fn set_threshold_quorum(env: &Env, quorum: u32) {
-    env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
 }
 
 #[cfg(test)]
@@ -265,6 +276,7 @@ mod test {
             resolver: None,
             resolved_at: None,
             adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         };
         env.as_contract(&contract_id, || {
             assert!(!has_market(&env, market_id).unwrap());
@@ -291,20 +303,92 @@ mod test {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
         init_versioned(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let collateral_token = Address::generate(&env);
+        let market_id = 7u32;
+
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Storage layout test question?"),
+            end_time: 9_999_999_999u64,
+            oracle_pubkey: BytesN::from_array(&env, &[0xABu8; 32]),
+            status: crate::types::MarketStatus::Active,
+            result: Some(true),
+            creator: admin.clone(),
+            created_at: 1_000_000u64,
+            collateral_token: collateral_token.clone(),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+        };
+
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 250,
+            no_shares: 75,
+            locked_collateral: 325,
+            total_deposited: 400,
+            is_settled: false,
+        };
+
         env.as_contract(&contract_id, || {
-            let k1 = BytesN::from_array(&env, &[1u8; 32]);
-            let k2 = BytesN::from_array(&env, &[2u8; 32]);
-            let k3 = BytesN::from_array(&env, &[3u8; 32]);
-            let mut signers = Vec::new(&env);
-            signers.push_back(k1.clone());
-            signers.push_back(k2.clone());
-            signers.push_back(k3.clone());
-            set_threshold_signers(&env, &signers);
-            set_threshold_quorum(&env, 2);
-            let loaded = get_threshold_signers(&env);
-            assert_eq!(loaded.len(), 3);
-            assert_eq!(loaded.get(0).unwrap(), k1);
-            assert_eq!(get_threshold_quorum(&env), 2);
+            // --- Admin and MarketCounter are independent slots ---
+            set_admin(&env, &admin);
+            increment_market_id(&env).unwrap(); // counter becomes 1
+
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            // MarketCounter write must not have corrupted Admin slot
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            // Admin write must not have corrupted MarketCounter slot
+            assert_eq!(get_next_market_id(&env).unwrap(), 1);
+
+            // --- Market slot is independent from admin and counter ---
+            assert!(!has_market(&env, market_id).unwrap());
+            set_market(&env, market_id, &market).unwrap();
+            assert!(has_market(&env, market_id).unwrap());
+
+            // Admin and counter are unchanged after market write
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            assert_eq!(get_next_market_id(&env).unwrap(), 1);
+
+            // All Market fields survive the round-trip
+            let m = get_market(&env, market_id).unwrap().unwrap();
+            assert_eq!(m.id, market.id);
+            assert_eq!(m.question, market.question);
+            assert_eq!(m.end_time, market.end_time);
+            assert_eq!(m.oracle_pubkey, market.oracle_pubkey);
+            assert_eq!(m.result, market.result);
+            assert_eq!(m.creator, market.creator);
+            assert_eq!(m.created_at, market.created_at);
+            assert_eq!(m.collateral_token, market.collateral_token);
+
+            // --- Position slot is keyed by (market_id, user) ---
+            assert!(!has_position(&env, market_id, &user).unwrap());
+            set_position(&env, market_id, &user, &position).unwrap();
+            assert!(has_position(&env, market_id, &user).unwrap());
+
+            // A different user must not see this position
+            let other_user = Address::generate(&env);
+            assert!(!has_position(&env, market_id, &other_user).unwrap());
+
+            // All Position fields survive the round-trip
+            let p = get_position(&env, market_id, &user).unwrap().unwrap();
+            assert_eq!(p.market_id, position.market_id);
+            assert_eq!(p.user, position.user);
+            assert_eq!(p.yes_shares, position.yes_shares);
+            assert_eq!(p.no_shares, position.no_shares);
+            assert_eq!(p.locked_collateral, position.locked_collateral);
+            assert_eq!(p.total_deposited, position.total_deposited);
+            assert_eq!(p.is_settled, position.is_settled);
+
+            // Market slot is unchanged after position write
+            let m2 = get_market(&env, market_id).unwrap().unwrap();
+            assert_eq!(m2.id, market.id);
         });
     }
 
@@ -320,6 +404,45 @@ mod test {
         });
     }
 
+    /// Vector 3: after `set_version` (the migration step), `assert_version`
+    /// passes and all storage ops work normally.
+    #[test]
+    fn migration_after_set_version_storage_is_accessible() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let collateral_token = Address::generate(&env);
+
+        let market = Market {
+            id: 1,
+            question: String::from_str(&env, "post-migration market?"),
+            end_time: 9_000_000,
+            oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token,
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Simulate the upgrade: write the current version.
+            set_version(&env);
+            assert_eq!(assert_version(&env), Ok(()));
+
+            // Storage ops succeed post-migration.
+            set_market(&env, 1, &market).unwrap();
+            let m = get_market(&env, 1).unwrap().unwrap();
+            assert_eq!(m.id, 1);
+        });
+    }
+
+    /// Vector 4: any version number other than `STORAGE_VERSION` is rejected,
+    /// guarding against forward-compatibility accidents.
     #[test]
     fn migration_future_version_is_rejected() {
         let env = Env::default();
@@ -327,6 +450,46 @@ mod test {
         env.as_contract(&contract_id, || {
             env.storage().persistent().set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    // ── Treasury storage helpers ──────────────────────────────────────────────
+
+    #[test]
+    fn test_treasury_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let treasury = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+
+            set_treasury(&env, &Some(treasury.clone()));
+            assert!(has_treasury(&env));
+            assert_eq!(get_treasury(&env), Some(treasury.clone()));
+
+            set_treasury(&env, &None);
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+        });
+    }
+
+    // ── Resolution contract storage helpers ───────────────────────────────────
+
+    #[test]
+    fn test_resolution_contract_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let resolution = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_resolution_contract(&env), None);
+
+            set_resolution_contract(&env, &resolution);
+            assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
         });
     }
 }

@@ -154,6 +154,7 @@ mod tests {
             resolver: None,
             resolved_at: None,
             adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         }
     }
 
@@ -462,6 +463,8 @@ mod tests {
             storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
+            storage::set_fee_rate_bps(&env, 1000); // 10% fee
+            storage::set_treasury(&env, &Some(treasury_id.clone()));
         });
         env.mock_all_auths();
         let result = env.as_contract(&contract_id, || {

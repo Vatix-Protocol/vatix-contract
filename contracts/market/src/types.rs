@@ -42,6 +42,9 @@ pub struct Market {
     pub resolved_at: Option<u64>,
     /// Oracle adapter type used for resolving this market.
     pub adapter_type: AdapterType,
+    /// Number of possible outcomes for this market. Always 2 (YES/NO) for binary
+    /// prediction markets. Set once at creation and immutable thereafter.
+    pub outcome_count: u32,
 }
 
 /// Tracks the position and shares of a specific user in a market.

@@ -117,6 +117,12 @@ pub enum ContractError {
     /// Questions must be non-empty and reasonably sized (1-499 characters).
     InvalidQuestion = 33,
 
+    /// Outcome count is not exactly 2.
+    ///
+    /// All markets on this protocol are binary (YES/NO). Any attempt to create
+    /// or overwrite a market with an outcome_count other than 2 is rejected.
+    InvalidOutcomeCount = 34,
+
     // ========== Authorization Errors (40-49) ==========
     /// Caller is not authorized to perform this action.
     ///
