@@ -1,6 +1,6 @@
 use crate::error::ContractError;
 use crate::storage;
-use crate::types::{Market, MarketStatus, Position};
+use crate::types::{AdapterType, Market, MarketStatus, Position};
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{Address, Env, Vec};
 
@@ -69,8 +69,15 @@ pub fn execute_settlement(
 ) -> Result<i128, ContractError> {
     validate_settlement_eligibility(position, market)?;
 
-    let outcome = market.result.ok_or(ContractError::MarketNotResolved)?;
-    let payout = calculate_payout(position, outcome);
+    // Support a "no-winner" refund path: when a market is marked as
+    // `Resolved` but `result` is `None` we treat the settlement as a full
+    // refund of the user's deposited collateral. This allows resolution
+    // flows (or external governance) to indicate that no outcome could be
+    // determined and users should be made whole.
+    let payout = match market.result {
+        Some(outcome) => calculate_payout(position, outcome),
+        None => position.total_deposited,
+    };
 
     validate_payout(payout)?;
 
@@ -205,9 +212,16 @@ pub fn batch_settle_positions(
 /// * `position` - User's position
 /// * `market` - Market (may or may not be resolved)
 pub fn calculate_potential_payout(position: &Position, market: &Market) -> Option<i128> {
-    market
-        .result
-        .map(|outcome| calculate_payout(position, outcome))
+    // If the market is resolved but has no winning outcome (result == None)
+    // then the potential payout is the full deposited collateral (refund).
+    if market.status == MarketStatus::Resolved {
+        match market.result {
+            Some(outcome) => Some(calculate_payout(position, outcome)),
+            None => Some(position.total_deposited),
+        }
+    } else {
+        None
+    }
 }
 
 /// Calculate statistics about settlements
@@ -397,6 +411,23 @@ mod tests {
     fn test_validate_payout_invalid() {
         assert_eq!(validate_payout(-1), Err(ContractError::InvalidQuantity));
         assert_eq!(validate_payout(-100), Err(ContractError::InvalidQuantity));
+    }
+
+    #[test]
+    fn test_execute_settlement_no_winner_refunds_deposited() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        // Market is resolved but has no winning outcome (None) -> refund path
+        let market = create_test_market(&env, MarketStatus::Resolved, None);
+        let mut pos = create_test_position(&env, 100, 30, false);
+
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
+
+        // Full deposited amount should be returned
+        assert_eq!(payout, pos.total_deposited);
+        assert!(pos.is_settled);
     }
 
     /// End-to-end settlement through the contract client, asserting that the
