@@ -28,6 +28,8 @@ The Market contract can optionally wire supporting modules via admin-configured 
 - **Outcome Token**: Mint/burn YES/NO outcome share tokens
 - **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
 
+See [`docs/cross-contract-call-graph.md`](docs/cross-contract-call-graph.md) for the full edge-by-edge call graph, authorization requirements, and registration prerequisites.
+
 ## Tech Stack
 
 - **Language**: Rust
