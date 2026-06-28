@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Run cargo fmt --check across the workspace before each commit.
+# To skip (not recommended): git commit --no-verify
+set -e
+
+if ! cargo fmt --check 2>&1; then
+  echo ""
+  echo "pre-commit: cargo fmt check failed."
+  echo "Run 'cargo fmt' to fix formatting, then re-stage and commit."
+  exit 1
+fi

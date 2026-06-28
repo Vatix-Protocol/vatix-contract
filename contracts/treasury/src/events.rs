@@ -89,6 +89,27 @@ pub fn emit_fees_withdrawn(
     .publish(env);
 }
 
+// ── Admin transfer ────────────────────────────────────────────────────────────
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferredEvent {
+    #[topic]
+    pub old_admin: Address,
+    #[topic]
+    pub new_admin: Address,
+    pub transferred_at: u64,
+}
+
+pub fn emit_admin_transferred(env: &Env, old_admin: &Address, new_admin: &Address) {
+    AdminTransferredEvent {
+        old_admin: old_admin.clone(),
+        new_admin: new_admin.clone(),
+        transferred_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 // ── Market contract rotation ──────────────────────────────────────────────────
 
 #[contractevent]

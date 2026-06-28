@@ -6,7 +6,6 @@
 
 import {
   Contract,
-  Networks,
   nativeToScVal,
   SorobanRpc,
   TransactionBuilder,
@@ -20,7 +19,7 @@ export const SOROBAN_RPC_URL =
 
 export const NETWORK_PASSPHRASE =
   process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ??
-  Networks.TESTNET;
+  "Test SDF Network ; September 2015";
 
 export const HORIZON_URL =
   process.env.NEXT_PUBLIC_HORIZON_URL ??

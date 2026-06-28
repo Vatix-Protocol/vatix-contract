@@ -174,6 +174,29 @@ impl TreasuryContract {
         Ok(())
     }
 
+    /// Transfer admin rights to a new address immediately.
+    ///
+    /// Only the current admin may call this.
+    pub fn transfer_admin(
+        env: Env,
+        caller: Address,
+        new_admin: Address,
+    ) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env);
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        storage::set_admin(&env, &new_admin);
+        events::emit_admin_transferred(&env, &admin, &new_admin);
+        Ok(())
+    }
+
     /// Rotate the registered market contract address (e.g. after an upgrade).
     ///
     /// Only the admin may call this.
