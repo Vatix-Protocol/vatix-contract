@@ -59,6 +59,7 @@ fn propose_creates_candidate_with_proposed_status() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence-hash"),
         &CHALLENGE_WINDOW,
     );
@@ -81,6 +82,7 @@ fn propose_returns_incrementing_ids() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence-1"),
         &CHALLENGE_WINDOW,
     );
@@ -89,6 +91,7 @@ fn propose_returns_incrementing_ids() {
         &2u32,
         &false,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence-2"),
         &CHALLENGE_WINDOW,
     );
@@ -106,6 +109,7 @@ fn duplicate_proposal_for_same_market_is_rejected() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://first"),
         &CHALLENGE_WINDOW,
     );
@@ -134,6 +138,7 @@ fn challenge_transitions_status_to_challenged() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence"),
         &CHALLENGE_WINDOW,
     );
@@ -160,6 +165,7 @@ fn challenge_after_window_closes_is_rejected() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence"),
         &CHALLENGE_WINDOW,
     );
@@ -191,6 +197,7 @@ fn finalize_after_window_returns_candidate_payload() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence"),
         &CHALLENGE_WINDOW,
     );
@@ -220,6 +227,7 @@ fn finalize_before_window_closes_is_rejected() {
         &1u32,
         &true,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://evidence"),
         &CHALLENGE_WINDOW,
     );
@@ -282,6 +290,7 @@ fn full_propose_then_finalize_flow() {
         &market_id,
         &outcome,
         &make_signature(&env),
+        &(env.ledger().timestamp() + CHALLENGE_WINDOW + 100),
         &make_uri(&env, "ipfs://full-flow-evidence"),
         &CHALLENGE_WINDOW,
     );
