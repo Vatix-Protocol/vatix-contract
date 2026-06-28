@@ -612,7 +612,6 @@ pub fn emit_treasury_set(env: &Env, treasury: &Address) {
     .publish(env);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

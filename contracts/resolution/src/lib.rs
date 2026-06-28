@@ -92,6 +92,7 @@ impl ResolutionContract {
         market_id: u32,
         outcome: bool,
         signature: BytesN<64>,
+        signature_expiry: u64,
         evidence_uri: String,
         challenge_window_seconds: u64,
     ) -> Result<u32, ContractError> {
@@ -119,11 +120,16 @@ impl ResolutionContract {
         verification?;
 
         let proposed_at = env.ledger().timestamp();
+        // Validate signature expiry must be in the future (at or after proposed_at)
+        if signature_expiry < proposed_at {
+            return Err(ContractError::InvalidSignatureExpiry);
+        }
         let candidate = ResolutionCandidate {
             id: storage::increment_candidate_id(&env),
             market_id,
             outcome,
             signature,
+            signature_expiry,
             proposer,
             evidence_uri,
             proposed_at,
@@ -198,6 +204,11 @@ impl ResolutionContract {
         }
         if env.ledger().timestamp() <= candidate.challenge_deadline {
             return Err(ContractError::ChallengeWindowOpen);
+        }
+
+        // The signed outcome must still be within its expiry deadline.
+        if env.ledger().timestamp() > candidate.signature_expiry {
+            return Err(ContractError::SignatureExpired);
         }
 
         candidate.status = CandidateStatus::Finalized;

@@ -59,6 +59,27 @@ fn initialize_stores_admin_and_market() {
 }
 
 #[test]
+fn initialize_writes_storage_version() {
+    let s = setup();
+    s.env.as_contract(&s.treasury_id, || {
+        assert_eq!(
+            storage::get_version(&s.env),
+            Some(storage::STORAGE_VERSION),
+        );
+    });
+}
+
+#[test]
+fn storage_version_absent_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    env.as_contract(&id, || {
+        assert_eq!(storage::get_version(&env), None);
+    });
+}
+
+#[test]
 fn initialize_can_only_be_called_once() {
     let s = setup();
     let other = Address::generate(&s.env);

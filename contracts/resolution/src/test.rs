@@ -41,6 +41,7 @@ fn propose_stores_candidate_with_challenge_deadline() {
         &42,
         &true,
         &signature(&env),
+        &(env.ledger().timestamp() + 600),
         &evidence(&env),
         &300,
     );
@@ -65,6 +66,7 @@ fn challenge_marks_candidate_and_blocks_finalize() {
         &1,
         &false,
         &signature(&env),
+        &(env.ledger().timestamp() + 600),
         &evidence(&env),
         &300,
     );
@@ -91,6 +93,7 @@ fn finalize_requires_closed_challenge_window() {
         &1,
         &true,
         &signature(&env),
+        &(env.ledger().timestamp() + 600),
         &evidence(&env),
         &300,
     );
@@ -114,7 +117,7 @@ fn challenge_after_deadline_is_rejected() {
     set_time(&env, 1_000);
 
     let proposer = Address::generate(&env);
-    let candidate_id = client.propose(&proposer, &1, &true, &signature(&env), &evidence(&env), &60);
+    let candidate_id = client.propose(&proposer, &1, &true, &signature(&env), &(env.ledger().timestamp() + 60), &evidence(&env), &60);
 
     set_time(&env, 1_061);
     let challenger = Address::generate(&env);
@@ -147,7 +150,7 @@ fn finalize_calls_resolve_market_on_market_contract() {
     set_time(&env, 1_000);
     let proposer = Address::generate(&env);
     let sig = signature(&env);
-    let candidate_id = client.propose(&proposer, &5, &true, &sig, &evidence(&env), &60);
+    let candidate_id = client.propose(&proposer, &5, &true, &sig, &(env.ledger().timestamp() + 60), &evidence(&env), &60);
 
     set_time(&env, 1_061);
     let finalizer = Address::generate(&env);

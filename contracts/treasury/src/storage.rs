@@ -2,19 +2,15 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::error::TreasuryError;
-
-// ── Version ───────────────────────────────────────────────────────────────────
-
-/// Bump this whenever the storage layout changes in a breaking way.
-/// `initialize()` writes this value; every storage read asserts it.
+/// Bump this constant whenever the treasury storage layout changes in a breaking way.
+/// `initialize()` writes this value so that future migrations can detect stale deployments.
 pub const STORAGE_VERSION: u32 = 1;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
 pub enum StorageKey {
-    /// Written at initialize; read by `assert_version` to guard all data reads.
+    /// Written by `initialize`; used to detect stale or uninitialized deployments.
     StorageVersion,
     /// The address that can call `withdraw_fees` and other admin operations.
     Admin,
@@ -28,7 +24,7 @@ pub enum StorageKey {
     TotalCollected,
 }
 
-// ── Version helpers ───────────────────────────────────────────────────────────
+// ── Version ───────────────────────────────────────────────────────────────────
 
 pub fn set_version(env: &Env) {
     env.storage()
@@ -38,16 +34,6 @@ pub fn set_version(env: &Env) {
 
 pub fn get_version(env: &Env) -> Option<u32> {
     env.storage().instance().get(&StorageKey::StorageVersion)
-}
-
-/// Returns `Err(UpgradeRequired)` when the on-chain version is absent or
-/// does not match `STORAGE_VERSION`.
-pub fn assert_version(env: &Env) -> Result<(), TreasuryError> {
-    let on_chain: Option<u32> = env.storage().instance().get(&StorageKey::StorageVersion);
-    if on_chain != Some(STORAGE_VERSION) {
-        return Err(TreasuryError::UpgradeRequired);
-    }
-    Ok(())
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

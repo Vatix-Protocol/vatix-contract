@@ -13,6 +13,10 @@ pub enum ContractError {
     ChallengeWindowClosed = 6,
     InvalidChallengeWindow = 7,
     InvalidEvidenceUri = 8,
+    /// The provided signature has expired and can no longer be finalized.
+    SignatureExpired = 9,
+    /// The provided signature expiry timestamp is invalid (e.g. in the past).
+    InvalidSignatureExpiry = 10,
     Unauthorized = 40,
     NotAdmin = 41,
     AlreadyInitialized = 42,
