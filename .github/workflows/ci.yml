@@ -131,18 +131,14 @@ jobs:
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
-      # deploy-testnet.sh deploys the compiled contract to the Stellar testnet.
-      # It runs as a CI step to verify the script is reachable and executable.
-      # Purpose: validate the end-to-end deployment path on testnet before any
-      # mainnet release. When the real implementation is wired up it will:
-      #   1. Build the release WASM via cargo
-      #   2. Call `soroban contract deploy --network testnet` with credentials
-      #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
-      #   3. Log and export the returned contract ID for use in downstream steps
-      # See scripts/README.md for the full tooling reference.
-      # The scripts README documents the intent of these "echo guard" scripts
-      # and provides guidance for maintainers on how to replace guards with
-      # real CI actions (credentials, expected outputs, and invocation examples).
+      # deploy-testnet.sh builds the contract via `stellar contract build` and
+      # deploys it to the Stellar testnet. The WASM artefact is always located
+      # at the canonical output path: target/wasm32v1-none/release/*.wasm
+      #
+      # In CI (no TESTNET_SECRET_KEY): runs in guard mode — builds the contract,
+      # verifies the canonical artefact path, then exits 0 without deploying.
+      # When TESTNET_SECRET_KEY is set: performs a full build + deploy and
+      # exports the contract ID via $GITHUB_OUTPUT for downstream steps.
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
