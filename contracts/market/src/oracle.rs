@@ -28,7 +28,7 @@
 use crate::error::ContractError;
 use crate::types::{AdapterType, Market};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use soroban_sdk::{Bytes, BytesN, Env};
+use soroban_sdk::{Bytes, BytesN, Env, Vec};
 
 /// Construct the message that the oracle signs.
 ///
@@ -128,6 +128,50 @@ pub fn verify_market_outcome(
         AdapterType::Ed25519 => verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey),
         AdapterType::Reflector | AdapterType::Pyth => Err(ContractError::UnauthorizedOracle),
     }
+}
+
+/// Verify a quorum of Ed25519 signatures for multi-signer threshold resolution (#378).
+///
+/// `signatures` is a parallel slice aligned with `signers`: `signatures[i]` is
+/// the Ed25519 signature produced by `signers[i]` over
+/// `keccak256(market_id_be || outcome_byte)`.  Entries where the caller does
+/// not have a valid signature should be zeroed-out (64 zero bytes) — they are
+/// counted as failures but do not abort the loop.
+///
+/// The function counts how many signatures verify and returns `Ok(())` only
+/// when that count meets or exceeds `quorum`.
+///
+/// # Errors
+/// - `UnauthorizedOracle` — `signers` is empty or `quorum` is 0.
+/// - `InvalidSignature`   — fewer than `quorum` signatures verified.
+pub fn verify_threshold_signatures(
+    env: &Env,
+    market_id: u32,
+    outcome: bool,
+    signers: &soroban_sdk::Vec<BytesN<32>>,
+    signatures: &soroban_sdk::Vec<BytesN<64>>,
+    quorum: u32,
+) -> Result<(), ContractError> {
+    if signers.is_empty() || quorum == 0 {
+        return Err(ContractError::UnauthorizedOracle);
+    }
+
+    let message = construct_oracle_message(env, market_id, outcome);
+    let mut valid: u32 = 0;
+
+    let len = signers.len().min(signatures.len());
+    for i in 0..len {
+        let pubkey = signers.get(i).unwrap();
+        let sig = signatures.get(i).unwrap();
+        if verify_ed25519_safe(&pubkey, &message, &sig) {
+            valid += 1;
+            if valid >= quorum {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(ContractError::InvalidSignature)
 }
 
 #[cfg(test)]
@@ -406,5 +450,130 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/oracle-message.json");
         std::fs::create_dir_all(dir).expect("create test-vectors dir");
         std::fs::write(path, &json).expect("write oracle-message.json");
+    }
+}
+
+#[cfg(test)]
+mod threshold_tests {
+    use super::*;
+    use soroban_sdk::{testutils::BytesN as _, Env, Vec};
+
+    /// Generate a keypair and sign the oracle message for (market_id, outcome).
+    fn sign(env: &Env, market_id: u32, outcome: bool) -> (BytesN<32>, BytesN<64>) {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let message = construct_oracle_message(env, market_id, outcome);
+        let sig = signing_key.sign(message.to_array().as_slice());
+        (
+            BytesN::from_array(env, &signing_key.verifying_key().to_bytes()),
+            BytesN::from_array(env, &sig.to_bytes()),
+        )
+    }
+
+    #[test]
+    fn threshold_2_of_3_meets_quorum() {
+        let env = Env::default();
+        let (pk1, sig1) = sign(&env, 1, true);
+        let (pk2, sig2) = sign(&env, 1, true);
+        let (pk3, _) = sign(&env, 1, true);
+        // Third signer does NOT provide a valid sig (zero bytes).
+        let bad_sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        let mut signers: Vec<BytesN<32>> = Vec::new(&env);
+        signers.push_back(pk1);
+        signers.push_back(pk2);
+        signers.push_back(pk3);
+
+        let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
+        sigs.push_back(sig1);
+        sigs.push_back(sig2);
+        sigs.push_back(bad_sig);
+
+        assert_eq!(
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn threshold_only_1_of_3_valid_below_quorum() {
+        let env = Env::default();
+        let (pk1, sig1) = sign(&env, 1, true);
+        let (pk2, _) = sign(&env, 1, true);
+        let (pk3, _) = sign(&env, 1, true);
+        let bad_sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        let mut signers: Vec<BytesN<32>> = Vec::new(&env);
+        signers.push_back(pk1);
+        signers.push_back(pk2);
+        signers.push_back(pk3);
+
+        let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
+        sigs.push_back(sig1);
+        sigs.push_back(bad_sig.clone());
+        sigs.push_back(bad_sig);
+
+        assert_eq!(
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
+            Err(ContractError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn threshold_empty_signers_returns_unauthorized() {
+        let env = Env::default();
+        let signers: Vec<BytesN<32>> = Vec::new(&env);
+        let sigs: Vec<BytesN<64>> = Vec::new(&env);
+        assert_eq!(
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
+            Err(ContractError::UnauthorizedOracle)
+        );
+    }
+
+    #[test]
+    fn threshold_quorum_zero_returns_unauthorized() {
+        let env = Env::default();
+        let (pk1, sig1) = sign(&env, 1, true);
+        let mut signers: Vec<BytesN<32>> = Vec::new(&env);
+        signers.push_back(pk1);
+        let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
+        sigs.push_back(sig1);
+        assert_eq!(
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 0),
+            Err(ContractError::UnauthorizedOracle)
+        );
+    }
+
+    #[test]
+    fn threshold_wrong_outcome_sigs_do_not_count() {
+        let env = Env::default();
+        // Sigs produced for outcome=false but we verify outcome=true
+        let (pk1, sig1_wrong) = sign(&env, 1, false);
+        let (pk2, sig2_wrong) = sign(&env, 1, false);
+        let mut signers: Vec<BytesN<32>> = Vec::new(&env);
+        signers.push_back(pk1);
+        signers.push_back(pk2);
+        let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
+        sigs.push_back(sig1_wrong);
+        sigs.push_back(sig2_wrong);
+        assert_eq!(
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 1),
+            Err(ContractError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn threshold_1_of_1_succeeds() {
+        let env = Env::default();
+        let (pk, sig) = sign(&env, 42, false);
+        let mut signers: Vec<BytesN<32>> = Vec::new(&env);
+        signers.push_back(pk);
+        let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
+        sigs.push_back(sig);
+        assert_eq!(
+            verify_threshold_signatures(&env, 42, false, &signers, &sigs, 1),
+            Ok(())
+        );
     }
 }

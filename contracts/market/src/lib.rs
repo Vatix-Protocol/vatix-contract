@@ -593,17 +593,11 @@ impl MarketContract {
     /// [`withdraw_unused_collateral`] will be transferred to this address and
     /// recorded via the treasury's `collect_fee` entry point.
     ///
-    /// Calling this a second time replaces the previous address, enabling
-    /// seamless treasury upgrades without redeploying the market contract.
-    ///
-    /// # Arguments
-    /// * `env` - Contract environment
-    /// * `admin` - Must be the stored admin address.
-    /// * `treasury` - Address of the deployed treasury contract.
+    /// Only the stored admin may call this.
     ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
-    pub fn set_treasury_contract(
+    pub fn set_treasury(
         env: Env,
         admin: Address,
         treasury: Address,
@@ -613,8 +607,115 @@ impl MarketContract {
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        storage::set_treasury(&env, &Some(treasury.clone()));
+        storage::set_treasury(&env, &treasury);
         events::emit_treasury_set(&env, &treasury);
+        Ok(())
+    }
+
+    /// Set the withdrawal fee rate in basis points (0–10_000).
+    ///
+    /// Only the stored admin may call this. A rate of 0 disables fees.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
+    /// - [`ContractError::InvalidPrice`] — `fee_rate_bps` outside 0–10_000.
+    pub fn set_fee_rate(
+        env: Env,
+        admin: Address,
+        fee_rate_bps: i128,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        validation::validate_fee_rate_bps(fee_rate_bps)?;
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
+        Ok(())
+    }
+
+    /// Configure the multi-signer quorum for threshold-based resolution (#378).
+    ///
+    /// `signers` is the ordered set of oracle public keys. `quorum` is the
+    /// minimum number of valid signatures required by `resolve_market_threshold`.
+    /// Setting `quorum` to 0 or passing an empty `signers` list effectively
+    /// disables threshold resolution.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_threshold_signers(
+        env: Env,
+        admin: Address,
+        signers: soroban_sdk::Vec<BytesN<32>>,
+        quorum: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_threshold_signers(&env, &signers);
+        storage::set_threshold_quorum(&env, quorum);
+        Ok(())
+    }
+
+    /// Return the current threshold signer set.
+    pub fn get_threshold_signers(env: Env) -> soroban_sdk::Vec<BytesN<32>> {
+        storage::get_threshold_signers(&env)
+    }
+
+    /// Return the current quorum requirement.
+    pub fn get_threshold_quorum(env: Env) -> u32 {
+        storage::get_threshold_quorum(&env)
+    }
+
+    /// Resolve a market using a quorum of oracle signatures (#378).
+    ///
+    /// Callers provide one signature per registered signer (use 64 zero bytes
+    /// for signers whose signature is unavailable). The market resolves once
+    /// the valid-signature count reaches the stored quorum.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — market does not exist.
+    /// - [`ContractError::MarketAlreadyResolved`] — already resolved.
+    /// - [`ContractError::UnauthorizedOracle`] — no signers/quorum configured.
+    /// - [`ContractError::InvalidSignature`] — fewer than quorum valid sigs.
+    pub fn resolve_market_threshold(
+        env: Env,
+        resolver: Address,
+        market_id: u32,
+        outcome: bool,
+        signatures: soroban_sdk::Vec<BytesN<64>>,
+    ) -> Result<(), ContractError> {
+        resolver.require_auth();
+
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status == MarketStatus::Resolved {
+            return Err(ContractError::MarketAlreadyResolved);
+        }
+
+        let signers = storage::get_threshold_signers(&env);
+        let quorum = storage::get_threshold_quorum(&env);
+
+        oracle::verify_threshold_signatures(&env, market_id, outcome, &signers, &signatures, quorum)?;
+        events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
+
+        market.status = MarketStatus::Resolved;
+        market.result = Some(outcome);
+        market.resolver = Some(resolver.clone());
+        let resolved_at = env.ledger().timestamp();
+        market.resolved_at = Some(resolved_at);
+        storage::set_market(&env, market_id, &market)?;
+
+        events::emit_market_resolved(
+            &env,
+            market_id,
+            &market.oracle_pubkey,
+            &resolver,
+            outcome,
+            resolved_at,
+        );
+
         Ok(())
     }
 

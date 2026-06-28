@@ -18,6 +18,23 @@ use crate::error::ContractError;
 use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val, Vec};
 
 // ---------------------------------------------------------------------------
+// Asset type used by Reflector (#379)
+// ---------------------------------------------------------------------------
+
+/// Identifies the asset to query from the Reflector oracle.
+///
+/// Matches the Reflector contract's `Asset` enum exactly so that
+/// cross-contract serialisation succeeds.
+#[contracttype]
+#[derive(Clone)]
+pub enum Asset {
+    /// A Stellar-native SAC token identified by its issuer address.
+    Stellar(Address),
+    /// Any other asset identified by a 4-byte symbol (e.g. `symbol_short!("BTC")`).
+    Other(soroban_sdk::Symbol),
+}
+
+// ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
 
@@ -127,14 +144,39 @@ impl OracleAdapter for ReflectorAdapter {
         outcome: bool,
         _proof: &Bytes,
     ) -> Result<(), ContractError> {
-        // TODO(#323): Cross-contract call to fetch the price and evaluate
-        // the resolution condition.
-        unimplemented!("Reflector adapter — tracked in #323")
-        // Adapter unimplemented for Reflector integration; return a
-        // typed `InvalidSignature` rather than panicking so callers receive
-        // a recoverable `ContractError`.
-        Err(ContractError::InvalidSignature)
+        // Call `lastprice(asset)` on the Reflector contract.
+        // Reflector returns `Option<PriceData>` where PriceData = { price: i128, timestamp: u64 }.
+        // When the oracle has no recent price for the asset it returns None.
+        let args: Vec<Val> =
+            soroban_sdk::vec![env, self.asset.clone().into_val(env)];
+        let price_data: Option<ReflectorPriceData> = env.invoke_contract(
+            &self.contract_id,
+            &Symbol::new(env, "lastprice"),
+            args,
+        );
+
+        let data = price_data.ok_or(ContractError::OraclePriceUnavailable)?;
+
+        // YES when price >= threshold, NO otherwise.
+        let resolved_yes = data.price >= self.resolution_price;
+        if resolved_yes != outcome {
+            return Err(ContractError::InvalidSignature);
+        }
+        Ok(())
     }
+}
+
+/// Mirror of the `PriceData` struct returned by the Reflector contract.
+///
+/// Field names and order must match the Reflector contract's XDR encoding so
+/// that cross-contract deserialisation succeeds.
+#[contracttype]
+#[derive(Clone)]
+pub struct ReflectorPriceData {
+    /// Price in Reflector's native units (7 decimal places; 1 USD = 10_000_000).
+    pub price: i128,
+    /// Unix timestamp (seconds) of the price observation.
+    pub timestamp: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,10 +262,6 @@ impl OracleAdapter for PythAdapter {
             return Err(ContractError::InvalidSignature);
         }
         Ok(())
-        // Adapter unimplemented for Pyth integration; return a typed
-        // `InvalidSignature` rather than panicking so callers receive a
-        // recoverable `ContractError`.
-        Err(ContractError::InvalidSignature)
     }
 }
 
@@ -403,6 +441,157 @@ mod tests {
         // price (300) < threshold (500) → NO
         assert_eq!(
             adapter.verify_outcome(&env, 5, false, &vaa_bytes(&env)),
+            Ok(())
+        );
+    }
+}
+
+#[cfg(test)]
+mod reflector_tests {
+    use super::*;
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
+
+    // ---- Mock Reflector contract (#379) ----
+
+    /// A minimal mock of the Reflector oracle for unit tests.
+    /// `lastprice` returns a pre-seeded price or `None` to simulate unavailability.
+    #[contract]
+    struct MockReflector;
+
+    #[contractimpl]
+    impl MockReflector {
+        /// Seed the price the mock returns.
+        pub fn set_price(env: Env, price: i128) {
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("price"), &price);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("has"), &true);
+        }
+
+        /// Clear the price — causes `lastprice` to return `None`.
+        pub fn clear_price(env: Env) {
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("has"), &false);
+        }
+
+        pub fn lastprice(env: Env, _asset: Asset) -> Option<ReflectorPriceData> {
+            let has: bool = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("has"))
+                .unwrap_or(false);
+            if !has {
+                return None;
+            }
+            let price: i128 = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("price"))
+                .unwrap_or(0);
+            Some(ReflectorPriceData { price, timestamp: 1_000_000 })
+        }
+    }
+
+    fn setup_mock_reflector(env: &Env) -> Address {
+        env.register(MockReflector, ())
+    }
+
+    fn dummy_asset(env: &Env) -> Asset {
+        Asset::Other(soroban_sdk::symbol_short!("BTC"))
+    }
+
+    /// Testnet contract address for Reflector (as of 2026-06-20):
+    /// `CAZP4SMCQX7L6O42AT4GLLRRSFDXPXS7IH7MMHZ52QWUQBFPXFQVMGQ`
+    /// See docs/adr-001-oracle-adapter.md §Option B for integration details.
+
+    #[test]
+    fn reflector_resolves_yes_when_price_meets_threshold() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        MockReflectorClient::new(&env, &contract_id).set_price(&1_000_000);
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        // price (1_000_000) >= threshold (1_000_000) → YES
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn reflector_resolves_no_when_price_below_threshold() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        MockReflectorClient::new(&env, &contract_id).set_price(&999_999);
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        // price (999_999) < threshold (1_000_000) → NO
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, false, &Bytes::new(&env)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn reflector_returns_invalid_signature_on_outcome_mismatch() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        MockReflectorClient::new(&env, &contract_id).set_price(&2_000_000);
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        // price >= threshold → YES, but caller claims NO
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, false, &Bytes::new(&env)),
+            Err(ContractError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn reflector_returns_price_unavailable_when_oracle_returns_none() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        MockReflectorClient::new(&env, &contract_id).clear_price();
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
+            Err(ContractError::OraclePriceUnavailable)
+        );
+    }
+
+    #[test]
+    fn reflector_any_adapter_dispatch_works() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        MockReflectorClient::new(&env, &contract_id).set_price(&500);
+
+        let adapter = AnyAdapter::Reflector(ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000,
+        });
+        // price (500) < threshold (1_000) → NO
+        assert_eq!(
+            adapter.verify_outcome(&env, 7, false, &Bytes::new(&env)),
             Ok(())
         );
     }
