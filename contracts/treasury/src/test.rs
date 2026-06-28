@@ -6,7 +6,7 @@ use soroban_sdk::{
     Address, Env,
 };
 
-use crate::{TreasuryContract, TreasuryContractClient, TreasuryError};
+use crate::{storage, TreasuryContract, TreasuryContractClient, TreasuryError};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,6 +56,27 @@ fn initialize_stores_admin_and_market() {
     assert_eq!(s.client.market_contract(), s.market);
     assert_eq!(s.client.token_balance(&s.token), 0);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 0);
+}
+
+#[test]
+fn initialize_writes_storage_version() {
+    let s = setup();
+    s.env.as_contract(&s.treasury_id, || {
+        assert_eq!(
+            storage::get_version(&s.env),
+            Some(storage::STORAGE_VERSION),
+        );
+    });
+}
+
+#[test]
+fn storage_version_absent_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    env.as_contract(&id, || {
+        assert_eq!(storage::get_version(&env), None);
+    });
 }
 
 #[test]

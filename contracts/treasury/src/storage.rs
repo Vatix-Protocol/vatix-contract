@@ -2,10 +2,16 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
+/// Bump this constant whenever the treasury storage layout changes in a breaking way.
+/// `initialize()` writes this value so that future migrations can detect stale deployments.
+pub const STORAGE_VERSION: u32 = 1;
+
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
 pub enum StorageKey {
+    /// Written by `initialize`; used to detect stale or uninitialized deployments.
+    StorageVersion,
     /// The address that can call `withdraw_fees` and other admin operations.
     Admin,
     /// The single market contract address allowed to call `collect_fee`.
@@ -16,6 +22,18 @@ pub enum StorageKey {
     CumulativeFees(Address),
     /// Global monotone counter: total of all fees ever collected across all tokens.
     TotalCollected,
+}
+
+// ── Version ───────────────────────────────────────────────────────────────────
+
+pub fn set_version(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::StorageVersion, &STORAGE_VERSION);
+}
+
+pub fn get_version(env: &Env) -> Option<u32> {
+    env.storage().instance().get(&StorageKey::StorageVersion)
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

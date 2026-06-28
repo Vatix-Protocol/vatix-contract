@@ -75,6 +75,7 @@ impl TreasuryContract {
         }
         storage::set_admin(&env, &admin);
         storage::set_authorized_market(&env, &market_contract);
+        storage::set_version(&env);
         events::emit_treasury_initialized(&env, &admin, &market_contract);
         Ok(())
     }

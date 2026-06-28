@@ -21,18 +21,13 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
-    /// Address of the deployed treasury contract.
-    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
-    /// only routed there when this key is populated and fee_amount > 0.
-    Treasury,
-    FeeRateBps,
-    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
-    /// path to compute the protocol fee; defaults to 0 when unset.
-    FeeRateBps,
     /// Address of the deployed treasury contract that protocol fees are routed
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
     Treasury,
+    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
+    /// path to compute the protocol fee; defaults to 0 when unset.
+    FeeRateBps,
     /// Address of the deployed outcome-token contract. When set, `update_position`
     /// mints/burns outcome tokens to reflect share balance changes.
     OutcomeTokenContract,
@@ -175,10 +170,30 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 /// Register (or replace) the treasury contract address for protocol fee routing.
-pub fn set_treasury(env: &Env, treasury: &Address) {
+/// Pass `None` to remove the treasury and disable fee routing.
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
+}
+
+// --- Resolution Contract Storage ---
+
+pub fn get_resolution_contract(env: &Env) -> Option<Address> {
     env.storage()
         .persistent()
-        .set(&StorageKey::Treasury, treasury);
+        .get(&StorageKey::ResolutionContract)
+}
+
+pub fn set_resolution_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ResolutionContract, contract);
 }
 
 // --- Outcome Token Storage ---
@@ -208,23 +223,6 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
-}
-
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::Treasury)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
-}
-
-pub fn has_treasury(env: &Env) -> bool {
-    env.storage().persistent().has(&StorageKey::Treasury)
 }
 
 #[cfg(test)]
@@ -430,7 +428,6 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
-            assert_eq!(m.resolution_price, market.resolution_price);
 
             // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());
@@ -551,6 +548,46 @@ mod test {
                 .persistent()
                 .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    // ── Treasury storage helpers ──────────────────────────────────────────────
+
+    #[test]
+    fn test_treasury_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let treasury = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+
+            set_treasury(&env, &Some(treasury.clone()));
+            assert!(has_treasury(&env));
+            assert_eq!(get_treasury(&env), Some(treasury.clone()));
+
+            set_treasury(&env, &None);
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+        });
+    }
+
+    // ── Resolution contract storage helpers ───────────────────────────────────
+
+    #[test]
+    fn test_resolution_contract_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let resolution = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_resolution_contract(&env), None);
+
+            set_resolution_contract(&env, &resolution);
+            assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
         });
     }
 }

@@ -46,7 +46,7 @@ fn mock_sac_fee_flows_to_treasury() {
     TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &market_addr);
 
     let market = MarketContractClient::new(&env, &market_addr);
-    market.set_treasury(&admin, &treasury_addr);
+    market.set_treasury_contract(&admin, &treasury_addr);
     let treasury = TreasuryContractClient::new(&env, &treasury_addr);
 
     // Mock SAC: use Stellar Asset Contract as the collateral token.
@@ -104,7 +104,7 @@ fn mock_sac_multiple_withdrawals_accumulate() {
     TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &market_addr);
 
     let market = MarketContractClient::new(&env, &market_addr);
-    market.set_treasury(&admin, &treasury_addr);
+    market.set_treasury_contract(&admin, &treasury_addr);
     let treasury = TreasuryContractClient::new(&env, &treasury_addr);
 
     let token_admin = Address::generate(&env);
@@ -152,7 +152,7 @@ fn admin_withdraws_mock_sac_fees() {
     TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &market_addr);
 
     let market = MarketContractClient::new(&env, &market_addr);
-    market.set_treasury(&admin, &treasury_addr);
+    market.set_treasury_contract(&admin, &treasury_addr);
     let treasury = TreasuryContractClient::new(&env, &treasury_addr);
 
     let token_admin = Address::generate(&env);
