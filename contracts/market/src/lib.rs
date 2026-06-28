@@ -801,26 +801,4 @@ impl MarketContract {
             .ok_or(ContractError::MarketNotFound)?;
         Ok(market.outcome_count)
     }
-
-    /// Cancel an active market, preventing further deposits and withdrawals.
-    ///
-    /// Only the stored admin may call this. 0 disables fees.
-    ///
-    /// # Errors
-    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
-    /// - [`ContractError::InvalidPrice`] – `fee_rate_bps` is outside 0–10_000.
-    pub fn set_fee_rate(
-        env: Env,
-        admin: Address,
-        fee_rate_bps: i128,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
-        }
-        validation::validate_fee_rate_bps(fee_rate_bps)?;
-        storage::set_fee_rate_bps(&env, fee_rate_bps);
-        Ok(())
-    }
 }
