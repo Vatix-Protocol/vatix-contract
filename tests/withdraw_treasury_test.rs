@@ -44,7 +44,7 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
     TreasuryContractClient::new(&env, &treasury_addr)
         .initialize(&admin, &market_addr);
 
-    MarketContractClient::new(&env, &market_addr).set_treasury(&admin, &treasury_addr);
+    MarketContractClient::new(&env, &market_addr).set_treasury_contract(&admin, &treasury_addr);
 
     let token_admin = Address::generate(&env);
     let collateral_token = env

@@ -909,7 +909,7 @@ mod test {
         let (env, admin, client, contract_id) = create_test_contract();
         let treasury = Address::generate(&env);
 
-        client.set_treasury(&admin, &treasury);
+        client.set_treasury_contract(&admin, &treasury);
 
         env.as_contract(&contract_id, || {
             assert_eq!(storage::get_treasury(&env).unwrap(), treasury);
@@ -948,7 +948,7 @@ mod test {
         let stranger = Address::generate(&env);
         let address = Address::generate(&env);
 
-        assert_eq!(client.try_set_treasury(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_treasury_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
         assert_eq!(client.try_set_outcome_token_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
         assert_eq!(client.try_set_resolution_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
     }
@@ -988,9 +988,10 @@ mod test {
         ResolutionContractClient::new(&env, &resolution_addr)
             .propose(&proposer, &market_id, &true, &signature, &evidence, &60);
 
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, &market_id.to_string());
         assert_eq!(
-            client.try_resolve_market(&market_id_str, &true, &signature),
+            client.try_resolve_market(&resolver, &market_id_str, &true, &signature),
             Err(Ok(ContractError::ResolutionNotFinalized))
         );
     }
