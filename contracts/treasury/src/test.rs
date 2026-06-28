@@ -288,3 +288,71 @@ fn old_market_cannot_collect_fee_after_rotation() {
     s.client.collect_fee(&new_market, &s.token, &1u32, &100i128);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 100);
 }
+
+// ── transfer_admin ────────────────────────────────────────────────────────────
+
+#[test]
+fn transfer_admin_updates_admin() {
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+    assert_eq!(s.client.admin(), new_admin);
+}
+
+#[test]
+fn transfer_admin_emits_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Map, Symbol, TryIntoVal, Val};
+
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+
+    let events = s.env.events().all();
+    // Last event is AdminTransferred
+    let ev = events.last().unwrap();
+    let topics = &ev.1;
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
+    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred_event"));
+
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
+    let old_val: Address = data.get(Symbol::new(&s.env, "old_admin")).unwrap().into_val(&s.env);
+    let new_val: Address = data.get(Symbol::new(&s.env, "new_admin")).unwrap().into_val(&s.env);
+    assert_eq!(old_val, s.admin);
+    assert_eq!(new_val, new_admin);
+}
+
+#[test]
+fn transfer_admin_rejects_non_admin() {
+    let s = setup();
+    let rando = Address::generate(&s.env);
+    let new_admin = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_transfer_admin(&rando, &new_admin)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+}
+
+#[test]
+fn new_admin_can_withdraw_after_transfer() {
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+
+    // old admin can no longer withdraw
+    fund_treasury(&s, 100_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &100_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+
+    // new admin can withdraw
+    s.client.withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
+    assert_eq!(s.client.token_balance(&s.token), 0);
+}
