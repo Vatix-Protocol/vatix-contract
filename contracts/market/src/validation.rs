@@ -170,7 +170,7 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
     Ok(n)
 }
 
-/// Validates a configured withdrawal fee rate (in basis points).
+/// Validates that a configured withdrawal fee rate (in basis points).
 ///
 /// The fee rate must lie within the inclusive 0–10_000 bps range (0%–100%).
 ///
@@ -178,6 +178,20 @@ pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
 /// - `InvalidPrice`: `fee_rate_bps` is outside the 0–10_000 range.
 pub fn validate_fee_rate_bps(fee_rate_bps: i128) -> Result<(), ContractError> {
     validate_market_price(fee_rate_bps)
+}
+
+/// Validates that outcome_count is exactly 2 (binary YES/NO market).
+///
+/// All Vatix markets are binary. This is enforced at creation and re-checked
+/// on every write so the field cannot be silently mutated by callers.
+///
+/// # Errors
+/// - [`ContractError::InvalidOutcomeCount`] – `outcome_count` is not 2.
+pub fn validate_outcome_count(outcome_count: u32) -> Result<(), ContractError> {
+    if outcome_count != 2 {
+        return Err(ContractError::InvalidOutcomeCount);
+    }
+    Ok(())
 }
 
 /// Calculate fee with validation guard

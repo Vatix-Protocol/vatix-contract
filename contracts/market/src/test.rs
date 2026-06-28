@@ -986,7 +986,7 @@ mod test {
         let proposer = Address::generate(&env);
         let evidence = String::from_str(&env, "evidence://uri");
         ResolutionContractClient::new(&env, &resolution_addr)
-            .propose(&proposer, &market_id, &true, &signature, &evidence, &60);
+            .propose(&proposer, &market_id, &true, &signature, &(env.ledger().timestamp() + 60), &evidence, &60);
 
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, &market_id.to_string());

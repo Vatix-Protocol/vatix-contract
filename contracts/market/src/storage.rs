@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, Env};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 2;
+pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
 pub enum StorageKey {
@@ -69,6 +69,7 @@ pub fn get_market(env: &Env, market_id: u32) -> Result<Option<Market>, ContractE
 
 pub fn set_market(env: &Env, market_id: u32, market: &Market) -> Result<(), ContractError> {
     assert_version(env)?;
+    crate::validation::validate_outcome_count(market.outcome_count)?;
     env.storage()
         .persistent()
         .set(&StorageKey::Market(market_id), market);
@@ -314,6 +315,7 @@ mod test {
             resolver: None,
             resolved_at: None,
             adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         };
 
         env.as_contract(&contract_id, || {
@@ -383,6 +385,7 @@ mod test {
             resolver: None,
             resolved_at: None,
             adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         };
 
         let position = Position {
@@ -517,7 +520,8 @@ mod test {
             price_bps: 5_000,
             resolver: None,
             resolved_at: None,
-            adapter_type: crate::types::AdapterType::Ed25519,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         };
 
         env.as_contract(&contract_id, || {
