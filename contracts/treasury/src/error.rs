@@ -12,6 +12,11 @@ use soroban_sdk::contracterror;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum TreasuryError {
+    // ── Upgrade / migration (10–19) ───────────────────────────────────────────
+    /// The on-chain storage version does not match the compiled contract version.
+    /// A migration step must be performed before any storage reads will succeed.
+    UpgradeRequired = 10,
+
     // ── Amount / balance (20–29) ──────────────────────────────────────────────
     /// The treasury does not hold enough of `token` to satisfy the withdrawal.
     InsufficientBalance = 21,
@@ -45,6 +50,7 @@ mod tests {
 
     #[test]
     fn discriminants_are_stable() {
+        assert_eq!(TreasuryError::UpgradeRequired as u32, 10);
         assert_eq!(TreasuryError::InsufficientBalance as u32, 21);
         assert_eq!(TreasuryError::InvalidAmount as u32, 31);
         assert_eq!(TreasuryError::NotInitialized as u32, 33);

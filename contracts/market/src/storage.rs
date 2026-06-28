@@ -81,12 +81,21 @@ pub fn has_market(env: &Env, market_id: u32) -> Result<bool, ContractError> {
 
 // --- Position Storage ---
 
-pub fn get_position(env: &Env, market_id: u32, user: &Address) -> Result<Option<Position>, ContractError> {
+pub fn get_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+) -> Result<Option<Position>, ContractError> {
     assert_version(env)?;
     Ok(env.storage().persistent().get(&StorageKey::Position(market_id, user.clone())))
 }
 
-pub fn set_position(env: &Env, market_id: u32, user: &Address, position: &Position) -> Result<(), ContractError> {
+pub fn set_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    position: &Position,
+) -> Result<(), ContractError> {
     assert_version(env)?;
     env.storage().persistent().set(&StorageKey::Position(market_id, user.clone()), position);
     Ok(())
@@ -337,26 +346,19 @@ mod test {
         };
 
         env.as_contract(&contract_id, || {
-            // --- Admin and MarketCounter are independent slots ---
             set_admin(&env, &admin);
-            increment_market_id(&env).unwrap(); // counter becomes 1
+            increment_market_id(&env).unwrap();
 
             assert_eq!(get_admin(&env).unwrap(), admin);
-            // MarketCounter write must not have corrupted Admin slot
-            assert_eq!(get_admin(&env).unwrap(), admin);
-            // Admin write must not have corrupted MarketCounter slot
             assert_eq!(get_next_market_id(&env).unwrap(), 1);
 
-            // --- Market slot is independent from admin and counter ---
             assert!(!has_market(&env, market_id).unwrap());
             set_market(&env, market_id, &market).unwrap();
             assert!(has_market(&env, market_id).unwrap());
 
-            // Admin and counter are unchanged after market write
             assert_eq!(get_admin(&env).unwrap(), admin);
             assert_eq!(get_next_market_id(&env).unwrap(), 1);
 
-            // All Market fields survive the round-trip
             let m = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m.id, market.id);
             assert_eq!(m.question, market.question);
@@ -367,16 +369,13 @@ mod test {
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
 
-            // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());
             set_position(&env, market_id, &user, &position).unwrap();
             assert!(has_position(&env, market_id, &user).unwrap());
 
-            // A different user must not see this position
             let other_user = Address::generate(&env);
             assert!(!has_position(&env, market_id, &other_user).unwrap());
 
-            // All Position fields survive the round-trip
             let p = get_position(&env, market_id, &user).unwrap().unwrap();
             assert_eq!(p.market_id, position.market_id);
             assert_eq!(p.user, position.user);
@@ -386,7 +385,6 @@ mod test {
             assert_eq!(p.total_deposited, position.total_deposited);
             assert_eq!(p.is_settled, position.is_settled);
 
-            // Market slot is unchanged after position write
             let m2 = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m2.id, market.id);
         });
@@ -404,8 +402,6 @@ mod test {
         });
     }
 
-    /// Vector 3: after `set_version` (the migration step), `assert_version`
-    /// passes and all storage ops work normally.
     #[test]
     fn migration_after_set_version_storage_is_accessible() {
         let env = Env::default();
@@ -430,19 +426,15 @@ mod test {
         };
 
         env.as_contract(&contract_id, || {
-            // Simulate the upgrade: write the current version.
             set_version(&env);
             assert_eq!(assert_version(&env), Ok(()));
 
-            // Storage ops succeed post-migration.
             set_market(&env, 1, &market).unwrap();
             let m = get_market(&env, 1).unwrap().unwrap();
             assert_eq!(m.id, 1);
         });
     }
 
-    /// Vector 4: any version number other than `STORAGE_VERSION` is rejected,
-    /// guarding against forward-compatibility accidents.
     #[test]
     fn migration_future_version_is_rejected() {
         let env = Env::default();

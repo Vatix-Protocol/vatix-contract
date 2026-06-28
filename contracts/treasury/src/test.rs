@@ -270,6 +270,58 @@ fn cumulative_stays_high_after_withdrawal() {
     assert_eq!(s.client.get_cumulative_fees(&s.token), 300_000);
 }
 
+// ── storage version guard (#307 / #308) ──────────────────────────────────────
+
+#[test]
+fn initialize_writes_storage_version() {
+    let s = setup();
+    s.env.as_contract(&s.treasury_id, || {
+        assert_eq!(storage::get_version(&s.env), Some(storage::STORAGE_VERSION));
+    });
+}
+
+#[test]
+fn storage_version_absent_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    env.as_contract(&id, || {
+        assert_eq!(storage::get_version(&env), None);
+    });
+}
+
+#[test]
+fn reads_return_upgrade_required_on_stale_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let token = Address::generate(&env);
+    let client = TreasuryContractClient::new(&env, &id);
+
+    // Write a stale version to simulate an old deployment that hasn't migrated.
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let err = client.try_token_balance(&token).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::UpgradeRequired);
+}
+
+#[test]
+fn reads_return_upgrade_required_when_no_version_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let token = Address::generate(&env);
+    let client = TreasuryContractClient::new(&env, &id);
+
+    // No version written at all — simulates a freshly deployed but uninitialized contract.
+    let err = client.try_token_balance(&token).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::UpgradeRequired);
+}
+
 // ── set_market_contract ───────────────────────────────────────────────────────
 
 #[test]

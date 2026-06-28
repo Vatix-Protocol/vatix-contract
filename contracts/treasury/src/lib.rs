@@ -37,6 +37,7 @@
 //!
 //! | Key                       | Type      | Description                              |
 //! |---------------------------|-----------|------------------------------------------|
+//! | `StorageVersion`          | `u32`     | Schema version guard                     |
 //! | `Admin`                   | `Address` | Protocol admin                           |
 //! | `AuthorizedMarket`        | `Address` | Authorized fee-depositing contract       |
 //! | `TokenBalance(Address)`   | `i128`    | Current custodied balance (decreasable)  |
@@ -102,7 +103,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let market_contract = storage::get_authorized_market(&env);
+        let market_contract = storage::get_authorized_market(&env)?;
         if caller != market_contract {
             return Err(TreasuryError::CallerNotMarket);
         }
@@ -110,20 +111,23 @@ impl TreasuryContract {
             return Err(TreasuryError::InvalidAmount);
         }
 
-        let prev_balance = storage::get_token_balance(&env, &token);
+        let prev_balance = storage::get_token_balance(&env, &token)?;
         let new_balance = prev_balance
             .checked_add(fee_amount)
             .unwrap_or(i128::MAX);
         storage::set_token_balance(&env, &token, new_balance);
 
-        let prev_cumulative = storage::get_cumulative_fees(&env, &token);
+        let prev_cumulative = storage::get_cumulative_fees(&env, &token)?;
         let new_cumulative = prev_cumulative
             .checked_add(fee_amount)
             .unwrap_or(i128::MAX);
         storage::set_cumulative_fees(&env, &token, new_cumulative);
 
-        let prev_total = storage::get_total_collected(&env);
-        storage::set_total_collected(&env, prev_total.checked_add(fee_amount).unwrap_or(i128::MAX));
+        let prev_total = storage::get_total_collected(&env)?;
+        storage::set_total_collected(
+            &env,
+            prev_total.checked_add(fee_amount).unwrap_or(i128::MAX),
+        );
 
         events::emit_fee_collected(&env, market_id, &token, fee_amount, new_balance, new_cumulative);
         Ok(())
@@ -147,7 +151,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
         }
@@ -155,7 +159,7 @@ impl TreasuryContract {
             return Err(TreasuryError::InvalidAmount);
         }
 
-        let balance = storage::get_token_balance(&env, &token);
+        let balance = storage::get_token_balance(&env, &token)?;
         if amount > balance {
             return Err(TreasuryError::InsufficientBalance);
         }
@@ -183,12 +187,12 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
         }
 
-        let old = storage::get_authorized_market(&env);
+        let old = storage::get_authorized_market(&env)?;
         storage::set_authorized_market(&env, &new_market_contract);
         events::emit_market_contract_updated(&env, &old, &new_market_contract);
         Ok(())
@@ -196,32 +200,32 @@ impl TreasuryContract {
 
     // ── Getters ────────────────────────────────────────────────────────────────
 
-    /// Return the admin address. Panics if not initialized.
-    pub fn admin(env: Env) -> Address {
+    /// Return the admin address. Returns `UpgradeRequired` if version mismatches.
+    pub fn admin(env: Env) -> Result<Address, TreasuryError> {
         storage::get_admin(&env)
     }
 
-    /// Return the registered market contract address. Panics if not initialized.
-    pub fn market_contract(env: Env) -> Address {
+    /// Return the registered market contract address. Returns `UpgradeRequired` if version mismatches.
+    pub fn market_contract(env: Env) -> Result<Address, TreasuryError> {
         storage::get_authorized_market(&env)
     }
 
     /// Return the current custodied balance for `token` (decreases on withdrawal).
-    pub fn token_balance(env: Env, token: Address) -> i128 {
+    pub fn token_balance(env: Env, token: Address) -> Result<i128, TreasuryError> {
         storage::get_token_balance(&env, &token)
     }
 
     /// Return the per-token cumulative fees collected for `token` since deployment.
     ///
     /// This counter never decreases: admin withdrawals do not affect it.
-    pub fn get_cumulative_fees(env: Env, token: Address) -> i128 {
+    pub fn get_cumulative_fees(env: Env, token: Address) -> Result<i128, TreasuryError> {
         storage::get_cumulative_fees(&env, &token)
     }
 
     /// Return the global cumulative fees collected across all tokens since deployment.
     ///
     /// Monotone: never decreases regardless of admin withdrawals.
-    pub fn total_collected(env: Env) -> i128 {
+    pub fn total_collected(env: Env) -> Result<i128, TreasuryError> {
         storage::get_total_collected(&env)
     }
 }
