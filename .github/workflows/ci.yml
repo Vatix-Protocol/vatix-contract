@@ -46,21 +46,14 @@ jobs:
       - name: Format check
         run: cd contracts/market && cargo fmt --check
 
-      # Echo guard: this step currently runs clippy with `-D warnings` to catch
-      # lint issues early, but does not yet enforce a full set of custom lints.
+      # Clippy enforces lint hygiene across all contracts. Project-specific deny
+      # attributes are declared at the crate root (`lib.rs`) in each contract:
       #
-      # What the real implementation should do:
-      #   - Add project-specific `#[deny(...)]` or `#[warn(...)]` attributes in
-      #     lib.rs / main.rs to lock in the exact lint set for this codebase.
-      #   - Consider enabling additional Clippy lint groups such as
-      #     `clippy::pedantic` or `clippy::nursery` for stricter checks.
-      #   - Use `#[allow(lint_name)]` at the call-site for any lint that is
-      #     intentionally acceptable, rather than weakening `-D warnings` globally.
+      #   #![deny(clippy::all)]  – all default Clippy lints are hard errors
       #
-      # See scripts/README.md for the full tooling reference.
-      # The scripts README documents the intent of these "echo guard" scripts
-      # and provides guidance for maintainers on how to replace guards with
-      # real CI actions (credentials, expected outputs, and invocation examples).
+      # The `-D warnings` flag here ensures any lint not covered by the crate
+      # attributes also fails the build. Use `#[allow(clippy::lint_name)]` at
+      # the call-site for any lint that is intentionally acceptable.
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
 
