@@ -10,10 +10,10 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 | Contract | Crate | Status | Description |
 |---|---|---|---|
-| **Market** | `contracts/market` | ✅ Implemented | Market creation, position trading, oracle resolution, and settlement |
-| **Treasury** | `contracts/treasury` | ✅ Implemented | Protocol fee collection from withdrawal events; admin-controlled fee withdrawal |
-| **Outcome Token** | `contracts/outcome-token` | ✅ Implemented | Fungible SAC-compatible tokens representing YES/NO market outcomes |
-| **Resolution** | `contracts/resolution` | ✅ Implemented | Standalone oracle-based outcome resolution with dispute window |
+| **Market** | `contracts/market` | ✅ Complete | Market creation, position trading, oracle resolution, and settlement |
+| **Treasury** | `contracts/treasury` | ✅ Complete | Protocol fee collection from withdrawal events; admin-controlled fee withdrawal |
+| **Outcome Token** | `contracts/outcome-token` | ✅ Complete | Fungible SAC-compatible tokens representing YES/NO market outcomes |
+| **Resolution** | `contracts/resolution` | ✅ Complete | Standalone oracle-based outcome resolution with dispute window |
 
 ### Optional Market integrations
 
@@ -27,15 +27,6 @@ The Market contract can optionally wire supporting modules via admin-configured 
 - **Treasury**: Fee collection and protocol management
 - **Outcome Token**: Mint/burn YES/NO outcome share tokens
 - **Resolution Contract**: Challenge-window lifecycle for oracle resolution candidates
-
-## Contract Status
-
-| Contract | Crate | Status | Notes |
-|---|---|---|---|
-| Market | `contracts/market` | ✅ Complete | Trading, deposit, withdraw, settlement |
-| Outcome Token | `contracts/outcome-token` | ✅ Complete | Mint/burn YES/NO tokens; callable only by market contract |
-| Resolution | `contracts/resolution` | ✅ Complete | Challenge-window lifecycle for oracle candidates |
-| Treasury | `contracts/treasury` | ✅ Complete | Fee collection, custody, and admin withdrawal |
 
 ## Tech Stack
 
