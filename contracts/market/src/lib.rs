@@ -688,44 +688,25 @@ impl MarketContract {
             .ok_or(ContractError::MarketNotFound)
     }
 
-    /// Cancel an active market, preventing further deposits and withdrawals.
+    /// Set the withdrawal fee rate in basis points (0–10_000).
     ///
-    /// Only the admin may cancel a market. The market must be in `Active` status.
-    ///
-    /// # Arguments
-    /// * `env` - Contract environment
-    /// * `admin` - Must be the stored admin address.
-    /// * `market_id` - The market to cancel.
+    /// Only the stored admin may call this. 0 disables fees.
     ///
     /// # Errors
-    /// - [`ContractError::NotAdmin`] — caller is not the stored admin.
-    /// - [`ContractError::MarketNotFound`] — no market with the given ID.
-    /// - [`ContractError::MarketNotActive`] — market is already resolved or canceled.
-    ///
-    /// # Events
-    /// Emits `MarketCanceled` with the market ID and canceling admin.
-    pub fn cancel_market(
+    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
+    /// - [`ContractError::InvalidPrice`] – `fee_rate_bps` is outside 0–10_000.
+    pub fn set_fee_rate(
         env: Env,
         admin: Address,
-        market_id: u32,
+        fee_rate_bps: i128,
     ) -> Result<(), ContractError> {
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-
-        let mut market =
-            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
-
-        if market.status != crate::types::MarketStatus::Active {
-            return Err(ContractError::MarketNotActive);
-        }
-
-        market.status = crate::types::MarketStatus::Canceled;
-        storage::set_market(&env, market_id, &market)?;
-
-        events::emit_market_canceled(&env, market_id, &admin);
+        validation::validate_fee_rate_bps(fee_rate_bps)?;
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
         Ok(())
     }
 }

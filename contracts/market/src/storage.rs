@@ -4,13 +4,6 @@ use soroban_sdk::{contracttype, Address, Env};
 
 /// Bump this constant whenever the storage layout changes in a breaking way.
 /// `initialize()` writes this value; every storage accessor asserts it.
-///
-/// ## Migration procedure (testnet)
-/// 1. Increment `STORAGE_VERSION` in this file.
-/// 2. Redeploy the contract WASM (`make build` then `soroban contract deploy`).
-/// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
-/// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
-///    any call that touches storage will return that error.
 pub const STORAGE_VERSION: u32 = 2;
 
 #[contracttype]
@@ -21,23 +14,9 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
-    /// Address of the deployed treasury contract.
-    /// Set by the admin via `set_treasury`; optional — withdrawal fees are
-    /// only routed there when this key is populated and fee_amount > 0.
     Treasury,
     FeeRateBps,
-    /// Withdrawal fee rate in basis points (0–10_000). Read in the withdraw
-    /// path to compute the protocol fee; defaults to 0 when unset.
-    FeeRateBps,
-    /// Address of the deployed treasury contract that protocol fees are routed
-    /// to. Optional — fees are only forwarded when this is populated and the
-    /// computed fee_amount is greater than zero.
-    Treasury,
-    /// Address of the deployed outcome-token contract. When set, `update_position`
-    /// mints/burns outcome tokens to reflect share balance changes.
     OutcomeTokenContract,
-    /// Address of the deployed resolution contract. When set, `resolve_market`
-    /// requires a finalized candidate from this contract before accepting the outcome.
     ResolutionContract,
 }
 
@@ -90,7 +69,11 @@ pub fn has_market(env: &Env, market_id: u32) -> Result<bool, ContractError> {
 
 // --- Position Storage ---
 
-pub fn get_position(env: &Env, market_id: u32, user: &Address) -> Result<Option<Position>, ContractError> {
+pub fn get_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+) -> Result<Option<Position>, ContractError> {
     assert_version(env)?;
     Ok(env
         .storage()
@@ -98,7 +81,12 @@ pub fn get_position(env: &Env, market_id: u32, user: &Address) -> Result<Option<
         .get(&StorageKey::Position(market_id, user.clone())))
 }
 
-pub fn set_position(env: &Env, market_id: u32, user: &Address, position: &Position) -> Result<(), ContractError> {
+pub fn set_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    position: &Position,
+) -> Result<(), ContractError> {
     assert_version(env)?;
     env.storage()
         .persistent()
@@ -173,11 +161,17 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
     env.storage().persistent().get(&StorageKey::Treasury)
 }
 
-/// Register (or replace) the treasury contract address for protocol fee routing.
-pub fn set_treasury(env: &Env, treasury: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::Treasury, treasury);
+/// Register or replace the treasury contract address for protocol fee routing.
+/// Pass `None` to remove the treasury registration.
+pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
+    match treasury {
+        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
+        None => env.storage().persistent().remove(&StorageKey::Treasury),
+    }
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
 }
 
 // --- Outcome Token Storage ---
@@ -192,6 +186,20 @@ pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
     env.storage()
         .persistent()
         .set(&StorageKey::OutcomeTokenContract, contract);
+}
+
+// --- Resolution Contract Storage ---
+
+pub fn get_resolution_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ResolutionContract)
+}
+
+pub fn set_resolution_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ResolutionContract, contract);
 }
 
 // --- Fee Config Storage ---
@@ -209,27 +217,10 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
         .set(&StorageKey::FeeRateBps, &fee_rate_bps);
 }
 
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::Treasury)
-}
-
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
-}
-
-pub fn has_treasury(env: &Env) -> bool {
-    env.storage().persistent().has(&StorageKey::Treasury)
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::types::MarketStatus;
+    use crate::types::{AdapterType, MarketStatus};
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{BytesN, String};
 
@@ -244,7 +235,6 @@ mod test {
         use crate::error::ContractError;
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
-        // Deliberately write a stale version.
         env.as_contract(&contract_id, || {
             env.storage()
                 .persistent()
@@ -258,7 +248,6 @@ mod test {
         use crate::error::ContractError;
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
-        // No version written — storage is empty.
         env.as_contract(&contract_id, || {
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
         });
@@ -358,8 +347,6 @@ mod test {
         });
     }
 
-    /// Verify that all StorageKey variants are independent slots and that every
-    /// field of the Market and Position structs survives a storage round-trip.
     #[test]
     fn test_storage_layout() {
         let env = Env::default();
@@ -398,26 +385,19 @@ mod test {
         };
 
         env.as_contract(&contract_id, || {
-            // --- Admin and MarketCounter are independent slots ---
             set_admin(&env, &admin);
-            increment_market_id(&env).unwrap(); // counter becomes 1
+            increment_market_id(&env).unwrap();
 
             assert_eq!(get_admin(&env).unwrap(), admin);
-            // MarketCounter write must not have corrupted Admin slot
-            assert_eq!(get_admin(&env).unwrap(), admin);
-            // Admin write must not have corrupted MarketCounter slot
             assert_eq!(get_next_market_id(&env).unwrap(), 1);
 
-            // --- Market slot is independent from admin and counter ---
             assert!(!has_market(&env, market_id).unwrap());
             set_market(&env, market_id, &market).unwrap();
             assert!(has_market(&env, market_id).unwrap());
 
-            // Admin and counter are unchanged after market write
             assert_eq!(get_admin(&env).unwrap(), admin);
             assert_eq!(get_next_market_id(&env).unwrap(), 1);
 
-            // All Market fields survive the round-trip
             let m = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m.id, market.id);
             assert_eq!(m.question, market.question);
@@ -427,18 +407,14 @@ mod test {
             assert_eq!(m.creator, market.creator);
             assert_eq!(m.created_at, market.created_at);
             assert_eq!(m.collateral_token, market.collateral_token);
-            assert_eq!(m.resolution_price, market.resolution_price);
 
-            // --- Position slot is keyed by (market_id, user) ---
             assert!(!has_position(&env, market_id, &user).unwrap());
             set_position(&env, market_id, &user, &position).unwrap();
             assert!(has_position(&env, market_id, &user).unwrap());
 
-            // A different user must not see this position
             let other_user = Address::generate(&env);
             assert!(!has_position(&env, market_id, &other_user).unwrap());
 
-            // All Position fields survive the round-trip
             let p = get_position(&env, market_id, &user).unwrap().unwrap();
             assert_eq!(p.market_id, position.market_id);
             assert_eq!(p.user, position.user);
@@ -448,7 +424,6 @@ mod test {
             assert_eq!(p.total_deposited, position.total_deposited);
             assert_eq!(p.is_settled, position.is_settled);
 
-            // Market slot is unchanged after position write
             let m2 = get_market(&env, market_id).unwrap().unwrap();
             assert_eq!(m2.id, market.id);
         });
@@ -456,9 +431,6 @@ mod test {
 
     // ── #406 Cold upgrade migration test vectors ─────────────────────────────
 
-    /// Vector 1: a completely fresh contract (no storage at all) behaves
-    /// identically to a stale-version contract — both must return
-    /// `UpgradeRequired` and never panic.
     #[test]
     fn migration_v0_missing_version_blocks_all_storage_access() {
         let env = Env::default();
@@ -466,12 +438,8 @@ mod test {
         let user = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            // No version written — simulates a cold-started or pre-v1 deployment.
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
-            assert_eq!(
-                get_market(&env, 1),
-                Err(ContractError::UpgradeRequired)
-            );
+            assert_eq!(get_market(&env, 1), Err(ContractError::UpgradeRequired));
             assert_eq!(
                 get_position(&env, 1, &user),
                 Err(ContractError::UpgradeRequired)
@@ -483,15 +451,12 @@ mod test {
         });
     }
 
-    /// Vector 2: a stale version (v0 = 0) written before the current
-    /// `STORAGE_VERSION` must be rejected by `assert_version`.
     #[test]
     fn migration_stale_version_zero_is_rejected() {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
 
         env.as_contract(&contract_id, || {
-            // Simulate a pre-upgrade deployment by writing version 0.
             env.storage()
                 .persistent()
                 .set(&StorageKey::StorageVersion, &0u32);
@@ -499,8 +464,6 @@ mod test {
         });
     }
 
-    /// Vector 3: after `set_version` (the migration step), `assert_version`
-    /// passes and all storage ops work normally.
     #[test]
     fn migration_after_set_version_storage_is_accessible() {
         let env = Env::default();
@@ -518,22 +481,21 @@ mod test {
             created_at: 0,
             collateral_token,
             price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
         };
 
         env.as_contract(&contract_id, || {
-            // Simulate the upgrade: write the current version.
             set_version(&env);
             assert_eq!(assert_version(&env), Ok(()));
 
-            // Storage ops succeed post-migration.
             set_market(&env, 1, &market).unwrap();
             let m = get_market(&env, 1).unwrap().unwrap();
             assert_eq!(m.id, 1);
         });
     }
 
-    /// Vector 4: any version number other than `STORAGE_VERSION` is rejected,
-    /// guarding against forward-compatibility accidents.
     #[test]
     fn migration_future_version_is_rejected() {
         let env = Env::default();
@@ -544,6 +506,41 @@ mod test {
                 .persistent()
                 .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    #[test]
+    fn test_treasury_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+
+        let treasury = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            assert!(!has_treasury(&env));
+            set_treasury(&env, &Some(treasury.clone()));
+            assert!(has_treasury(&env));
+            assert_eq!(get_treasury(&env), Some(treasury.clone()));
+
+            set_treasury(&env, &None);
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+        });
+    }
+
+    #[test]
+    fn test_resolution_contract_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+
+        let resolution = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_resolution_contract(&env), None);
+            set_resolution_contract(&env, &resolution);
+            assert_eq!(get_resolution_contract(&env), Some(resolution));
         });
     }
 }

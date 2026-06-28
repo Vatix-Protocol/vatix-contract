@@ -76,21 +76,8 @@ pub fn withdraw_unused_collateral(
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
 
-    let fee_rate_bps = storage::get_fee_rate_bps(&env);
-    let fee_amount: i128 = if fee_rate_bps > 0 {
-        amount
-            .checked_mul(fee_rate_bps)
-            .ok_or(ContractError::ArithmeticOverflow)?
-            / 10_000
-    } else {
-        0
-    };
-
-    let required_lock = position.locked_collateral;
-    let total_deposited_after_fee = position
-        .total_deposited
-        .checked_sub(fee_amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
+    let contract_address = env.current_contract_address();
+    let token_client = TokenClient::new(&env, &market.collateral_token);
 
     // Compute the protocol fee on the requested withdrawal using the configured
     // fee rate (basis points). A zero (or unset) rate yields a zero fee.
@@ -103,24 +90,13 @@ pub fn withdraw_unused_collateral(
     };
 
     // Calculate collateral available to withdraw (not locked by positions).
+    let required_lock = position.locked_collateral;
     let available = if position.total_deposited > required_lock {
         position.total_deposited - required_lock
     } else {
         0
     };
 
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
-
-    if amount > available {
-        return Err(ContractError::InsufficientCollateral);
-    }
-
-    // Route non-zero fees to the treasury contract if one has been registered.
-    if fee_amount > 0 {
-        if let Some(treasury_addr) = storage::get_treasury(&env) {
-            token_client.transfer(&contract_address, &treasury_addr, &fee_amount);
-    // Record the fee calculation for off-chain indexers. The emitted amount is
-    // now non-zero whenever a fee rate is configured.
     emit_fee_calculated(&env, market_id, &user, fee_amount, available);
 
     // The user must have `amount + fee_amount` of unlocked collateral so that
@@ -158,7 +134,6 @@ pub fn withdraw_unused_collateral(
     let total_deducted = amount
         .checked_add(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
-    // Deduct the full amount (including fee) from the user's deposited balance.
     position.total_deposited = position
         .total_deposited
         .checked_sub(total_deducted)
@@ -176,7 +151,7 @@ pub fn withdraw_unused_collateral(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Market;
+    use crate::types::{AdapterType, Market};
     use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
 
     fn setup_env() -> Env {
@@ -528,6 +503,7 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
+            storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 0); // 0 bps
@@ -573,6 +549,7 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
+            storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 10000); // 10000 bps (100% fee)
@@ -617,6 +594,7 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
+            storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
@@ -658,6 +636,7 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
+            storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
@@ -723,10 +702,11 @@ mod tests {
         };
 
         env.as_contract(&contract_id, || {
+            storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &treasury);
+            storage::set_treasury(&env, &Some(treasury_id.clone()));
         });
 
         let token_client = StellarAssetClient::new(&env, &collateral_token);
