@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID } from "@/lib/soroban";
 import { amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
+import { TxResult } from "@/components/TxResult";
 
 export function WithdrawForm() {
   const { address } = useWallet();
@@ -103,11 +104,7 @@ export function WithdrawForm() {
             {error}
           </p>
         )}
-        {txHash && (
-          <p className="text-sm text-green-600 dark:text-green-400">
-            Withdrawn! Tx: {txHash.slice(0, 8)}...{txHash.slice(-8)}
-          </p>
-        )}
+        {txHash && <TxResult hash={txHash} label="Withdrawal" />}
         <button
           type="submit"
           disabled={isLoading || !amount || !address}
