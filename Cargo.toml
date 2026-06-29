@@ -28,10 +28,12 @@ doctest = false
 [dev-dependencies]
 vatix-market-contract = { path = "contracts/market" }
 vatix-treasury-contract = { path = "contracts/treasury" }
+vatix-outcome-token-contract = { path = "contracts/outcome-token" }
 vatix-resolution-contract = { path = "contracts/resolution" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 ed25519-dalek = "2.2.0"
 rand = "0.8"
+proptest = "1"
 
 [profile.release]
 opt-level = "z"
