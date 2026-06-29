@@ -1,5 +1,19 @@
 #![no_std]
 
+//! # Outcome Token Contract
+//!
+//! Manages per-market, per-side (YES/NO) outcome tokens for the Vatix protocol.
+//! Only the registered market contract may mint or burn tokens. Balances and
+//! total supplies are tracked per market, per user, per token kind.
+//!
+//! ## Storage layout
+//!
+//! | Key                                      | Type      | Description                                 |
+//! |------------------------------------------|-----------|---------------------------------------------|
+//! | `Config`                                 | `OutcomeTokenConfig` | Admin and market contract addresses |
+//! | `Balance(u32, Address, TokenKind)`       | `i128`    | Per-user, per-market, per-side token balance|
+//! | `TotalSupply(u32, TokenKind)`            | `i128`    | Per-market, per-side total token supply     |
+
 mod error;
 mod events;
 mod storage;
