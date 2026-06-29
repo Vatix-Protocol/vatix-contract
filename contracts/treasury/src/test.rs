@@ -382,11 +382,11 @@ fn transfer_admin_emits_event() {
     s.client.transfer_admin(&s.admin, &new_admin);
 
     let events = s.env.events().all();
-    // Last event is AdminTransferred
+    // Last event is AdminTransferred (topic: admin_transferred)
     let ev = events.last().unwrap();
     let topics = &ev.1;
     let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
-    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred_event"));
+    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred"));
 
     let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
     let old_val: Address = data.get(Symbol::new(&s.env, "old_admin")).unwrap().into_val(&s.env);

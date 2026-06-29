@@ -429,7 +429,7 @@ mod tests {
 
         // Topic 0 = event name symbol
         let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited_event"));
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited"));
 
         // Topic 1 = user
         let topic1: Address = last.1.get(1).unwrap().into_val(&env);

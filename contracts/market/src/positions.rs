@@ -402,7 +402,7 @@ mod tests {
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
-            soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
+            soroban_sdk::Symbol::new(&env, "position_limit_exceeded")
         );
     }
 
@@ -429,13 +429,13 @@ mod tests {
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
-            soroban_sdk::Symbol::new(&env, "position_updated_event")
+            soroban_sdk::Symbol::new(&env, "position_updated")
         );
 
         let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic1,
-            soroban_sdk::Symbol::new(&env, "trade_executed_event")
+            soroban_sdk::Symbol::new(&env, "trade_executed")
         );
     }
 

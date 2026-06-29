@@ -66,23 +66,23 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
         &params.collateral_token,
     );
     assert_eq!(market_id, 1);
-    assert_event_emitted(&env, "market_created_event");
+    assert_event_emitted(&env, "market_created");
 
     let user = Address::generate(&env);
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
-    assert_event_emitted(&env, "collateral_deposited_event");
+    assert_event_emitted(&env, "collateral_deposited");
 
     let yes_shares = 100 * STROOPS_PER_USDC;
     client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
-    assert_event_emitted(&env, "trade_executed_event");
+    assert_event_emitted(&env, "trade_executed");
 
     // --- resolve the market (YES wins) ---
     let resolver = Address::generate(&env);
     let market_id_str = String::from_str(&env, "1");
     client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
-    assert_event_emitted(&env, "market_resolved_event");
+    assert_event_emitted(&env, "market_resolved");
 
     let payout = env.as_contract(&contract_id, || {
         let market = storage::get_market(&env, market_id)
@@ -98,7 +98,7 @@ fn full_lifecycle_init_create_deposit_resolve_settle() {
     });
 
     assert_eq!(payout, yes_shares);
-    assert_event_emitted(&env, "position_settled_event");
+    assert_event_emitted(&env, "position_settled");
 
     let settled = env.as_contract(&contract_id, || {
         storage::get_position(&env, market_id, &user)

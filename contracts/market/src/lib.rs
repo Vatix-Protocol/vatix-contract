@@ -58,7 +58,7 @@ impl MarketContract {
     ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`MarketCreatedEvent`] with `market_id`, `creator`, `question`,
+    /// Emits [`MarketCreated`] with `market_id`, `creator`, `question`,
     /// and `end_time` as payload.
     ///
     /// # Example
@@ -100,6 +100,7 @@ impl MarketContract {
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), ContractError> {
+        current_admin.require_auth();
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
@@ -107,7 +108,6 @@ impl MarketContract {
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        current_admin.require_auth();
         storage::set_pending_admin(&env, &new_admin);
         events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
         Ok(())
@@ -335,7 +335,7 @@ impl MarketContract {
     /// - [`ContractError::MarketNotActive`] – the market is already canceled
     ///
     /// # Events
-    /// Emits [`MarketCanceledEvent`] with `market_id`, `canceler`, and
+    /// Emits [`MarketCanceled`] with `market_id`, `canceler`, and
     /// `canceled_at` on success.
     pub fn cancel_market(
         env: Env,

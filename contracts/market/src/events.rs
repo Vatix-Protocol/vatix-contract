@@ -1,10 +1,34 @@
 //! Event emission functions for the Vatix prediction market contract
+//!
+//! # Index-friendly topic naming (Issue #389)
+//!
+//! Event struct names follow the `{Noun}{Verb}` PascalCase pattern without a
+//! redundant `Event` suffix. Soroban converts them to snake_case topics
+//! automatically, producing clean, indexer-friendly topic strings.
+//!
+//! | Struct                   | Topic symbol                        |
+//! |--------------------------|-------------------------------------|
+//! | `ContractInitialized`    | `contract_initialized`              |
+//! | `MarketCreated`          | `market_created`                    |
+//! | `CollateralDeposited`    | `collateral_deposited`              |
+//! | `CollateralWithdrawn`    | `collateral_withdrawn`              |
+//! | `WithdrawEdgeCase`       | `withdraw_edge_case`                |
+//! | `MarketResolved`         | `market_resolved`                   |
+//! | `MarketCanceled`         | `market_canceled`                   |
+//! | `PositionSettled`        | `position_settled`                  |
+//! | `PositionUpdated`        | `position_updated`                  |
+//! | `PositionLimitExceeded`  | `position_limit_exceeded`           |
+//! | `OracleSignatureVerified`| `oracle_signature_verified`         |
+//! | `FeeCalculated`          | `fee_calculated`                    |
+//! | `TreasurySet`            | `treasury_set`                      |
+//! | `AdminTransferProposed`  | `admin_transfer_proposed`           |
+//! | `AdminTransferAccepted`  | `admin_transfer_accepted`           |
 
 use soroban_sdk::{contractevent, Address, BytesN, Env, String};
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct ContractInitializedEvent {
+pub struct ContractInitialized {
     #[topic]
     pub admin: Address,
     /// Ledger timestamp when the contract was bootstrapped.
@@ -13,7 +37,7 @@ pub struct ContractInitializedEvent {
 
 /// Emit an event when the contract is initialized with an admin.
 ///
-/// Publishes a [`ContractInitializedEvent`] to the Soroban event stream when
+/// Publishes a [`ContractInitialized`] to the Soroban event stream when
 /// `initialize` is called for the first time. Indexed by `admin` as a topic
 /// so off-chain indexers can confirm who bootstrapped the contract.
 ///
@@ -21,7 +45,7 @@ pub struct ContractInitializedEvent {
 /// * `env` - Contract environment
 /// * `admin` - The address stored as the contract admin
 pub fn emit_contract_initialized(env: &Env, admin: &Address) {
-    ContractInitializedEvent {
+    ContractInitialized {
         admin: admin.clone(),
         initialized_at: env.ledger().timestamp(),
     }
@@ -30,7 +54,7 @@ pub fn emit_contract_initialized(env: &Env, admin: &Address) {
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketCreatedEvent {
+pub struct MarketCreated {
     #[topic]
     pub market_id: u32,
     pub creator: Address,
@@ -40,7 +64,7 @@ pub struct MarketCreatedEvent {
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct CollateralDepositedEvent {
+pub struct CollateralDeposited {
     #[topic]
     pub user: Address,
     #[topic]
@@ -51,7 +75,7 @@ pub struct CollateralDepositedEvent {
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct CollateralWithdrawnEvent {
+pub struct CollateralWithdrawn {
     #[topic]
     pub user: Address,
     #[topic]
@@ -62,7 +86,7 @@ pub struct CollateralWithdrawnEvent {
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct WithdrawEdgeCaseEvent {
+pub struct WithdrawEdgeCase {
     #[topic]
     pub user: Address,
     #[topic]
@@ -72,7 +96,7 @@ pub struct WithdrawEdgeCaseEvent {
 
 /// Emit event when collateral is deposited
 ///
-/// Publishes a [`CollateralDepositedEvent`] to the Soroban event stream.
+/// Publishes a [`CollateralDeposited`] to the Soroban event stream.
 /// This event is indexed by `user` and `market_id` as topics, allowing
 /// off-chain indexers to efficiently query deposits by user or market.
 ///
@@ -94,7 +118,7 @@ pub fn emit_collateral_deposited(
     amount: i128,
     new_total: i128,
 ) {
-    CollateralDepositedEvent {
+    CollateralDeposited {
         user: user.clone(),
         market_id,
         amount,
@@ -105,7 +129,7 @@ pub fn emit_collateral_deposited(
 
 /// Emit event when collateral is withdrawn
 ///
-/// Publishes a [`CollateralWithdrawnEvent`] to the Soroban event stream.
+/// Publishes a [`CollateralWithdrawn`] to the Soroban event stream.
 /// This event is indexed by `user` and `market_id` as topics for efficient
 /// querying by off-chain services.
 ///
@@ -127,7 +151,7 @@ pub fn emit_collateral_withdrawn(
     amount: i128,
     new_total: i128,
 ) {
-    CollateralWithdrawnEvent {
+    CollateralWithdrawn {
         user: user.clone(),
         market_id,
         amount,
@@ -138,7 +162,7 @@ pub fn emit_collateral_withdrawn(
 
 /// Emit a MarketCreated event
 ///
-/// Publishes a [`MarketCreatedEvent`] to the Soroban event stream when a new
+/// Publishes a [`MarketCreated`] to the Soroban event stream when a new
 /// prediction market is initialized. The event is indexed by `market_id` as
 /// a topic for efficient lookup by off-chain indexers and frontends.
 ///
@@ -161,7 +185,7 @@ pub fn emit_market_created(
     end_time: u64,
 ) {
     // Publish the event with topics and data
-    MarketCreatedEvent {
+    MarketCreated {
         market_id,
         creator: creator.clone(),
         question: question.clone(),
@@ -172,7 +196,7 @@ pub fn emit_market_created(
 
 /// Emit event for withdraw edge case when user has zero collateral deposited
 ///
-/// Publishes a [`WithdrawEdgeCaseEvent`] when a user attempts to withdraw
+/// Publishes a [`WithdrawEdgeCase`] when a user attempts to withdraw
 /// from a market where they have no deposited collateral. This helps off-chain
 /// monitoring tools identify potential UI bugs or user confusion.
 ///
@@ -187,7 +211,7 @@ pub fn emit_market_created(
 /// emit_withdraw_edge_case(&env, &user, 1, 1_000_000);
 /// ```
 pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount: i128) {
-    WithdrawEdgeCaseEvent {
+    WithdrawEdgeCase {
         user: user.clone(),
         market_id,
         amount,
@@ -197,7 +221,7 @@ pub fn emit_withdraw_edge_case(env: &Env, user: &Address, market_id: u32, amount
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketResolvedEvent {
+pub struct MarketResolved {
     #[topic]
     pub market_id: u32,
     pub oracle_pubkey: BytesN<32>,
@@ -208,7 +232,7 @@ pub struct MarketResolvedEvent {
 
 /// Emit a MarketResolved event
 ///
-/// Publishes a [`MarketResolvedEvent`] to the Soroban event stream when a
+/// Publishes a [`MarketResolved`] to the Soroban event stream when a
 /// market is resolved by an oracle. The event is indexed by `market_id` as
 /// a topic, allowing efficient queries for resolution events.
 ///
@@ -232,7 +256,7 @@ pub fn emit_market_resolved(
     outcome: bool,
     resolved_at: u64,
 ) {
-    MarketResolvedEvent {
+    MarketResolved {
         market_id,
         oracle_pubkey: oracle_pubkey.clone(),
         resolver: resolver.clone(),
@@ -244,7 +268,7 @@ pub fn emit_market_resolved(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketCanceledEvent {
+pub struct MarketCanceled {
     #[topic]
     pub market_id: u32,
     pub canceler: Address,
@@ -253,7 +277,7 @@ pub struct MarketCanceledEvent {
 
 /// Emit a MarketCanceled event
 ///
-/// Publishes a [`MarketCanceledEvent`] to the Soroban event stream when an
+/// Publishes a [`MarketCanceled`] to the Soroban event stream when an
 /// admin halts a market before resolution. The event is indexed by `market_id`
 /// as a topic so off-chain indexers can detect canceled markets and surface
 /// collateral-reclaim flows to affected users.
@@ -269,7 +293,7 @@ pub struct MarketCanceledEvent {
 /// emit_market_canceled(&env, 1, &admin, env.ledger().timestamp());
 /// ```
 pub fn emit_market_canceled(env: &Env, market_id: u32, canceler: &Address, canceled_at: u64) {
-    MarketCanceledEvent {
+    MarketCanceled {
         market_id,
         canceler: canceler.clone(),
         canceled_at,
@@ -279,7 +303,7 @@ pub fn emit_market_canceled(env: &Env, market_id: u32, canceler: &Address, cance
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct PositionLimitExceededEvent {
+pub struct PositionLimitExceeded {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -303,7 +327,7 @@ pub struct PositionLimitExceededEvent {
 /// emit_position_limit_exceeded(&env, market_id, &user, true);
 /// ```
 pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
-    PositionLimitExceededEvent {
+    PositionLimitExceeded {
         market_id,
         user: user.clone(),
         side_yes,
@@ -314,7 +338,7 @@ pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, s
 #[contractevent]
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct PositionUpdatedEvent {
+pub struct PositionUpdated {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -348,7 +372,7 @@ pub fn emit_position_updated(
     no_shares: i128,
     locked_collateral: i128,
 ) {
-    PositionUpdatedEvent {
+    PositionUpdated {
         market_id,
         user: user.clone(),
         yes_shares,
@@ -360,7 +384,7 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TradeExecutedEvent {
+pub struct TradeExecuted {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -373,7 +397,7 @@ pub struct TradeExecutedEvent {
 
 /// Emit an event when a trade is executed (shares bought or sold).
 ///
-/// Publishes a [`TradeExecutedEvent`] to the Soroban event stream indexed by
+/// Publishes a [`TradeExecuted`] to the Soroban event stream indexed by
 /// `market_id` and `user` to allow efficient off-chain indexing of trades
 /// by market or trader.
 ///
@@ -399,7 +423,7 @@ pub fn emit_trade_executed(
     side_yes: bool,
     executed_at: u64,
 ) {
-    TradeExecutedEvent {
+    TradeExecuted {
         market_id,
         user: user.clone(),
         quantity,
@@ -413,7 +437,7 @@ pub fn emit_trade_executed(
 #[contractevent]
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct ValidationFailedEvent {
+pub struct ValidationFailed {
     #[topic]
     pub context: soroban_sdk::Symbol,
     pub error_code: u32,
@@ -439,7 +463,7 @@ pub struct ValidationFailedEvent {
 /// ```
 #[allow(dead_code)]
 pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
-    ValidationFailedEvent {
+    ValidationFailed {
         context,
         error_code,
     }
@@ -449,7 +473,7 @@ pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_cod
 #[contractevent]
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct PositionSettledEvent {
+pub struct PositionSettled {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -479,7 +503,7 @@ pub fn emit_position_settled(
     payout: i128,
     settled_at: u64,
 ) {
-    PositionSettledEvent {
+    PositionSettled {
         market_id,
         user: user.clone(),
         payout,
@@ -490,7 +514,7 @@ pub fn emit_position_settled(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct OracleSignatureVerifiedEvent {
+pub struct OracleSignatureVerified {
     #[topic]
     pub market_id: u32,
     pub outcome: bool,
@@ -499,7 +523,7 @@ pub struct OracleSignatureVerifiedEvent {
 
 /// Emit event when oracle signature is verified
 ///
-/// Publishes an [`OracleSignatureVerifiedEvent`] when an oracle's Ed25519
+/// Publishes an [`OracleSignatureVerified`] when an oracle's Ed25519
 /// signature is successfully verified during market resolution. This event
 /// provides an audit trail for resolution authenticity and is indexed by
 /// `market_id` for efficient querying.
@@ -515,7 +539,7 @@ pub struct OracleSignatureVerifiedEvent {
 /// emit_oracle_signature_verified(&env, 1, true, env.ledger().timestamp());
 /// ```
 pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, verified_at: u64) {
-    OracleSignatureVerifiedEvent {
+    OracleSignatureVerified {
         market_id,
         outcome,
         verified_at,
@@ -525,7 +549,7 @@ pub fn emit_oracle_signature_verified(env: &Env, market_id: u32, outcome: bool, 
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct FeeCalculatedEvent {
+pub struct FeeCalculated {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -549,7 +573,7 @@ pub fn emit_fee_calculated(
     fee_amount: i128,
     available_after_fee: i128,
 ) {
-    FeeCalculatedEvent {
+    FeeCalculated {
         market_id,
         user: user.clone(),
         fee_amount,
@@ -560,7 +584,7 @@ pub fn emit_fee_calculated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct AdminTransferProposedEvent {
+pub struct AdminTransferProposed {
     #[topic]
     pub current_admin: Address,
     #[topic]
@@ -569,7 +593,7 @@ pub struct AdminTransferProposedEvent {
 }
 
 pub fn emit_admin_transfer_proposed(env: &Env, current_admin: &Address, pending_admin: &Address) {
-    AdminTransferProposedEvent {
+    AdminTransferProposed {
         current_admin: current_admin.clone(),
         pending_admin: pending_admin.clone(),
         proposed_at: env.ledger().timestamp(),
@@ -579,7 +603,7 @@ pub fn emit_admin_transfer_proposed(env: &Env, current_admin: &Address, pending_
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct AdminTransferAcceptedEvent {
+pub struct AdminTransferAccepted {
     #[topic]
     pub old_admin: Address,
     #[topic]
@@ -588,7 +612,7 @@ pub struct AdminTransferAcceptedEvent {
 }
 
 pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
-    AdminTransferAcceptedEvent {
+    AdminTransferAccepted {
         old_admin: old_admin.clone(),
         new_admin: new_admin.clone(),
         accepted_at: env.ledger().timestamp(),
@@ -598,14 +622,14 @@ pub fn emit_admin_transfer_accepted(env: &Env, old_admin: &Address, new_admin: &
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TreasurySetEvent {
+pub struct TreasurySet {
     #[topic]
     pub treasury: Address,
     pub set_at: u64,
 }
 
 pub fn emit_treasury_set(env: &Env, treasury: &Address) {
-    TreasurySetEvent {
+    TreasurySet {
         treasury: treasury.clone(),
         set_at: env.ledger().timestamp(),
     }
@@ -638,7 +662,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "contract_initialized_event"));
+        assert_eq!(topic0, Symbol::new(&env, "contract_initialized"));
 
         let topic1: Address = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, admin);
@@ -678,7 +702,7 @@ mod tests {
         assert_eq!(topics.len(), 2);
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "market_created_event"));
+        assert_eq!(topic0, Symbol::new(&env, "market_created"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -725,7 +749,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "market_resolved_event"));
+        assert_eq!(topic0, Symbol::new(&env, "market_resolved"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -768,7 +792,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "market_canceled_event"));
+        assert_eq!(topic0, Symbol::new(&env, "market_canceled"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -815,7 +839,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "position_updated_event"));
+        assert_eq!(topic0, Symbol::new(&env, "position_updated"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -863,7 +887,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "position_settled_event"));
+        assert_eq!(topic0, Symbol::new(&env, "position_settled"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -900,7 +924,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "collateral_deposited_event"));
+        assert_eq!(topic0, Symbol::new(&env, "collateral_deposited"));
 
         let topic1: Address = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, user);
@@ -940,7 +964,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "validation_failed_event"));
+        assert_eq!(topic0, Symbol::new(&env, "validation_failed"));
 
         let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, context);
@@ -974,7 +998,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "collateral_withdrawn_event"));
+        assert_eq!(topic0, Symbol::new(&env, "collateral_withdrawn"));
 
         let topic1: Address = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, user);
@@ -1015,7 +1039,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "oracle_signature_verified_event"));
+        assert_eq!(topic0, Symbol::new(&env, "oracle_signature_verified"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
@@ -1054,7 +1078,7 @@ mod tests {
         let topics = &event.1;
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, Symbol::new(&env, "fee_calculated_event"));
+        assert_eq!(topic0, Symbol::new(&env, "fee_calculated"));
 
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, market_id);
