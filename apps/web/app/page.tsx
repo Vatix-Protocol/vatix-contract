@@ -1,10 +1,31 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { MarketCard } from "@/components/MarketCard";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LoadingSkeleton } from "@/components/LoadingSkeleton";
 import { PositionPanel } from "@/components/PositionPanel";
-import { MOCK_MARKETS } from "@/lib/markets";
+import { getMarkets } from "@/lib/markets";
 import { containerClass } from "@/lib/responsive";
+
+async function FeaturedMarkets() {
+  const markets = await getMarkets();
+  if (markets.length === 0) {
+    return (
+      <p className="text-sm text-slate-600 dark:text-slate-400">
+        No markets available yet. Check back soon.
+      </p>
+    );
+  }
+  return (
+    <ul className="grid gap-4 sm:grid-cols-2">
+      {markets.slice(0, 2).map((market) => (
+        <li key={market.id}>
+          <MarketCard market={market} />
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default function HomePage() {
   return (
@@ -15,7 +36,7 @@ export default function HomePage() {
         </h1>
         <p className="mt-2 max-w-xl text-sm text-slate-600 dark:text-slate-400">
           Trade binary Yes/No outcomes on Stellar. Connect a wallet to deposit
-          and open positions (Soroban integration coming soon).
+          and open positions.
         </p>
         <Link
           href="/markets"
@@ -27,14 +48,9 @@ export default function HomePage() {
 
       <h2 className="mb-4 text-lg font-medium">Featured markets</h2>
       <ErrorBoundary>
-        <LoadingSkeleton />
-        <ul className="grid gap-4 sm:grid-cols-2">
-          {MOCK_MARKETS.slice(0, 2).map((market) => (
-            <li key={market.id}>
-              <MarketCard market={market} />
-            </li>
-          ))}
-        </ul>
+        <Suspense fallback={<LoadingSkeleton />}>
+          <FeaturedMarkets />
+        </Suspense>
       </ErrorBoundary>
 
       <div className="mt-10">
