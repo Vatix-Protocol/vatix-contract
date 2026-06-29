@@ -19,6 +19,7 @@ mod validation;
 
 use crate::error::ContractError;
 use crate::types::{Market, MarketStatus, Position};
+use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 
 #[contract]
@@ -341,5 +342,53 @@ impl MarketContract {
     /// Emits `PositionSettled` with the payout amount.
     pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
         settlement::settle_position(&env, &user, market_id)
+    }
+
+    /// Set the protocol fee rate (admin-only).
+    ///
+    /// Persists the new fee rate to contract storage. The rate is expressed in
+    /// basis points (1 bps = 0.01 %), so 50 bps = 0.50 %.
+    ///
+    /// # Arguments
+    /// * `admin` - Admin address (must authorize and match the stored admin)
+    /// * `fee_bps` - New fee rate in basis points (0–10 000)
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – caller is not the stored admin
+    /// - [`ContractError::InvalidFeeRate`] – `fee_bps` is outside 0–10 000
+    pub fn set_fee_rate_bps(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env);
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        if fee_bps > storage::MAX_FEE_RATE_BPS {
+            return Err(ContractError::InvalidFeeRate);
+        }
+        storage::set_fee_rate_bps(&env, fee_bps);
+        Ok(())
+    }
+
+    /// Return the current protocol fee rate in basis points.
+    ///
+    /// Defaults to 50 bps (0.50 %) when no rate has been explicitly configured.
+    pub fn get_fee_rate_bps(env: Env) -> u32 {
+        storage::get_fee_rate_bps(&env)
+    }
+
+    /// Return the contract's balance of `token` (treasury balance).
+    ///
+    /// Queries the SAC token contract directly — no internal state is stored.
+    /// Use this to inspect how much collateral the market contract currently holds.
+    ///
+    /// # Arguments
+    /// * `token` - Address of the SAC collateral token to query
+    pub fn token_balance(env: Env, token: Address) -> i128 {
+        let contract_address = env.current_contract_address();
+        TokenClient::new(&env, &token).balance(&contract_address)
     }
 }

@@ -12,7 +12,16 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    FeeRateBps,
 }
+
+// --- Fee Rate Constants ---
+
+/// Default fee rate in basis points (0.5%).
+pub const DEFAULT_FEE_RATE_BPS: u32 = 50;
+
+/// Maximum allowed fee rate in basis points (100%).
+pub const MAX_FEE_RATE_BPS: u32 = 10_000;
 
 // --- Market Storage ---
 
@@ -73,6 +82,23 @@ pub fn has_admin(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Admin)
 }
 
+// --- Fee Rate Storage ---
+
+/// Returns the stored fee rate in basis points, defaulting to
+/// [`DEFAULT_FEE_RATE_BPS`] (50 bps) when none has been set.
+pub fn get_fee_rate_bps(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeRateBps)
+        .unwrap_or(DEFAULT_FEE_RATE_BPS)
+}
+
+pub fn set_fee_rate_bps(env: &Env, fee_bps: u32) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeRateBps, &fee_bps);
+}
+
 pub fn get_next_market_id(env: &Env) -> u32 {
     env.storage()
         .persistent()
@@ -106,6 +132,37 @@ mod test {
             set_admin(&env, &admin);
             assert!(has_admin(&env), "admin slot should be populated after set");
             assert_eq!(get_admin(&env), admin);
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_defaults_to_50() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_fee_rate_bps(&env),
+                DEFAULT_FEE_RATE_BPS,
+                "fee rate must default to 50 bps"
+            );
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            set_fee_rate_bps(&env, 100);
+            assert_eq!(get_fee_rate_bps(&env), 100);
+
+            set_fee_rate_bps(&env, 0);
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            set_fee_rate_bps(&env, MAX_FEE_RATE_BPS);
+            assert_eq!(get_fee_rate_bps(&env), MAX_FEE_RATE_BPS);
         });
     }
 

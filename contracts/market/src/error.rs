@@ -110,6 +110,9 @@ pub enum ContractError {
     /// Questions must be non-empty and reasonably sized (1-499 characters).
     InvalidQuestion = 33,
 
+    /// Fee rate in basis points is out of range (must be 0–10 000).
+    InvalidFeeRate = 34,
+
     // ========== Authorization Errors (40-49) ==========
     /// Caller is not authorized to perform this action.
     ///
@@ -162,6 +165,7 @@ mod tests {
         assert_eq!(ContractError::InvalidQuantity as u32, 31);
         assert_eq!(ContractError::InvalidTimestamp as u32, 32);
         assert_eq!(ContractError::InvalidQuestion as u32, 33);
+        assert_eq!(ContractError::InvalidFeeRate as u32, 34);
         assert_eq!(ContractError::Unauthorized as u32, 40);
         assert_eq!(ContractError::NotAdmin as u32, 41);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
