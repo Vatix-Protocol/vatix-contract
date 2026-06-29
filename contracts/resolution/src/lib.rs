@@ -24,29 +24,47 @@ pub struct ResolutionContract;
 impl ResolutionContract {
     /// Register the resolution lifecycle contract with its factory and market.
     ///
-    /// The factory can index this contract as the challenge-window companion
-    /// for `market_contract`. Final settlement still happens through the
-    /// market contract's `resolve_market` function after a candidate finalizes.
+    /// `default_challenge_window_seconds` is stored as the contract-wide default.
     pub fn initialize(
         env: Env,
         admin: Address,
         factory: Address,
         market_contract: Address,
+        default_challenge_window_seconds: u64,
     ) -> Result<(), ContractError> {
         admin.require_auth();
         if storage::has_config(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
-
+        validate_challenge_window(default_challenge_window_seconds)?;
         storage::set_config(
             &env,
             &ResolutionConfig {
                 admin,
                 factory: factory.clone(),
                 market_contract: market_contract.clone(),
+                default_challenge_window_seconds,
             },
         );
         events::emit_resolution_registered(&env, &factory, &market_contract);
+        Ok(())
+    }
+
+    pub fn get_default_challenge_window(env: Env) -> u64 {
+        storage::get_config(&env).default_challenge_window_seconds
+    }
+
+    pub fn set_default_challenge_window(
+        env: Env,
+        admin: Address,
+        seconds: u64,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let mut config = storage::get_config(&env);
+        require_admin(&admin, &config)?;
+        validate_challenge_window(seconds)?;
+        config.default_challenge_window_seconds = seconds;
+        storage::set_config(&env, &config);
         Ok(())
     }
 

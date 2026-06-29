@@ -33,7 +33,7 @@ fn scaffold() -> (Env, ResolutionContractClient<'static>, Address) {
 
     let contract_id = env.register(ResolutionContract, ());
     ResolutionContractClient::new(&env, &contract_id)
-        .initialize(&admin, &factory, &market_contract);
+        .initialize(&admin, &factory, &market_contract, &CHALLENGE_WINDOW);
 
     let client = ResolutionContractClient::new(&env, &contract_id);
     (env, client, admin)
