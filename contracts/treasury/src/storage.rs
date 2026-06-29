@@ -1,6 +1,6 @@
 //! Persistent storage helpers for the Vatix Treasury contract.
 
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -8,8 +8,8 @@ use soroban_sdk::{contracttype, Address, Env};
 pub enum StorageKey {
     /// The address that can call `withdraw_fees` and other admin operations.
     Admin,
-    /// The single market contract address allowed to call `collect_fee`.
-    AuthorizedMarket,
+    /// The set of market contract addresses allowed to call `collect_fee`.
+    AuthorizedMarkets,
     /// Current custodied balance for a specific token (decreases on withdrawal).
     TokenBalance(Address),
     /// Monotonically increasing cumulative fees collected per token (never decreases).
@@ -35,19 +35,23 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&StorageKey::Admin, admin);
 }
 
-// ── Authorized market ─────────────────────────────────────────────────────────
+// ── Authorized markets registry ───────────────────────────────────────────────
 
-pub fn get_authorized_market(env: &Env) -> Address {
+pub fn get_authorized_markets(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
-        .get(&StorageKey::AuthorizedMarket)
-        .expect("treasury not initialized")
+        .get(&StorageKey::AuthorizedMarkets)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
-pub fn set_authorized_market(env: &Env, market: &Address) {
+pub fn set_authorized_markets(env: &Env, markets: &Vec<Address>) {
     env.storage()
         .instance()
-        .set(&StorageKey::AuthorizedMarket, market);
+        .set(&StorageKey::AuthorizedMarkets, markets);
+}
+
+pub fn is_authorized_market(env: &Env, market: &Address) -> bool {
+    get_authorized_markets(env).contains(market)
 }
 
 // ── Token balance (current, decreasable on withdrawal) ────────────────────────

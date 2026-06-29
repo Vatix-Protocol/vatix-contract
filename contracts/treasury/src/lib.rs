@@ -3,44 +3,20 @@
 //! # Treasury Contract
 //!
 //! Collects and custodies protocol fees on behalf of the Vatix prediction
-//! market protocol. Only the registered **market contract** may deposit fees
-//! via [`TreasuryContract::collect_fee`]; the **admin** controls all other
-//! privileged operations (withdrawal, market contract rotation).
-//!
-//! ## Fee flow
-//!
-//! ```text
-//!  User withdrawal
-//!      │  fee_amount > 0
-//!      ▼
-//!  MarketContract
-//!      │  token.transfer(market → treasury, fee_amount)
-//!      │  treasury.collect_fee(market, token, market_id, fee_amount)
-//!      ▼
-//!  TreasuryContract  ← accumulates per-token balances
-//!      │  (admin only)
-//!      ▼
-//!  treasury.withdraw_fees(admin, token, to, amount)
-//! ```
+//! market protocol. Any address in the authorized market registry may deposit
+//! fees via [`TreasuryContract::collect_fee`]; the **admin** controls all
+//! other privileged operations (withdrawal, registry management).
 //!
 //! ## Authorization model
 //!
-//! | Operation             | Who may call              |
-//! |-----------------------|---------------------------|
-//! | `initialize`          | anyone (once)             |
-//! | `collect_fee`         | registered market contract|
-//! | `withdraw_fees`       | admin                     |
-//! | `set_market_contract` | admin                     |
-//! | Getters               | anyone                    |
-//!
-//! ## Storage layout
-//!
-//! | Key                       | Type      | Description                              |
-//! |---------------------------|-----------|------------------------------------------|
-//! | `Admin`                   | `Address` | Protocol admin                           |
-//! | `AuthorizedMarket`        | `Address` | Authorized fee-depositing contract       |
-//! | `TokenBalance(Address)`   | `i128`    | Current custodied balance (decreasable)  |
-//! | `CumulativeFees(Address)` | `i128`    | Historical total collected (monotone)    |
+//! | Operation              | Who may call                     |
+//! |------------------------|----------------------------------|
+//! | `initialize`           | anyone (once)                    |
+//! | `collect_fee`          | any registered market contract   |
+//! | `withdraw_fees`        | admin                            |
+//! | `add_market`           | admin                            |
+//! | `remove_market`        | admin                            |
+//! | Getters                | anyone                           |
 
 pub mod error;
 pub mod events;
@@ -50,7 +26,7 @@ mod test;
 
 pub use error::TreasuryError;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 
 #[contract]
 pub struct TreasuryContract;
@@ -59,11 +35,7 @@ pub struct TreasuryContract;
 impl TreasuryContract {
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    /// Bootstrap the treasury.
-    ///
-    /// Sets the admin and registers the market contract permitted to call
-    /// [`collect_fee`]. Must be called once after deployment; subsequent calls
-    /// return [`TreasuryError::AlreadyInitialized`].
+    /// Bootstrap the treasury with an initial market contract in the registry.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -74,21 +46,16 @@ impl TreasuryContract {
             return Err(TreasuryError::AlreadyInitialized);
         }
         storage::set_admin(&env, &admin);
-        storage::set_authorized_market(&env, &market_contract);
+        let mut markets = Vec::new(&env);
+        markets.push_back(market_contract.clone());
+        storage::set_authorized_markets(&env, &markets);
         events::emit_treasury_initialized(&env, &admin, &market_contract);
         Ok(())
     }
 
     // ── Fee collection ─────────────────────────────────────────────────────────
 
-    /// Record a protocol fee transferred from a market withdrawal.
-    ///
-    /// Only the registered market contract may call this. The market contract
-    /// must transfer `fee_amount` tokens to this contract's address *before*
-    /// (or atomically with) this call so that on-chain balances stay consistent.
-    ///
-    /// Updates both the current `TokenBalance` and the monotone `CumulativeFees`
-    /// counter for `token`.
+    /// Record a protocol fee transferred from any registered market contract.
     pub fn collect_fee(
         env: Env,
         caller: Address,
@@ -101,8 +68,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let market_contract = storage::get_authorized_market(&env);
-        if caller != market_contract {
+        if !storage::is_authorized_market(&env, &caller) {
             return Err(TreasuryError::CallerNotMarket);
         }
         if fee_amount <= 0 {
@@ -131,9 +97,6 @@ impl TreasuryContract {
     // ── Admin operations ───────────────────────────────────────────────────────
 
     /// Withdraw accumulated fees to a recipient address.
-    ///
-    /// Decrements the custodied `TokenBalance` but leaves `CumulativeFees`
-    /// untouched — the historical counter is monotone by design.
     pub fn withdraw_fees(
         env: Env,
         caller: Address,
@@ -169,13 +132,13 @@ impl TreasuryContract {
         Ok(())
     }
 
-    /// Rotate the registered market contract address (e.g. after an upgrade).
+    /// Add a market contract to the authorized registry (admin only).
     ///
-    /// Only the admin may call this.
-    pub fn set_market_contract(
+    /// No-ops if the market is already registered.
+    pub fn add_market(
         env: Env,
         caller: Address,
-        new_market_contract: Address,
+        market_contract: Address,
     ) -> Result<(), TreasuryError> {
         caller.require_auth();
 
@@ -187,39 +150,72 @@ impl TreasuryContract {
             return Err(TreasuryError::Unauthorized);
         }
 
-        let old = storage::get_authorized_market(&env);
-        storage::set_authorized_market(&env, &new_market_contract);
-        events::emit_market_contract_updated(&env, &old, &new_market_contract);
+        let mut markets = storage::get_authorized_markets(&env);
+        if !markets.contains(&market_contract) {
+            markets.push_back(market_contract.clone());
+            storage::set_authorized_markets(&env, &markets);
+            events::emit_market_contract_updated(&env, &market_contract, &market_contract);
+        }
+        Ok(())
+    }
+
+    /// Remove a market contract from the authorized registry (admin only).
+    ///
+    /// Returns [`TreasuryError::CallerNotMarket`] if the address is not registered.
+    pub fn remove_market(
+        env: Env,
+        caller: Address,
+        market_contract: Address,
+    ) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env);
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        let markets = storage::get_authorized_markets(&env);
+        if !markets.contains(&market_contract) {
+            return Err(TreasuryError::CallerNotMarket);
+        }
+        let updated: Vec<Address> = markets
+            .iter()
+            .filter(|m| m != market_contract)
+            .collect();
+        storage::set_authorized_markets(&env, &updated);
         Ok(())
     }
 
     // ── Getters ────────────────────────────────────────────────────────────────
 
-    /// Return the admin address. Panics if not initialized.
     pub fn admin(env: Env) -> Address {
         storage::get_admin(&env)
     }
 
-    /// Return the registered market contract address. Panics if not initialized.
-    pub fn market_contract(env: Env) -> Address {
-        storage::get_authorized_market(&env)
+    /// Return the list of all authorized market contracts.
+    pub fn list_markets(env: Env) -> Vec<Address> {
+        storage::get_authorized_markets(&env)
     }
 
-    /// Return the current custodied balance for `token` (decreases on withdrawal).
+    /// Return whether `market` is in the authorized registry.
+    pub fn is_authorized_market(env: Env, market: Address) -> bool {
+        storage::is_authorized_market(&env, &market)
+    }
+
+    /// Return the current custodied balance for `token`.
     pub fn token_balance(env: Env, token: Address) -> i128 {
         storage::get_token_balance(&env, &token)
     }
 
-    /// Return the per-token cumulative fees collected for `token` since deployment.
-    ///
-    /// This counter never decreases: admin withdrawals do not affect it.
+    /// Return the per-token cumulative fees collected for `token`.
     pub fn get_cumulative_fees(env: Env, token: Address) -> i128 {
         storage::get_cumulative_fees(&env, &token)
     }
 
-    /// Return the global cumulative fees collected across all tokens since deployment.
-    ///
-    /// Monotone: never decreases regardless of admin withdrawals.
+    /// Return the global cumulative fees collected across all tokens.
     pub fn total_collected(env: Env) -> i128 {
         storage::get_total_collected(&env)
     }
