@@ -1,6 +1,5 @@
 use soroban_sdk::contracterror;
 
-/// Error codes for the Vatix resolution candidate contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -13,6 +12,8 @@ pub enum ContractError {
     ChallengeWindowClosed = 6,
     InvalidChallengeWindow = 7,
     InvalidEvidenceUri = 8,
+    InvalidCollateral = 9,
+    InsufficientCollateral = 10,
     Unauthorized = 40,
     NotAdmin = 41,
     AlreadyInitialized = 42,
