@@ -53,7 +53,7 @@ pub fn deposit_collateral(
     user.require_auth();
 
     // Validation
-    validation::validate_collateral_amount(amount)?;
+    validation::validate_deposit_amount(amount)?;
 
     let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
@@ -106,6 +106,9 @@ pub fn deposit_collateral(
 
     // Persist updated position
     storage::set_position(&env, market_id, &user, &position)?;
+
+    // Record deposit timestamp for cooldown enforcement on withdrawals (issue #413).
+    storage::set_last_deposit_time(&env, market_id, &user, env.ledger().timestamp());
 
     // TODO(#issue): consider batching deposit events for gas efficiency
     // Emit event

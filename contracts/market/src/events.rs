@@ -612,6 +612,38 @@ pub fn emit_treasury_set(env: &Env, treasury: &Address) {
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminRenounceProposedEvent {
+    #[topic]
+    pub admin: Address,
+    pub proposed_at: u64,
+}
+
+pub fn emit_admin_renounce_proposed(env: &Env, admin: &Address) {
+    AdminRenounceProposedEvent {
+        admin: admin.clone(),
+        proposed_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminRenouncedEvent {
+    #[topic]
+    pub former_admin: Address,
+    pub renounced_at: u64,
+}
+
+pub fn emit_admin_renounced(env: &Env, admin: &Address) {
+    AdminRenouncedEvent {
+        former_admin: admin.clone(),
+        renounced_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

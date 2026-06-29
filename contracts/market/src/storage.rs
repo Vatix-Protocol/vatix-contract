@@ -37,6 +37,10 @@ pub enum StorageKey {
     ThresholdSigners,
     /// Minimum number of valid signatures required to resolve a market (#378).
     ThresholdQuorum,
+    /// Ledger timestamp of a user's most recent deposit into a market (issue #413).
+    LastDepositTime(u32, Address),
+    /// Flag indicating a pending admin renounce proposal (issue #414).
+    PendingRenounce,
 }
 
 // --- Version helpers ---
@@ -197,6 +201,40 @@ pub fn get_resolution_contract(env: &Env) -> Option<Address> {
 
 pub fn set_resolution_contract(env: &Env, contract: &Address) {
     env.storage().persistent().set(&StorageKey::ResolutionContract, contract);
+}
+
+// --- Deposit Timestamp Storage (issue #413) ---
+
+pub fn get_last_deposit_time(env: &Env, market_id: u32, user: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::LastDepositTime(market_id, user.clone()))
+}
+
+pub fn set_last_deposit_time(env: &Env, market_id: u32, user: &Address, timestamp: u64) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::LastDepositTime(market_id, user.clone()), &timestamp);
+}
+
+// --- Pending Renounce Storage (issue #414) ---
+
+pub fn has_pending_renounce(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::PendingRenounce)
+}
+
+pub fn set_pending_renounce(env: &Env) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingRenounce, &true);
+}
+
+pub fn clear_pending_renounce(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingRenounce);
+}
+
+pub fn clear_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::Admin);
 }
 
 // --- Fee Config Storage ---

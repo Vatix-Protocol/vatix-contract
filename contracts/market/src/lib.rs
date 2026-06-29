@@ -780,6 +780,53 @@ impl MarketContract {
         storage::get_treasury(&env)
     }
 
+    /// Begin a two-step admin renounce by recording a pending renounce proposal.
+    ///
+    /// Only the current admin may call this. A second call to
+    /// [`confirm_renounce_admin`] is required to complete the renounce.
+    /// This two-step flow prevents accidental loss of admin rights.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
+    /// - [`ContractError::RenounceAlreadyProposed`] — a proposal is already pending.
+    pub fn propose_renounce_admin(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        if storage::has_pending_renounce(&env) {
+            return Err(ContractError::RenounceAlreadyProposed);
+        }
+        storage::set_pending_renounce(&env);
+        events::emit_admin_renounce_proposed(&env, &admin);
+        Ok(())
+    }
+
+    /// Complete a pending admin renounce, permanently removing the admin role.
+    ///
+    /// Must be called by the same admin that issued the proposal via
+    /// [`propose_renounce_admin`]. On success the admin storage key is cleared
+    /// and no further admin-protected calls can succeed.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
+    /// - [`ContractError::NoRenounceProposal`] — no pending renounce proposal exists.
+    pub fn confirm_renounce_admin(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        if !storage::has_pending_renounce(&env) {
+            return Err(ContractError::NoRenounceProposal);
+        }
+        storage::clear_admin(&env);
+        storage::clear_pending_renounce(&env);
+        events::emit_admin_renounced(&env, &admin);
+        Ok(())
+    }
+
     /// Return a read-only view of a market by its ID.
     ///
     /// # Errors
