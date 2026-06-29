@@ -4,6 +4,8 @@ mod deposit;
 mod error;
 mod events;
 pub mod oracle;
+#[cfg(feature = "oracle-adapter")]
+pub mod oracle_adapter;
 #[allow(dead_code)]
 mod positions;
 #[allow(dead_code)]
@@ -13,14 +15,17 @@ mod withdraw;
 #[allow(dead_code)]
 pub mod storage;
 mod test;
+#[cfg(test)]
+mod withdraw_fuzz;
 pub mod types;
 #[allow(dead_code)]
 mod validation;
 
 use crate::error::ContractError;
-use crate::types::{Market, MarketStatus, Position};
-use soroban_sdk::token::Client as TokenClient;
+use crate::types::{AdapterType, Market, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use vatix_outcome_token_contract::{OutcomeTokenContractClient, types::TokenKind};
+use vatix_resolution_contract::types::CandidateStatus as ResolutionCandidateStatus;
 
 #[contract]
 pub struct MarketContract;
@@ -53,8 +58,8 @@ impl MarketContract {
     ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`MarketCreatedEvent`] with `market_id`, `question`, and
-    /// `end_time` as payload.
+    /// Emits [`MarketCreatedEvent`] with `market_id`, `creator`, `question`,
+    /// and `end_time` as payload.
     ///
     /// # Example
     /// ```ignore
@@ -77,7 +82,56 @@ impl MarketContract {
             return Err(ContractError::AlreadyInitialized);
         }
         storage::set_admin(&env, &admin);
+        storage::set_version(&env);
         events::emit_contract_initialized(&env, &admin);
+        Ok(())
+    }
+
+    /// Begin a two-step admin transfer by nominating a new admin address.
+    ///
+    /// Only the current admin may call this. The nominated address becomes the
+    /// pending admin and must confirm the transfer by calling [`accept_admin`].
+    /// Calling this again before acceptance overwrites the previous nomination.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – contract is not initialized or `current_admin` is not the stored admin
+    pub fn propose_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
+        if !storage::has_admin(&env) {
+            return Err(ContractError::NotAdmin);
+        }
+        let stored_admin = storage::get_admin(&env)?;
+        if current_admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        current_admin.require_auth();
+        storage::set_pending_admin(&env, &new_admin);
+        events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
+        Ok(())
+    }
+
+    /// Complete a two-step admin transfer by accepting a pending nomination.
+    ///
+    /// Must be called by the address that was nominated via [`propose_admin`].
+    /// On success the caller becomes the new admin and the pending nomination
+    /// is cleared.
+    ///
+    /// # Errors
+    /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
+    /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
+        if new_admin != pending {
+            return Err(ContractError::Unauthorized);
+        }
+        new_admin.require_auth();
+        let old_admin = storage::get_admin(&env)?;
+        storage::set_admin(&env, &new_admin);
+        storage::clear_pending_admin(&env);
+        events::emit_admin_transfer_accepted(&env, &old_admin, &new_admin);
         Ok(())
     }
 
@@ -91,7 +145,7 @@ impl MarketContract {
     ) -> Result<u32, ContractError> {
         // 1. Verify creator is admin
         creator.require_auth();
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if creator != admin {
             return Err(ContractError::NotAdmin);
         }
@@ -107,7 +161,14 @@ impl MarketContract {
         }
 
         // 3. Generate market ID
-        let market_id = storage::increment_market_id(&env);
+        let market_id = storage::increment_market_id(&env)?;
+
+        // Guard: the generated ID must not already be in storage.
+        // Under normal operation this cannot happen (the counter is monotonic),
+        // but we reject explicitly to prevent any accidental overwrite.
+        if storage::has_market(&env, market_id)? {
+            return Err(ContractError::AlreadyInitialized);
+        }
 
         // 4. Create Market struct
         let market = Market {
@@ -120,14 +181,18 @@ impl MarketContract {
             creator: creator.clone(),
             created_at: current_time,
             collateral_token,
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: crate::types::AdapterType::Ed25519,
+            outcome_count: 2,
         };
 
         // 5. Store market
-        storage::set_market(&env, market_id, &market);
+        storage::set_market(&env, market_id, &market)?;
 
-        // TODO(#issue): include creator address in MarketCreated event payload
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &question, end_time);
+        events::emit_market_created(&env, market_id, &creator, &question, end_time);
 
         // 7. Return market ID
         Ok(market_id)
@@ -200,41 +265,167 @@ impl MarketContract {
     /// - UnauthorizedOracle: Wrong oracle pubkey
     ///
     /// # Events
-    /// Emits MarketResolved event
+    /// Emits MarketResolved event with the authorized oracle public key as resolver.
     pub fn resolve_market(
         env: Env,
+        resolver: Address,
         market_id: String,
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
         let mut market =
-            storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
 
-        // Step 2: Verify oracle signature (Ed25519; uses market's oracle_pubkey)
-        oracle::verify_oracle_signature(
+        // Step 2: Verify outcome using the configured adapter for this market.
+        oracle::verify_market_outcome(
             &env,
             market_id,
+            &market,
+            market.adapter_type.clone(),
             outcome,
             &signature,
-            &market.oracle_pubkey,
         )?;
+        events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
 
-        // Step 3: Update market (status, outcome, persist)
+        // Step 3: Update market (status, outcome, resolver, persist)
         market.status = MarketStatus::Resolved;
         market.result = Some(outcome);
-        storage::set_market(&env, market_id, &market);
-
-        // Step 4: Record resolution time and emit event
+        market.resolver = Some(resolver.clone());
         let resolved_at = env.ledger().timestamp();
-        // TODO(#issue): emit resolver identity alongside outcome in MarketResolved event
-        events::emit_market_resolved(&env, market_id, outcome, resolved_at);
+        market.resolved_at = Some(resolved_at);
+        storage::set_market(&env, market_id, &market)?;
+
+        // Step 4: Emit event
+        events::emit_market_resolved(
+            &env,
+            market_id,
+            &market.oracle_pubkey,
+            &resolver,
+            outcome,
+            resolved_at,
+        );
 
         Ok(())
+    }
+
+    /// Cancel a market before it is resolved, halting all further trading.
+    ///
+    /// Only the stored admin may call this. The market must still be
+    /// [`MarketStatus::Active`]; a resolved market has a final outcome and an
+    /// already-canceled market is rejected to surface the redundant call.
+    /// Once canceled, deposits and position updates are rejected (both already
+    /// require an `Active` status), and affected users may reclaim their
+    /// collateral via [`withdraw_canceled_collateral`].
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Must be the stored admin address (authorizes the call)
+    /// * `market_id` - Identifier of the market to cancel
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin
+    /// - [`ContractError::MarketNotFound`] – the market does not exist
+    /// - [`ContractError::MarketAlreadyResolved`] – the market is already resolved
+    /// - [`ContractError::MarketNotActive`] – the market is already canceled
+    ///
+    /// # Events
+    /// Emits [`MarketCanceledEvent`] with `market_id`, `canceler`, and
+    /// `canceled_at` on success.
+    pub fn cancel_market(
+        env: Env,
+        admin: Address,
+        market_id: u32,
+    ) -> Result<(), ContractError> {
+        // 1. Authorization: only the stored admin may cancel a market.
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        // 2. Load the market and enforce the cancel policy (Active only).
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        validation::validate_cancelable(&market.status)?;
+
+        // 3. Transition to Canceled and persist.
+        market.status = MarketStatus::Canceled;
+        storage::set_market(&env, market_id, &market)?;
+
+        // 4. Emit the cancellation event for off-chain indexers.
+        events::emit_market_canceled(&env, market_id, &admin, env.ledger().timestamp());
+
+        Ok(())
+    }
+
+    /// Reclaim deposited collateral from a canceled market.
+    ///
+    /// When a market is canceled before resolution there is no winning outcome,
+    /// so each user is made whole by returning the full collateral they have
+    /// deposited in that market. The user's position balances are zeroed and the
+    /// collateral (SAC) tokens are transferred from the contract back to them.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User reclaiming their collateral (must authorize the call)
+    /// * `market_id` - Identifier of the canceled market
+    ///
+    /// # Returns
+    /// The amount of collateral refunded to the user, in stroops.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] – the market does not exist
+    /// - [`ContractError::MarketNotActive`] – the market is not canceled, so the
+    ///   reclaim path does not apply
+    /// - [`ContractError::NoPositionFound`] – the user has no position in the market
+    /// - [`ContractError::InsufficientCollateral`] – the user has no collateral to reclaim
+    ///
+    /// # Events
+    /// Emits `CollateralWithdrawn` with the refunded amount and the user's new
+    /// (zero) total.
+    pub fn withdraw_canceled_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+    ) -> Result<i128, ContractError> {
+        // 1. Authorization: only the position owner may reclaim their collateral.
+        user.require_auth();
+
+        // 2. The reclaim path is exclusive to canceled markets.
+        let market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status != MarketStatus::Canceled {
+            return Err(ContractError::MarketNotActive);
+        }
+
+        // 3. Load the user's position and the full deposited balance.
+        let mut position = storage::get_position(&env, market_id, &user)?
+            .ok_or(ContractError::NoPositionFound)?;
+        let refund = position.total_deposited;
+        if refund <= 0 {
+            return Err(ContractError::InsufficientCollateral);
+        }
+
+        // 4. Refund the collateral from the contract back to the user.
+        let contract_address = env.current_contract_address();
+        let token_client = soroban_sdk::token::Client::new(&env, &market.collateral_token);
+        token_client.transfer(&contract_address, &user, &refund);
+
+        // 5. Zero out the position balances now that the collateral has left.
+        position.total_deposited = 0;
+        position.locked_collateral = 0;
+        storage::set_position(&env, market_id, &user, &position)?;
+
+        // 6. Reuse the collateral-withdrawn event so indexers track the refund.
+        events::emit_collateral_withdrawn(&env, &user, market_id, refund, position.total_deposited);
+
+        Ok(refund)
     }
 
     /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
@@ -280,7 +471,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+        let mut market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -294,7 +485,7 @@ impl MarketContract {
         // 4. Enforce that deposited collateral covers any increase in the lock.
         //    Negative-share deltas are left for positions::update_position to
         //    reject (it also emits a PositionLimitExceeded event).
-        let position = storage::get_position(&env, market_id, &user)
+        let position = storage::get_position(&env, market_id, &user)?
             .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
         let new_yes = position.yes_shares + yes_delta;
         let new_no = position.no_shares + no_delta;
@@ -308,13 +499,36 @@ impl MarketContract {
         }
 
         // 5. Apply the share deltas (persists the position and emits an event)
-        positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
-            .map_err(|e| match e {
-                positions::PositionError::ShareBalanceBelowZero => {
-                    ContractError::InvalidShareAmount
-                }
-                positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
-            })
+        let result =
+            positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
+                .map_err(|e| match e {
+                    positions::PositionError::ShareBalanceBelowZero => {
+                        ContractError::InvalidShareAmount
+                    }
+                    positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+                })?;
+
+        // 5a. Mint or burn outcome tokens for the updated position.
+        if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
+            let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
+            if yes_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta);
+            } else if yes_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::Yes, &(-yes_delta));
+            }
+
+            if no_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta);
+            } else if no_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta));
+            }
+        }
+
+        // 6. Persist the updated price so withdraw and other callers see it
+        market.price_bps = market_price;
+        storage::set_market(&env, market_id, &market)?;
+
+        Ok(result)
     }
 
     /// Settle a user's position in a resolved market and pay out their winnings.
@@ -344,51 +558,268 @@ impl MarketContract {
         settlement::settle_position(&env, &user, market_id)
     }
 
-    /// Set the protocol fee rate (admin-only).
+    /// Settle multiple users' positions in a resolved market in one call.
     ///
-    /// Persists the new fee rate to contract storage. The rate is expressed in
-    /// basis points (1 bps = 0.01 %), so 50 bps = 0.50 %.
+    /// This is a batched variant of [`settle_position`] intended for operators
+    /// settling many users at once (e.g. a cron job after resolution). Each
+    /// user is settled independently; already-settled or missing positions are
+    /// silently skipped so a single bad entry does not abort the whole batch.
     ///
     /// # Arguments
-    /// * `admin` - Admin address (must authorize and match the stored admin)
-    /// * `fee_bps` - New fee rate in basis points (0–10 000)
+    /// * `env` - Contract environment
+    /// * `market_id` - Market identifier (must be resolved)
+    /// * `users` - Addresses to settle
+    ///
+    /// # Returns
+    /// Total collateral (in stroops) transferred across all settled positions.
     ///
     /// # Errors
-    /// - [`ContractError::NotAdmin`] – caller is not the stored admin
-    /// - [`ContractError::InvalidFeeRate`] – `fee_bps` is outside 0–10 000
-    pub fn set_fee_rate_bps(
+    /// - [`ContractError::MarketNotFound`] - the market does not exist
+    /// - [`ContractError::MarketNotResolved`] - the market is not resolved
+    ///
+    /// # Events
+    /// Emits `PositionSettled` for each successfully settled position.
+    pub fn batch_settle_positions(
+        env: Env,
+        market_id: u32,
+        users: soroban_sdk::Vec<Address>,
+    ) -> Result<i128, ContractError> {
+        settlement::batch_settle_positions(&env, market_id, users)
+    }
+
+    /// Register the treasury contract address for protocol fee routing.
+    ///
+    /// Once set, any non-zero withdrawal fee computed during
+    /// [`withdraw_unused_collateral`] will be transferred to this address and
+    /// recorded via the treasury's `collect_fee` entry point.
+    ///
+    /// Only the stored admin may call this.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
+    pub fn set_treasury(
         env: Env,
         admin: Address,
-        fee_bps: u32,
+        treasury: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
-        let stored_admin = storage::get_admin(&env);
+        let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        if fee_bps > storage::MAX_FEE_RATE_BPS {
-            return Err(ContractError::InvalidFeeRate);
-        }
-        storage::set_fee_rate_bps(&env, fee_bps);
+        storage::set_treasury(&env, &treasury);
+        events::emit_treasury_set(&env, &treasury);
         Ok(())
     }
 
-    /// Return the current protocol fee rate in basis points.
+    /// Set the withdrawal fee rate in basis points (0–10_000).
     ///
-    /// Defaults to 50 bps (0.50 %) when no rate has been explicitly configured.
-    pub fn get_fee_rate_bps(env: Env) -> u32 {
+    /// Only the stored admin may call this. A rate of 0 disables fees.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
+    /// - [`ContractError::InvalidPrice`] — `fee_rate_bps` outside 0–10_000.
+    pub fn set_fee_rate(
+        env: Env,
+        admin: Address,
+        fee_rate_bps: i128,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        validation::validate_fee_rate_bps(fee_rate_bps)?;
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
+        Ok(())
+    }
+
+    /// Configure the multi-signer quorum for threshold-based resolution (#378).
+    ///
+    /// `signers` is the ordered set of oracle public keys. `quorum` is the
+    /// minimum number of valid signatures required by `resolve_market_threshold`.
+    /// Setting `quorum` to 0 or passing an empty `signers` list effectively
+    /// disables threshold resolution.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_threshold_signers(
+        env: Env,
+        admin: Address,
+        signers: soroban_sdk::Vec<BytesN<32>>,
+        quorum: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_threshold_signers(&env, &signers);
+        storage::set_threshold_quorum(&env, quorum);
+        Ok(())
+    }
+
+    /// Return the current threshold signer set.
+    pub fn get_threshold_signers(env: Env) -> soroban_sdk::Vec<BytesN<32>> {
+        storage::get_threshold_signers(&env)
+    }
+
+    /// Return the current quorum requirement.
+    pub fn get_threshold_quorum(env: Env) -> u32 {
+        storage::get_threshold_quorum(&env)
+    }
+
+    /// Resolve a market using a quorum of oracle signatures (#378).
+    ///
+    /// Callers provide one signature per registered signer (use 64 zero bytes
+    /// for signers whose signature is unavailable). The market resolves once
+    /// the valid-signature count reaches the stored quorum.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — market does not exist.
+    /// - [`ContractError::MarketAlreadyResolved`] — already resolved.
+    /// - [`ContractError::UnauthorizedOracle`] — no signers/quorum configured.
+    /// - [`ContractError::InvalidSignature`] — fewer than quorum valid sigs.
+    pub fn resolve_market_threshold(
+        env: Env,
+        resolver: Address,
+        market_id: u32,
+        outcome: bool,
+        signatures: soroban_sdk::Vec<BytesN<64>>,
+    ) -> Result<(), ContractError> {
+        resolver.require_auth();
+
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status == MarketStatus::Resolved {
+            return Err(ContractError::MarketAlreadyResolved);
+        }
+
+        let signers = storage::get_threshold_signers(&env);
+        let quorum = storage::get_threshold_quorum(&env);
+
+        oracle::verify_threshold_signatures(&env, market_id, outcome, &signers, &signatures, quorum)?;
+        events::emit_oracle_signature_verified(&env, market_id, outcome, env.ledger().timestamp());
+
+        market.status = MarketStatus::Resolved;
+        market.result = Some(outcome);
+        market.resolver = Some(resolver.clone());
+        let resolved_at = env.ledger().timestamp();
+        market.resolved_at = Some(resolved_at);
+        storage::set_market(&env, market_id, &market)?;
+
+        events::emit_market_resolved(
+            &env,
+            market_id,
+            &market.oracle_pubkey,
+            &resolver,
+            outcome,
+            resolved_at,
+        );
+
+        Ok(())
+    }
+
+    /// Return the current withdrawal fee rate in basis points.
+    ///
+    /// Returns 0 if no fee rate has been configured.
+    pub fn get_fee_rate(env: Env) -> i128 {
         storage::get_fee_rate_bps(&env)
     }
 
-    /// Return the contract's balance of `token` (treasury balance).
+    /// Register the deployed outcome-token contract address used by this
+    /// market contract to mint and burn outcome tokens for position updates.
     ///
-    /// Queries the SAC token contract directly — no internal state is stored.
-    /// Use this to inspect how much collateral the market contract currently holds.
+    /// Only the stored admin may call this.
+    pub fn set_outcome_token_contract(
+        env: Env,
+        admin: Address,
+        outcome_token_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_outcome_token_contract(&env, &outcome_token_contract);
+        Ok(())
+    }
+
+    /// Return the registered outcome-token contract address, if any.
+    pub fn get_outcome_token_contract(env: Env) -> Option<Address> {
+        storage::get_outcome_token_contract(&env)
+    }
+
+    /// Register the resolution contract that gates `resolve_market`.
     ///
-    /// # Arguments
-    /// * `token` - Address of the SAC collateral token to query
-    pub fn token_balance(env: Env, token: Address) -> i128 {
-        let contract_address = env.current_contract_address();
-        TokenClient::new(&env, &token).balance(&contract_address)
+    /// When set, `resolve_market` will call into this contract to verify that
+    /// a finalized candidate exists for the market before accepting a resolution.
+    /// Pass `None` (by omitting the storage entry) to remove the gate.
+    ///
+    /// Only the stored admin may call this.
+    pub fn set_resolution_contract(
+        env: Env,
+        admin: Address,
+        resolution_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_resolution_contract(&env, &resolution_contract);
+        Ok(())
+    }
+
+    /// Return the registered resolution contract address, if any.
+    pub fn get_resolution_contract(env: Env) -> Option<Address> {
+        storage::get_resolution_contract(&env)
+    }
+
+    /// Return the registered treasury contract address, if any.
+    pub fn get_treasury(env: Env) -> Option<Address> {
+        storage::get_treasury(&env)
+    }
+
+    /// Return a read-only view of a market by its ID.
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
+    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
+    pub fn get_market(env: Env, market_id: u32) -> Result<crate::types::Market, ContractError> {
+        storage::get_market(&env, market_id)?
+            .ok_or(ContractError::MarketNotFound)
+    }
+
+    /// Return the immutable outcome count for a market (always 2 for binary markets).
+    ///
+    /// # Errors
+    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
+    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
+    pub fn get_outcome_count(env: Env, market_id: u32) -> Result<u32, ContractError> {
+        let market = storage::get_market(&env, market_id)?
+            .ok_or(ContractError::MarketNotFound)?;
+        Ok(market.outcome_count)
+    }
+
+    /// Cancel an active market, preventing further deposits and withdrawals.
+    ///
+    /// Only the stored admin may call this. 0 disables fees.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
+    /// - [`ContractError::InvalidPrice`] – `fee_rate_bps` is outside 0–10_000.
+    pub fn set_fee_rate(
+        env: Env,
+        admin: Address,
+        fee_rate_bps: i128,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        validation::validate_fee_rate_bps(fee_rate_bps)?;
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
+        Ok(())
     }
 }

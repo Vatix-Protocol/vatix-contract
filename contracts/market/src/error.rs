@@ -89,6 +89,13 @@ pub enum ContractError {
     /// Outcome must be a valid boolean value.
     InvalidOutcome = 22,
 
+    /// Reflector oracle returned no price for the requested asset.
+    ///
+    /// Occurs when `lastprice(asset)` returns `None` — the asset may be
+    /// unsupported, the oracle may not have a recent price, or the Reflector
+    /// node network may be temporarily disconnected.
+    OraclePriceUnavailable = 23,
+
     // ========== Validation Errors (30-39) ==========
     /// Price is out of valid range (must be between 0 and 1).
     ///
@@ -110,8 +117,11 @@ pub enum ContractError {
     /// Questions must be non-empty and reasonably sized (1-499 characters).
     InvalidQuestion = 33,
 
-    /// Fee rate in basis points is out of range (must be 0–10 000).
-    InvalidFeeRate = 34,
+    /// Outcome count is not exactly 2.
+    ///
+    /// All markets on this protocol are binary (YES/NO). Any attempt to create
+    /// or overwrite a market with an outcome_count other than 2 is rejected.
+    InvalidOutcomeCount = 34,
 
     // ========== Authorization Errors (40-49) ==========
     /// Caller is not authorized to perform this action.
@@ -130,6 +140,12 @@ pub enum ContractError {
     /// an attacker to hijack the admin slot after initial deploy.
     AlreadyInitialized = 42,
 
+    /// No pending admin transfer exists.
+    ///
+    /// `accept_admin` was called but `propose_admin` has not been issued yet,
+    /// or the previous proposal was already accepted.
+    NoPendingAdmin = 43,
+
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed (insufficient balance, approval, etc.).
     ///
@@ -141,6 +157,20 @@ pub enum ContractError {
     ///
     /// The operation would exceed the maximum value for the data type.
     ArithmeticOverflow = 60,
+
+    // ========== Upgrade Errors (70-79) ==========
+    /// Storage layout version does not match the current contract version.
+    ///
+    /// A migration must be performed before the contract can be used.
+    /// On testnet, redeploy and reinitialize the contract.
+    UpgradeRequired = 70,
+
+    // ========== Resolution Errors (80-89) ==========
+    /// A resolution contract is registered but no finalized candidate exists
+    /// for this market, or the candidate has been challenged.
+    ///
+    /// Call `ResolutionContract::finalize` first, then retry `resolve_market`.
+    ResolutionNotFinalized = 80,
 }
 
 #[cfg(test)]
@@ -161,6 +191,7 @@ mod tests {
         assert_eq!(ContractError::InvalidSignature as u32, 20);
         assert_eq!(ContractError::UnauthorizedOracle as u32, 21);
         assert_eq!(ContractError::InvalidOutcome as u32, 22);
+        assert_eq!(ContractError::OraclePriceUnavailable as u32, 23);
         assert_eq!(ContractError::InvalidPrice as u32, 30);
         assert_eq!(ContractError::InvalidQuantity as u32, 31);
         assert_eq!(ContractError::InvalidTimestamp as u32, 32);
@@ -168,6 +199,8 @@ mod tests {
         assert_eq!(ContractError::InvalidFeeRate as u32, 34);
         assert_eq!(ContractError::Unauthorized as u32, 40);
         assert_eq!(ContractError::NotAdmin as u32, 41);
+        assert_eq!(ContractError::AlreadyInitialized as u32, 42);
+        assert_eq!(ContractError::NoPendingAdmin as u32, 43);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
         assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
     }

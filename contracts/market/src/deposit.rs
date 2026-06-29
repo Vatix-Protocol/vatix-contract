@@ -55,7 +55,7 @@ pub fn deposit_collateral(
     // Validation
     validation::validate_collateral_amount(amount)?;
 
-    let market = storage::get_market(&env, market_id).ok_or(ContractError::MarketNotFound)?;
+    let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
     if market.status != MarketStatus::Active {
         return Err(ContractError::MarketNotActive);
@@ -80,7 +80,7 @@ pub fn deposit_collateral(
     // 1. User deposits USDC into specific market
     // 2. Collateral locked to this market only
     // 3. User must deposit separately for each market they want to trade
-    let mut position = storage::get_position(&env, market_id, &user).unwrap_or_else(|| Position {
+    let mut position = storage::get_position(&env, market_id, &user)?.unwrap_or_else(|| Position {
         market_id,
         user: user.clone(),
         yes_shares: 0,
@@ -90,19 +90,22 @@ pub fn deposit_collateral(
         is_settled: false,
     });
 
-    // Add to total_deposited (total collateral user has in this market)
+    // Add to total_deposited (total collateral user has in this market).
+    //
+    // `locked_collateral` is NOT touched here. It represents collateral
+    // required to back the user's current YES/NO shares and is the single
+    // source of truth maintained exclusively by `positions::update_position`
+    // (see `calculate_locked_collateral`). A deposit with no shares held
+    // must leave `locked_collateral` at 0, otherwise `withdraw` (which now
+    // trusts this field directly) would see deposited-but-unused collateral
+    // as locked.
     position.total_deposited = position
         .total_deposited
         .checked_add(amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
-    // Add to locked_collateral (available for buying shares until they trade)
-    position.locked_collateral = position
-        .locked_collateral
-        .checked_add(amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
 
     // Persist updated position
-    storage::set_position(&env, market_id, &user, &position);
+    storage::set_position(&env, market_id, &user, &position)?;
 
     // TODO(#issue): consider batching deposit events for gas efficiency
     // Emit event
@@ -133,6 +136,11 @@ mod tests {
             creator: Address::generate(env),
             created_at: 0,
             collateral_token: collateral_token.clone(),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
         }
     }
 
@@ -147,7 +155,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -172,7 +181,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -192,6 +202,10 @@ mod tests {
         let user = Address::generate(&env);
         let market_id = 999; // Nonexistent market ID
         let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+        });
 
         // Mock auth
         env.mock_all_auths();
@@ -218,7 +232,8 @@ mod tests {
         market.result = Some(true);
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -245,7 +260,8 @@ mod tests {
         market.status = MarketStatus::Canceled;
 
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -270,7 +286,8 @@ mod tests {
         // Setup market
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Mock auth
@@ -297,7 +314,8 @@ mod tests {
 
         let market = create_test_market(&env, market_id, &collateral_token);
         env.as_contract(&contract_id, || {
-            storage::set_market(&env, market_id, &market);
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         env.mock_all_auths();
@@ -311,9 +329,174 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount);
-        assert_eq!(position.locked_collateral, deposit_amount);
+        // locked_collateral is share-based and is untouched by deposit; see
+        // `test_deposit_with_zero_shares_keeps_locked_collateral_zero` below.
+        assert_eq!(position.locked_collateral, 0);
+    }
+
+    /// Regression test for #262: a deposit with zero shares held must never
+    /// show any collateral as locked. Before the fix, `deposit_collateral`
+    /// incremented `locked_collateral` by the deposit amount directly,
+    /// making freshly deposited (and entirely unused) collateral look
+    /// "locked" even though the user had not bought any YES/NO shares.
+    #[test]
+    fn test_deposit_with_zero_shares_keeps_locked_collateral_zero() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        env.mock_all_auths();
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &10_000);
+
+        let deposit_amount = 5_000i128;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, deposit_amount)
+        });
+        assert!(result.is_ok());
+
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+        });
+        assert_eq!(position.yes_shares, 0);
+        assert_eq!(position.no_shares, 0);
+        assert_eq!(position.total_deposited, deposit_amount);
+        assert_eq!(position.locked_collateral, 0);
+
+        // A second deposit must keep locked_collateral at 0 while
+        // total_deposited keeps growing.
+        let second_deposit = 1_000i128;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, second_deposit)
+        });
+        assert!(result.is_ok());
+
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+        });
+        assert_eq!(position.total_deposited, deposit_amount + second_deposit);
+        assert_eq!(position.locked_collateral, 0);
+    }
+
+    // --- #375: collateral_deposited event contains correct amount and new_total ---
+
+    #[test]
+    fn test_deposit_event_contains_amount_and_new_total() {
+        use soroban_sdk::{
+            testutils::{Events as _, Address as _},
+            IntoVal, Map, Symbol, TryIntoVal, Val,
+        };
+
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        env.mock_all_auths();
+        let sac = soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token);
+        sac.mint(&user, &20_000);
+
+        // First deposit
+        let first = 7_000i128;
+        env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, first).unwrap();
+        });
+
+        let events = env.events().all();
+        let last = events.last().unwrap();
+
+        // Topic 0 = event name symbol
+        let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited_event"));
+
+        // Topic 1 = user
+        let topic1: Address = last.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, user);
+
+        // Topic 2 = market_id
+        let topic2: u32 = last.1.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        // Data: amount and new_total
+        let data: Map<Symbol, Val> = last.2.clone().try_into_val(&env).unwrap();
+        let amount_val: i128 = data.get(Symbol::new(&env, "amount")).unwrap().into_val(&env);
+        let new_total_val: i128 = data.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
+        assert_eq!(amount_val, first);
+        assert_eq!(new_total_val, first); // first deposit, new_total == amount
+
+        // Second deposit: new_total must reflect the running sum
+        let second = 3_000i128;
+        env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, second).unwrap();
+        });
+
+        let events2 = env.events().all();
+        let last2 = events2.last().unwrap();
+        let data2: Map<Symbol, Val> = last2.2.clone().try_into_val(&env).unwrap();
+        let amount2: i128 = data2.get(Symbol::new(&env, "amount")).unwrap().into_val(&env);
+        let new_total2: i128 = data2.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
+        assert_eq!(amount2, second);
+        assert_eq!(new_total2, first + second);
+    }
+
+    // --- #374: total_deposited accumulates correctly across multiple deposits ---
+
+    #[test]
+    fn test_total_deposited_accumulates_across_multiple_deposits() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        env.mock_all_auths();
+        soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token).mint(&user, &100_000);
+
+        let deposits = [10_000i128, 5_000, 15_000, 20_000];
+        let mut running = 0i128;
+        for amount in deposits {
+            env.as_contract(&contract_id, || {
+                deposit_collateral(env.clone(), user.clone(), market_id, amount).unwrap();
+            });
+            running += amount;
+
+            let position = env.as_contract(&contract_id, || {
+                storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            });
+            assert_eq!(position.total_deposited, running, "after deposit of {amount}");
+        }
+
+        // Final total must equal sum of all deposits
+        assert_eq!(running, deposits.iter().sum::<i128>());
     }
 }

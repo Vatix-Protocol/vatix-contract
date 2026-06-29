@@ -9,6 +9,7 @@ mod test {
         testutils::{Address as _, BytesN as _, Events, Ledger},
         Address, BytesN, Env, String,
     };
+    use vatix_resolution_contract::{ResolutionContract, ResolutionContractClient};
 
     fn create_test_contract<'a>() -> (Env, Address, MarketContractClient<'a>, Address) {
         let env = Env::default();
@@ -22,6 +23,7 @@ mod test {
         // Initialize admin in storage - MUST wrap in as_contract
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         (env, admin, client, contract_id)
@@ -29,7 +31,9 @@ mod test {
 
     fn get_market_from_storage(env: &Env, contract_id: &Address, market_id: u32) -> Market {
         env.as_contract(contract_id, || {
-            storage::get_market(env, market_id).expect("Market should exist")
+            storage::get_market(env, market_id)
+                .expect("version check failed")
+                .expect("Market should exist")
         })
     }
 
@@ -290,11 +294,12 @@ mod test {
     fn test_resolve_market_not_found() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
+        let resolver = Address::generate(&env);
         let non_existent_market_id = String::from_str(&env, "999");
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
 
-        client.resolve_market(&non_existent_market_id, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &non_existent_market_id, &outcome, &invalid_signature);
     }
 
     #[test]
@@ -318,21 +323,22 @@ mod test {
 
         // Manually set market to resolved status
         env.as_contract(&contract_id, || {
-            let mut market = storage::get_market(&env, market_id).unwrap();
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
             market.status = MarketStatus::Resolved;
             market.result = Some(true);
-            storage::set_market(&env, market_id, &market);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         // Try to resolve again - should fail
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::from_array(&env, &[0u8; 64]);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Error(Contract, #20)")]
     fn test_resolve_market_invalid_signature() {
         let (env, admin, client, _contract_id) = create_test_contract();
 
@@ -350,11 +356,47 @@ mod test {
             &collateral_token,
         );
 
-        // Try to resolve with invalid signature - should panic
+        // Bad signature must surface as the typed InvalidSignature error
+        // (#20), not an uncaught host trap.
+        let resolver = Address::generate(&env);
         let outcome = true;
         let invalid_signature = BytesN::random(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &invalid_signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
+    }
+
+    #[test]
+    fn test_resolve_market_invalid_signature_leaves_market_active() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let resolver = Address::generate(&env);
+        let outcome = true;
+        let invalid_signature = BytesN::random(&env);
+        let market_id_str = String::from_str(&env, "1");
+        let result = client.try_resolve_market(&resolver, &market_id_str, &outcome, &invalid_signature);
+
+        assert_eq!(
+            result,
+            Err(Ok(crate::error::ContractError::InvalidSignature))
+        );
+
+        // Market must be untouched - no partial state mutation on failure.
+        let market = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market.status, MarketStatus::Active);
+        assert_eq!(market.result, None);
     }
 
     #[test]
@@ -386,13 +428,15 @@ mod test {
         assert_eq!(market_before.result, None);
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify market is now Resolved
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market_after.status, MarketStatus::Resolved);
         assert_eq!(market_after.result, Some(outcome));
+        assert_eq!(market_after.resolver, Some(resolver));
     }
 
     #[test]
@@ -448,8 +492,9 @@ mod test {
         env.events().all();
 
         // Resolve market with valid signature
+        let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature);
 
         // Verify event was emitted
         let events = env.events().all();
@@ -459,6 +504,7 @@ mod test {
         let market = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
         assert_eq!(market.result, Some(outcome));
+        assert_eq!(market.resolver, Some(resolver));
     }
 
     #[test]
@@ -476,6 +522,7 @@ mod test {
 
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         env.mock_all_auths();
@@ -562,6 +609,7 @@ mod test {
 
         env.as_contract(&contract_id, || {
             storage::set_admin(&env, &admin);
+            storage::set_version(&env);
         });
 
         env.mock_all_auths();
@@ -602,7 +650,7 @@ mod test {
 
         // The persisted position matches the returned one
         let stored = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).expect("position should exist")
+            storage::get_position(&env, market_id, &user).expect("version check ok").expect("position should exist")
         });
         assert_eq!(stored.yes_shares, yes);
         assert_eq!(stored.locked_collateral, 60 * STROOPS_PER_USDC);
@@ -649,10 +697,10 @@ mod test {
 
         // Force the market into a resolved state.
         env.as_contract(&contract_id, || {
-            let mut market = storage::get_market(&env, market_id).unwrap();
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
             market.status = MarketStatus::Resolved;
             market.result = Some(true);
-            storage::set_market(&env, market_id, &market);
+            storage::set_market(&env, market_id, &market).unwrap();
         });
 
         let yes = 10 * STROOPS_PER_USDC;
@@ -669,7 +717,7 @@ mod test {
 
         // Advance the ledger past the market end_time.
         let end_time = env.as_contract(&contract_id, || {
-            storage::get_market(&env, market_id).unwrap().end_time
+            storage::get_market(&env, market_id).unwrap().unwrap().end_time
         });
         env.ledger().set_timestamp(end_time + 1);
 
@@ -791,5 +839,473 @@ mod test {
             validate_input_guard(-1),
             Err(ContractError::InvalidQuantity)
         );
+    }
+
+    // ========== propose_admin / accept_admin tests ==========
+
+    #[test]
+    fn test_propose_admin_success() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                storage::get_pending_admin(&env).expect("pending admin should be set"),
+                new_admin
+            );
+        });
+    }
+
+    #[test]
+    fn test_propose_admin_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn test_accept_admin_completes_transfer() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_admin(&env).unwrap(), new_admin);
+            assert!(
+                storage::get_pending_admin(&env).is_none(),
+                "pending admin should be cleared after acceptance"
+            );
+        });
+    }
+
+    #[test]
+    fn test_accept_admin_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        env.events().all(); // clear
+
+        client.accept_admin(&new_admin);
+
+        let events = env.events().all();
+        assert!(events.len() > 0);
+    }
+
+    #[test]
+    fn test_new_admin_can_create_market_after_transfer() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        let question = String::from_str(&env, "Will ETH flip BTC?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id =
+            client.initialize_market(&new_admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        assert_eq!(market_id, 1);
+    }
+
+    #[test]
+    fn test_old_admin_cannot_create_market_after_transfer() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&new_admin);
+
+        let question = String::from_str(&env, "Will ETH flip BTC?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let result =
+            client.try_initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_propose_admin_overwrites_previous_nominee() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let first_nominee = Address::generate(&env);
+        let second_nominee = Address::generate(&env);
+
+        client.propose_admin(&admin, &first_nominee);
+        client.propose_admin(&admin, &second_nominee);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                storage::get_pending_admin(&env).expect("pending admin should be set"),
+                second_nominee
+            );
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_propose_admin_non_admin_fails() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let attacker = Address::generate(&env);
+        let victim = Address::generate(&env);
+
+        client.propose_admin(&attacker, &victim);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_propose_admin_when_not_initialized_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+
+        let caller = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        client.propose_admin(&caller, &new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #43)")]
+    fn test_accept_admin_with_no_pending_fails() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let attacker = Address::generate(&env);
+
+        client.accept_admin(&attacker);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #40)")]
+    fn test_accept_admin_hijack_wrong_address_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let new_admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+
+        client.propose_admin(&admin, &new_admin);
+        client.accept_admin(&attacker);
+    }
+
+    #[test]
+    fn test_set_treasury_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let treasury = Address::generate(&env);
+
+        client.set_treasury_contract(&admin, &treasury);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_treasury(&env).unwrap(), treasury);
+        });
+    }
+
+    #[test]
+    fn test_set_outcome_token_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let outcome_token_contract = Address::generate(&env);
+
+        client.set_outcome_token_contract(&admin, &outcome_token_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_outcome_token_contract(&env).unwrap(), outcome_token_contract);
+        });
+    }
+
+    #[test]
+    fn test_set_resolution_contract_records_contract_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let resolution_contract = Address::generate(&env);
+
+        client.set_resolution_contract(&admin, &resolution_contract);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(storage::get_resolution_contract(&env).unwrap(), resolution_contract);
+        });
+    }
+
+    #[test]
+    fn test_non_admin_cannot_set_optional_integration_contracts() {
+        use crate::error::ContractError;
+
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let stranger = Address::generate(&env);
+        let address = Address::generate(&env);
+
+        assert_eq!(client.try_set_treasury_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_outcome_token_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+        assert_eq!(client.try_set_resolution_contract(&stranger, &address), Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn test_resolution_contract_requires_finalized_candidate_before_resolve() {
+        use crate::error::ContractError;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let collateral_token = Address::generate(&env);
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        let resolution_addr = env.register(ResolutionContract, ());
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .initialize(&admin, &Address::generate(&env), &contract_id);
+
+        client.set_resolution_contract(&admin, &resolution_addr);
+
+        let (_oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, true);
+
+        let proposer = Address::generate(&env);
+        let evidence = String::from_str(&env, "evidence://uri");
+        ResolutionContractClient::new(&env, &resolution_addr)
+            .propose(&proposer, &market_id, &true, &signature, &(env.ledger().timestamp() + 60), &evidence, &60);
+
+        let resolver = Address::generate(&env);
+        let market_id_str = String::from_str(&env, &market_id.to_string());
+        assert_eq!(
+            client.try_resolve_market(&resolver, &market_id_str, &true, &signature),
+            Err(Ok(ContractError::ResolutionNotFinalized))
+        );
+    }
+
+    #[test]
+    fn test_first_nominee_cannot_accept_after_overwrite() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        let first_nominee = Address::generate(&env);
+        let second_nominee = Address::generate(&env);
+
+        client.propose_admin(&admin, &first_nominee);
+        client.propose_admin(&admin, &second_nominee);
+
+        let result = client.try_accept_admin(&first_nominee);
+        assert!(result.is_err());
+    }
+
+    // ========== cancel_market tests ==========
+
+    /// Register a market backed by a real Stellar asset, mint `deposit` to a
+    /// fresh user, and deposit it so cancel and collateral-reclaim flows can be
+    /// exercised end to end.
+    ///
+    /// Returns `(env, admin, user, client, contract_id, market_id, collateral_token)`.
+    fn setup_admin_market_with_deposit<'a>(
+        deposit: i128,
+    ) -> (
+        Env,
+        Address,
+        Address,
+        MarketContractClient<'a>,
+        Address,
+        u32,
+        Address,
+    ) {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        env.mock_all_auths();
+
+        let question = String::from_str(&env, "Will it rain tomorrow?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        let user = Address::generate(&env);
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+
+        (
+            env,
+            admin,
+            user,
+            client,
+            contract_id,
+            market_id,
+            collateral_token,
+        )
+    }
+
+    #[test]
+    fn test_cancel_market_success() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        let market = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market.status, MarketStatus::Canceled);
+    }
+
+    #[test]
+    fn test_cancel_market_emits_event() {
+        let (env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        env.events().all(); // clear setup events
+        client.cancel_market(&admin, &market_id);
+
+        let events = env.events().all();
+        assert!(events.len() > 0, "MarketCanceled event should be emitted");
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_cancel_market_non_admin_fails() {
+        let (env, _admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        let attacker = Address::generate(&env);
+        client.cancel_market(&attacker, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_cancel_market_not_found_fails() {
+        let (_env, admin, _user, client, _contract_id, _market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &999u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #2)")]
+    fn test_cancel_market_already_resolved_fails() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Force the market into a resolved state; a final outcome can't be canceled.
+        env.as_contract(&contract_id, || {
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
+            market.status = MarketStatus::Resolved;
+            market.result = Some(true);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        client.cancel_market(&admin, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_cancel_market_already_canceled_fails() {
+        let (_env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+        // A second cancellation is a no-op and must be rejected.
+        client.cancel_market(&admin, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_deposit_rejected_after_cancel() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let (env, admin, user, client, _contract_id, market_id, collateral_token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        // A fresh deposit into the canceled market must fail with MarketNotActive.
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &500);
+        client.deposit_collateral(&user, &market_id, &500);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_update_position_rejected_after_cancel() {
+        let (_env, admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+        // Trading is halted once a market is canceled.
+        client.update_position(&user, &market_id, &100i128, &0i128, &5_000i128);
+    }
+
+    #[test]
+    fn test_withdraw_canceled_collateral_refunds_user() {
+        let deposit = 1_000i128;
+        let (env, admin, user, client, contract_id, market_id, collateral_token) =
+            setup_admin_market_with_deposit(deposit);
+
+        client.cancel_market(&admin, &market_id);
+
+        let refunded = client.withdraw_canceled_collateral(&user, &market_id);
+        assert_eq!(refunded, deposit);
+
+        // The user's position is zeroed once the collateral has been returned.
+        let position = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
+        });
+        assert_eq!(position.total_deposited, 0);
+        assert_eq!(position.locked_collateral, 0);
+
+        // The collateral lands back in the user's wallet.
+        let token_client = soroban_sdk::token::Client::new(&env, &collateral_token);
+        assert_eq!(token_client.balance(&user), deposit);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #5)")]
+    fn test_withdraw_canceled_collateral_rejects_active_market() {
+        let (_env, _admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Market is still active, so the canceled-reclaim path does not apply.
+        client.withdraw_canceled_collateral(&user, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_withdraw_canceled_collateral_no_position_fails() {
+        let (env, admin, _user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        client.cancel_market(&admin, &market_id);
+
+        // A user who never deposited has no position to reclaim.
+        let stranger = Address::generate(&env);
+        client.withdraw_canceled_collateral(&stranger, &market_id);
     }
 }
