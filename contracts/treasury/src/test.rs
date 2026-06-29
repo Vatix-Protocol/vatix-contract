@@ -6,7 +6,7 @@ use soroban_sdk::{
     Address, Env,
 };
 
-use crate::{TreasuryContract, TreasuryContractClient, TreasuryError};
+use crate::{storage, TreasuryContract, TreasuryContractClient, TreasuryError};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,6 +56,27 @@ fn initialize_stores_admin_and_market() {
     assert_eq!(s.client.market_contract(), s.market);
     assert_eq!(s.client.token_balance(&s.token), 0);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 0);
+}
+
+#[test]
+fn initialize_writes_storage_version() {
+    let s = setup();
+    s.env.as_contract(&s.treasury_id, || {
+        assert_eq!(
+            storage::get_version(&s.env),
+            Some(storage::STORAGE_VERSION),
+        );
+    });
+}
+
+#[test]
+fn storage_version_absent_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    env.as_contract(&id, || {
+        assert_eq!(storage::get_version(&env), None);
+    });
 }
 
 #[test]
@@ -249,6 +270,58 @@ fn cumulative_stays_high_after_withdrawal() {
     assert_eq!(s.client.get_cumulative_fees(&s.token), 300_000);
 }
 
+// ── storage version guard (#307 / #308) ──────────────────────────────────────
+
+#[test]
+fn initialize_writes_storage_version() {
+    let s = setup();
+    s.env.as_contract(&s.treasury_id, || {
+        assert_eq!(storage::get_version(&s.env), Some(storage::STORAGE_VERSION));
+    });
+}
+
+#[test]
+fn storage_version_absent_before_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    env.as_contract(&id, || {
+        assert_eq!(storage::get_version(&env), None);
+    });
+}
+
+#[test]
+fn reads_return_upgrade_required_on_stale_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let token = Address::generate(&env);
+    let client = TreasuryContractClient::new(&env, &id);
+
+    // Write a stale version to simulate an old deployment that hasn't migrated.
+    env.as_contract(&id, || {
+        env.storage()
+            .instance()
+            .set(&storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let err = client.try_token_balance(&token).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::UpgradeRequired);
+}
+
+#[test]
+fn reads_return_upgrade_required_when_no_version_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let token = Address::generate(&env);
+    let client = TreasuryContractClient::new(&env, &id);
+
+    // No version written at all — simulates a freshly deployed but uninitialized contract.
+    let err = client.try_token_balance(&token).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::UpgradeRequired);
+}
+
 // ── set_market_contract ───────────────────────────────────────────────────────
 
 #[test]
@@ -287,4 +360,72 @@ fn old_market_cannot_collect_fee_after_rotation() {
 
     s.client.collect_fee(&new_market, &s.token, &1u32, &100i128);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 100);
+}
+
+// ── transfer_admin ────────────────────────────────────────────────────────────
+
+#[test]
+fn transfer_admin_updates_admin() {
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+    assert_eq!(s.client.admin(), new_admin);
+}
+
+#[test]
+fn transfer_admin_emits_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Map, Symbol, TryIntoVal, Val};
+
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+
+    let events = s.env.events().all();
+    // Last event is AdminTransferred
+    let ev = events.last().unwrap();
+    let topics = &ev.1;
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
+    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred_event"));
+
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
+    let old_val: Address = data.get(Symbol::new(&s.env, "old_admin")).unwrap().into_val(&s.env);
+    let new_val: Address = data.get(Symbol::new(&s.env, "new_admin")).unwrap().into_val(&s.env);
+    assert_eq!(old_val, s.admin);
+    assert_eq!(new_val, new_admin);
+}
+
+#[test]
+fn transfer_admin_rejects_non_admin() {
+    let s = setup();
+    let rando = Address::generate(&s.env);
+    let new_admin = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_transfer_admin(&rando, &new_admin)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+}
+
+#[test]
+fn new_admin_can_withdraw_after_transfer() {
+    let s = setup();
+    let new_admin = Address::generate(&s.env);
+    s.client.transfer_admin(&s.admin, &new_admin);
+
+    // old admin can no longer withdraw
+    fund_treasury(&s, 100_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &100_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+
+    // new admin can withdraw
+    s.client.withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
+    assert_eq!(s.client.token_balance(&s.token), 0);
 }

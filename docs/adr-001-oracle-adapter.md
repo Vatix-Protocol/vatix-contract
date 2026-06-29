@@ -120,6 +120,15 @@ let price: i64 = env.invoke_contract(&self.contract_id, &symbol_short!("get_pric
 
 **Recommend Option B (Reflector) for the first real implementation.**
 
+**Status update (2026-06-28, issue #379):** `ReflectorAdapter::verify_outcome`
+is now fully implemented in `contracts/market/src/oracle_adapter.rs`.  The
+adapter makes a single synchronous cross-contract call to `lastprice(asset)` on
+the Reflector contract, compares the returned price against the market's
+`resolution_price` threshold, and maps the comparison to a boolean outcome.
+A mock Reflector contract is registered in the test environment so the
+implementation is covered by five unit tests (happy path YES/NO, outcome
+mismatch, price unavailable, `AnyAdapter` dispatch).
+
 Rationale:
 
 1. **Sufficient asset coverage** — Vatix markets are anchored to Stellar
