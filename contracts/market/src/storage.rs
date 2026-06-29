@@ -165,20 +165,6 @@ pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
 }
 
-// --- Resolution Contract Storage ---
-
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::ResolutionContract)
-}
-
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::ResolutionContract, contract);
-}
-
 // --- Outcome Token Storage ---
 
 pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
@@ -207,6 +193,24 @@ pub fn get_fee_rate_bps(env: &Env) -> i128 {
 
 pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Threshold Signer Storage (#378) ---
+
+pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
+    env.storage().persistent().get(&StorageKey::ThresholdSigners).unwrap_or(Vec::new(env))
+}
+
+pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
+    env.storage().persistent().set(&StorageKey::ThresholdSigners, signers);
+}
+
+pub fn get_threshold_quorum(env: &Env) -> u32 {
+    env.storage().persistent().get(&StorageKey::ThresholdQuorum).unwrap_or(0)
+}
+
+pub fn set_threshold_quorum(env: &Env, quorum: u32) {
+    env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
 }
 
 #[cfg(test)]
