@@ -123,6 +123,12 @@ pub enum ContractError {
     /// or overwrite a market with an outcome_count other than 2 is rejected.
     InvalidOutcomeCount = 34,
 
+    /// Admin address is invalid (e.g., contract address or zero address).
+    ///
+    /// The admin must be a valid user account address, not a contract address
+    /// or any special/reserved address.
+    InvalidAdmin = 35,
+
     // ========== Authorization Errors (40-49) ==========
     /// Caller is not authorized to perform this action.
     ///

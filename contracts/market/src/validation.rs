@@ -1,6 +1,41 @@
 use crate::error::ContractError;
 use crate::types::MarketStatus;
-use soroban_sdk::String;
+use soroban_sdk::{Address, String};
+
+/// Validates that an admin address is suitable for contract administration.
+///
+/// The admin address must be a valid user account. This function rejects:
+/// - Contract addresses (to prevent circular dependencies or governance attacks)
+///
+/// # Arguments
+/// * `admin` - Address to validate as admin
+///
+/// # Returns
+/// `Ok(())` if the address is valid for use as admin
+///
+/// # Errors
+/// - [`ContractError::InvalidAdmin`] – address is a contract or otherwise unsuitable
+///
+/// # Security Notes
+/// Contract addresses as admin could lead to:
+/// - Circular dependency issues
+/// - Complex governance attack vectors
+/// - Unintended behavior if contract is upgraded or self-destructs
+///
+/// # Example
+/// ```ignore
+/// validation::validate_admin_address(&admin)?;
+/// ```
+pub fn validate_admin_address(admin: &Address) -> Result<(), ContractError> {
+    // Reject contract addresses - admin should be an account
+    // In Soroban, this check ensures we're not setting a contract as admin
+    // which could lead to complex governance issues
+    if admin.to_string().starts_with("C") {
+        return Err(ContractError::InvalidAdmin);
+    }
+    
+    Ok(())
+}
 
 /// Guard function to validate input before processing.
 ///
@@ -455,6 +490,25 @@ mod tests {
         assert_eq!(
             validate_cancelable(&MarketStatus::Canceled),
             Err(ContractError::MarketNotActive)
+        );
+    }
+
+    #[test]
+    fn test_validate_admin_address_account_ok() {
+        let env = soroban_sdk::Env::default();
+        // Generate a user account address (starts with 'G')
+        let admin = Address::generate(&env);
+        assert!(validate_admin_address(&admin).is_ok());
+    }
+
+    #[test]
+    fn test_validate_admin_address_contract_fails() {
+        let env = soroban_sdk::Env::default();
+        // Register a contract to get a contract address (starts with 'C')
+        let contract_id = env.register(crate::MarketContract, ());
+        assert_eq!(
+            validate_admin_address(&contract_id),
+            Err(ContractError::InvalidAdmin)
         );
     }
 }

@@ -77,6 +77,110 @@ mod test {
     }
 
     // Rest of tests remain the same...
+    // ========== Initialize Function Tests ==========
+    
+    #[test]
+    fn test_initialize_with_valid_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // Initialize should succeed with a valid account address
+        let result = client.initialize(&admin);
+        assert!(result.is_ok());
+        
+        // Verify admin was set
+        let stored_admin = env.as_contract(&contract_id, || {
+            storage::get_admin(&env).expect("Admin should be set")
+        });
+        assert_eq!(stored_admin, admin);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_initialize_with_contract_address_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        // Try to use another contract address as admin (should fail)
+        let other_contract = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.initialize(&other_contract);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn test_initialize_twice_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // First initialization should succeed
+        client.initialize(&admin);
+        
+        // Second initialization should fail with AlreadyInitialized (#42)
+        let another_admin = Address::generate(&env);
+        client.initialize(&another_admin);
+    }
+    
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0);
+        
+        // Check for contract_initialized_event
+        let event_found = events.iter().any(|e| {
+            e.topics.iter().any(|t| {
+                t.to_string().contains("contract_initialized")
+            })
+        });
+        assert!(event_found, "contract_initialized_event should be emitted");
+    }
+    
+    #[test]
+    fn test_initialize_sets_version() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify storage version was set
+        env.as_contract(&contract_id, || {
+            let result = storage::assert_version(&env);
+            assert!(result.is_ok(), "Storage version should be set correctly");
+        });
+    }
+
+    // ========== Initialize Market Function Tests ==========
+    
     #[test]
     fn test_initialize_market_success() {
         let (env, admin, client, contract_id) = create_test_contract();
@@ -775,6 +879,18 @@ mod test {
 
         let events = env.events().all();
         assert!(events.len() > 0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_propose_admin_with_contract_address_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        
+        // Try to propose a contract address as admin
+        let contract_admin = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.propose_admin(&admin, &contract_admin);
     }
 
     #[test]
