@@ -83,7 +83,8 @@ The Market Contract emits the following events for off-chain indexing and tracki
 | `market_resolved_event` | `market_id` | `resolver: BytesN<32>`, `outcome: bool`, `resolved_at: u64` | Emitted when a market is resolved with an oracle-signed outcome |
 | `position_settled_event` | `market_id`, `user` | `payout: i128`, `settled_at: u64` | Emitted when a user's position is settled and payout is transferred |
 | `oracle_signature_verified_event` | `market_id` | `outcome: bool`, `verified_at: u64` | Emitted when an oracle signature is verified during resolution |
-| `fee_calculated_event` | `market_id`, `user` | `fee_amount: i128`, `available_after_fee: i128` | Emitted when a fee is calculated during withdrawal |
+| `market_canceled_event` | `market_id` | `canceler: Address`, `canceled_at: u64` | Emitted when an admin cancels an active market |
+| `fee_calculated_event` | `market_id`, `user` | `fee_amount: i128`, `available_after_fee: i128` | Emitted when a non-zero fee is calculated during withdrawal |
 | `validation_failed_event` | `context` | `error_code: u32` | Emitted when validation fails, recording context and error code |
 
 ### Event Indexing

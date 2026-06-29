@@ -1040,7 +1040,7 @@ mod tests {
 
         let market_id = 1u32;
         let user = Address::generate(&env);
-        let fee_amount = 0i128;
+        let fee_amount = 500i128; // non-zero fee per #345
         let available_after_fee = 5_000i128;
 
         env.as_contract(&contract_id, || {
