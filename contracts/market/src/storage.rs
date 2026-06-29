@@ -5,12 +5,40 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// Bump this constant whenever the storage layout changes in a breaking way.
 /// `initialize()` writes this value; every storage accessor asserts it.
 ///
-/// ## Migration procedure (testnet)
-/// 1. Increment `STORAGE_VERSION` in this file.
-/// 2. Redeploy the contract WASM (`make build` then `soroban contract deploy`).
-/// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
-/// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
-///    any call that touches storage will return that error.
+/// # Migration Guide
+///
+/// **IMPORTANT:** See `STORAGE_MIGRATION_GUIDE.md` for comprehensive documentation
+/// on when and how to bump this version, including:
+/// - When to increment the version
+/// - Step-by-step migration procedures for testnet and mainnet
+/// - Testing strategies
+/// - Rollback and recovery procedures
+/// - Common pitfalls and how to avoid them
+///
+/// # Quick Reference
+///
+/// ## Always bump version when:
+/// - Adding/removing fields in storage types (Market, Position, etc.)
+/// - Changing field types or semantics
+/// - Adding new StorageKey variants
+/// - Changing how existing data is computed or interpreted
+///
+/// ## Migration procedure (testnet):
+/// 1. Increment `STORAGE_VERSION` in this file
+/// 2. Document the change in `MIGRATION.md`
+/// 3. Build the contract: `stellar contract build`
+/// 4. Deploy: `stellar contract deploy --wasm <path> --network testnet`
+/// 5. Initialize: `stellar contract invoke ... -- initialize --admin <addr>`
+/// 6. Verify old deployment returns `UpgradeRequired` error
+///
+/// ## Current version: 3
+///
+/// ### Version history:
+/// - **v3:** Added Treasury, Outcome Token, Resolution Contract, Threshold Signers
+/// - **v2:** Fixed locked_collateral semantics (#262)
+/// - **v1:** Initial storage layout
+///
+/// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
 pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
@@ -165,20 +193,6 @@ pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
 }
 
-// --- Resolution Contract Storage ---
-
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::ResolutionContract)
-}
-
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::ResolutionContract, contract);
-}
-
 // --- Outcome Token Storage ---
 
 pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
@@ -207,6 +221,24 @@ pub fn get_fee_rate_bps(env: &Env) -> i128 {
 
 pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Threshold Signer Storage (#378) ---
+
+pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
+    env.storage().persistent().get(&StorageKey::ThresholdSigners).unwrap_or(Vec::new(env))
+}
+
+pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
+    env.storage().persistent().set(&StorageKey::ThresholdSigners, signers);
+}
+
+pub fn get_threshold_quorum(env: &Env) -> u32 {
+    env.storage().persistent().get(&StorageKey::ThresholdQuorum).unwrap_or(0)
+}
+
+pub fn set_threshold_quorum(env: &Env, quorum: u32) {
+    env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
 }
 
 #[cfg(test)]
@@ -482,6 +514,139 @@ mod test {
 
             set_resolution_contract(&env, &resolution);
             assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
+        });
+    }
+
+    // ── Migration scenario tests (validates STORAGE_MIGRATION_GUIDE.md) ──────
+
+    /// Test that simulates a version bump scenario where an old deployment
+    /// is locked out after a new deployment with a higher version is created.
+    ///
+    /// This validates the migration guide principle: "Old deployments are
+    /// permanently locked behind UpgradeRequired after version bump"
+    #[test]
+    fn migration_guide_old_deployment_locked_after_version_bump() {
+        let env = Env::default();
+        
+        // Simulate old deployment with version 2
+        let old_contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&old_contract_id, || {
+            env.storage().persistent().set(&StorageKey::StorageVersion, &2u32);
+        });
+        
+        // Verify old deployment works with its own version
+        env.as_contract(&old_contract_id, || {
+            // Storage operations would work if code version matched
+            let version_check = env.storage().persistent().get::<StorageKey, u32>(&StorageKey::StorageVersion);
+            assert_eq!(version_check, Some(2u32));
+        });
+        
+        // Simulate new deployment with current version (3)
+        let new_contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&new_contract_id, || {
+            set_version(&env);
+            assert_eq!(assert_version(&env), Ok(()));
+        });
+        
+        // Verify old deployment is now locked (version mismatch)
+        env.as_contract(&old_contract_id, || {
+            // Current code expects version 3, but storage has version 2
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Test that validates the migration guide principle: "Version check
+    /// happens before any storage operation to prevent operations on
+    /// incompatible data"
+    #[test]
+    fn migration_guide_version_checked_before_operations() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+        
+        // Set an old version
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(&StorageKey::StorageVersion, &1u32);
+        });
+        
+        // All storage operations should fail with UpgradeRequired
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_market(&env, 1), Err(ContractError::UpgradeRequired));
+            assert_eq!(get_position(&env, 1, &user), Err(ContractError::UpgradeRequired));
+            assert_eq!(has_market(&env, 1), Err(ContractError::UpgradeRequired));
+            assert_eq!(has_position(&env, 1, &user), Err(ContractError::UpgradeRequired));
+            assert_eq!(get_next_market_id(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Test that validates the migration guide principle: "After set_version(),
+    /// all storage operations become accessible"
+    #[test]
+    fn migration_guide_storage_accessible_after_version_set() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = Address::generate(&env);
+        
+        // Initially, version is not set
+        env.as_contract(&contract_id, || {
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+        
+        // Set version (simulating initialize() call)
+        env.as_contract(&contract_id, || {
+            set_version(&env);
+            set_admin(&env, &admin);
+        });
+        
+        // Now all storage operations should work
+        env.as_contract(&contract_id, || {
+            assert_eq!(assert_version(&env), Ok(()));
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            assert_eq!(get_next_market_id(&env).unwrap(), 0);
+        });
+    }
+
+    /// Test that validates the migration guide principle: "Future versions
+    /// (higher than code version) are also rejected"
+    #[test]
+    fn migration_guide_future_version_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        
+        // Set a future version (higher than STORAGE_VERSION)
+        env.as_contract(&contract_id, || {
+            let future_version = STORAGE_VERSION + 10;
+            env.storage().persistent().set(&StorageKey::StorageVersion, &future_version);
+            
+            // Future version should be rejected (prevents downgrades)
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Test that validates version numbers form a strict equality check,
+    /// not a range check. This ensures exact version matching as required
+    /// by the migration guide.
+    #[test]
+    fn migration_guide_exact_version_match_required() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        
+        env.as_contract(&contract_id, || {
+            // Current version works
+            env.storage().persistent().set(&StorageKey::StorageVersion, &STORAGE_VERSION);
+            assert_eq!(assert_version(&env), Ok(()));
+            
+            // One less fails
+            env.storage().persistent().set(&StorageKey::StorageVersion, &(STORAGE_VERSION - 1));
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+            
+            // One more fails
+            env.storage().persistent().set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+            
+            // Back to current version works again
+            env.storage().persistent().set(&StorageKey::StorageVersion, &STORAGE_VERSION);
+            assert_eq!(assert_version(&env), Ok(()));
         });
     }
 }

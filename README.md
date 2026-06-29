@@ -44,6 +44,26 @@ The Market contract can optionally wire supporting modules via admin-configured 
 - **Testing**: Soroban SDK test utilities
 - **Build**: Cargo
 
+## Documentation
+
+### Storage Migrations
+
+The Market contract uses storage versioning to ensure data integrity across upgrades. See comprehensive documentation:
+
+- **[Storage Migration Guide](contracts/market/STORAGE_MIGRATION_GUIDE.md)** - Complete guide for handling storage version bumps, including:
+  - When to bump storage version
+  - Step-by-step migration procedures (testnet & mainnet)
+  - Testing strategies
+  - Rollback and recovery procedures
+  - Common pitfalls and solutions
+  
+- **[Migration History](contracts/market/MIGRATION.md)** - Specific changes and data migration notes
+
+**Quick Reference:**
+- Current storage version: `3`
+- Always bump version for: field changes, type changes, semantic changes to stored data
+- Migration is required when deploying with a new storage version
+
 <!-- ## Project Status
 
 🚧 **Early Stage** - Contract architecture and specifications in progress -->
