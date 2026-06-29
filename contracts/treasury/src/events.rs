@@ -132,3 +132,37 @@ pub fn emit_market_contract_updated(
     }
     .publish(env);
 }
+
+// ── Pause ─────────────────────────────────────────────────────────────────────
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasuryPausedEvent {
+    #[topic]
+    pub admin: Address,
+    pub paused_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasuryUnpausedEvent {
+    #[topic]
+    pub admin: Address,
+    pub unpaused_at: u64,
+}
+
+pub fn emit_treasury_paused(env: &Env, admin: &Address) {
+    TreasuryPausedEvent {
+        admin: admin.clone(),
+        paused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+pub fn emit_treasury_unpaused(env: &Env, admin: &Address) {
+    TreasuryUnpausedEvent {
+        admin: admin.clone(),
+        unpaused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}

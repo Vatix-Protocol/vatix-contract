@@ -1216,4 +1216,126 @@ mod test {
         let stranger = Address::generate(&env);
         client.withdraw_canceled_collateral(&stranger, &market_id);
     }
+
+    // ── #402 fee cap max bps validation ──────────────────────────────────────
+
+    #[test]
+    fn test_get_fee_cap_defaults_to_max() {
+        let (_env, _admin, client, _id) = create_test_contract();
+        assert_eq!(client.get_fee_cap(), 10_000);
+    }
+
+    #[test]
+    fn test_set_fee_cap_and_enforce() {
+        let (_env, admin, client, _id) = create_test_contract();
+        // Lower cap to 500 bps (5%)
+        client.set_fee_cap(&admin, &500i128);
+        assert_eq!(client.get_fee_cap(), 500);
+
+        // set_fee_rate within cap succeeds
+        client.set_fee_rate(&admin, &500i128);
+        assert_eq!(client.get_fee_rate(), 500);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_set_fee_rate_above_cap_rejected() {
+        let (_env, admin, client, _id) = create_test_contract();
+        client.set_fee_cap(&admin, &200i128);
+        // 300 > cap 200 → FeeCapExceeded (#35)
+        client.set_fee_rate(&admin, &300i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_set_fee_cap_non_admin_rejected() {
+        let (env, _admin, client, _id) = create_test_contract();
+        let rando = Address::generate(&env);
+        client.set_fee_cap(&rando, &500i128);
+    }
+
+    // ── #401 list_markets pagination ─────────────────────────────────────────
+
+    #[test]
+    fn test_list_markets_empty() {
+        let (_env, _admin, client, _id) = create_test_contract();
+        let result = client.list_markets(&0u32, &10u32);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_list_markets_paginated() {
+        let (env, admin, client, _id) = create_test_contract();
+        let token = Address::generate(&env);
+        let end_time = env.ledger().timestamp() + 86_400;
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let questions = ["Q1", "Q2", "Q3", "Q4", "Q5"];
+
+        // Create 5 markets
+        for q in questions.iter() {
+            let qs = soroban_sdk::String::from_str(&env, q);
+            client.initialize_market(&admin, &qs, &end_time, &pubkey, &token);
+        }
+
+        // page 1: start=0 limit=3 → ids 1,2,3
+        let page1 = client.list_markets(&0u32, &3u32);
+        assert_eq!(page1.len(), 3);
+        assert_eq!(page1.get(0).unwrap().id, 1);
+        assert_eq!(page1.get(2).unwrap().id, 3);
+
+        // page 2: start=3 limit=3 → ids 4,5
+        let page2 = client.list_markets(&3u32, &3u32);
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2.get(0).unwrap().id, 4);
+        assert_eq!(page2.get(1).unwrap().id, 5);
+
+        // beyond end
+        let empty = client.list_markets(&10u32, &5u32);
+        assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn test_list_markets_limit_capped_at_100() {
+        let (env, admin, client, _id) = create_test_contract();
+        let token = Address::generate(&env);
+        let end_time = env.ledger().timestamp() + 86_400;
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let questions = ["Q1", "Q2", "Q3"];
+
+        for q in questions.iter() {
+            let qs = soroban_sdk::String::from_str(&env, q);
+            client.initialize_market(&admin, &qs, &end_time, &pubkey, &token);
+        }
+
+        // limit=200 is capped at 100 internally, but only 3 markets exist
+        let result = client.list_markets(&0u32, &200u32);
+        assert_eq!(result.len(), 3);
+    }
+
+    // ── #400 benchmark gas for update_position ────────────────────────────────
+
+    #[test]
+    fn test_benchmark_update_position_gas() {
+        let (env, admin, client, _id) = create_test_contract();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let end_time = env.ledger().timestamp() + 86_400;
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let question = String::from_str(&env, "Benchmark market?");
+        let user = Address::generate(&env);
+
+        let market_id = client.initialize_market(&admin, &question, &end_time, &pubkey, &token);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&user, &10_000);
+        client.deposit_collateral(&user, &market_id, &10_000i128);
+
+        env.budget().reset_default();
+        client.update_position(&user, &market_id, &100i128, &0i128, &5_000i128);
+
+        let cpu = env.budget().cpu_instruction_cost();
+        let mem = env.budget().memory_bytes_cost();
+
+        assert!(cpu < 100_000_000, "CPU cost {cpu} exceeded 100M instructions");
+        assert!(mem < 5_000_000, "Memory cost {mem} exceeded 5MB");
+    }
 }

@@ -123,6 +123,11 @@ pub enum ContractError {
     /// or overwrite a market with an outcome_count other than 2 is rejected.
     InvalidOutcomeCount = 34,
 
+    /// `set_fee_rate` was called with a value that exceeds the admin-configured fee cap.
+    ///
+    /// Use `set_fee_cap` first, or lower the requested fee rate.
+    FeeCapExceeded = 35,
+
     // ========== Authorization Errors (40-49) ==========
     /// Caller is not authorized to perform this action.
     ///
@@ -202,6 +207,7 @@ mod tests {
         assert_eq!(ContractError::NoPendingAdmin as u32, 43);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
         assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
+        assert_eq!(ContractError::FeeCapExceeded as u32, 35);
     }
 
     #[test]

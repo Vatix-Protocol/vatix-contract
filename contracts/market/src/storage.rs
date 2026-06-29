@@ -37,6 +37,11 @@ pub enum StorageKey {
     ThresholdSigners,
     /// Minimum number of valid signatures required to resolve a market (#378).
     ThresholdQuorum,
+    /// Maximum fee rate cap in basis points that `set_fee_rate` may not exceed.
+    /// When unset, the hard limit of 10_000 applies.
+    FeeCapBps,
+    /// Ordered list of all created market IDs for pagination (#401).
+    MarketIds,
 }
 
 // --- Version helpers ---
@@ -153,12 +158,8 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 /// Register (or replace) the treasury contract address for protocol fee routing.
-/// Pass `None` to remove the treasury and disable fee routing.
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage().persistent().set(&StorageKey::Treasury, treasury);
 }
 
 pub fn has_treasury(env: &Env) -> bool {
@@ -189,16 +190,6 @@ pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
     env.storage().persistent().set(&StorageKey::OutcomeTokenContract, contract);
 }
 
-// --- Resolution Contract Storage ---
-
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage().persistent().get(&StorageKey::ResolutionContract)
-}
-
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage().persistent().set(&StorageKey::ResolutionContract, contract);
-}
-
 // --- Fee Config Storage ---
 
 pub fn get_fee_rate_bps(env: &Env) -> i128 {
@@ -207,6 +198,66 @@ pub fn get_fee_rate_bps(env: &Env) -> i128 {
 
 pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Fee Cap Storage ---
+
+/// Maximum fee rate the admin is allowed to set, in basis points.
+/// Defaults to `MAX_FEE_CAP_BPS` (10_000) when unset.
+pub const MAX_FEE_CAP_BPS: i128 = 10_000;
+
+pub fn get_fee_cap_bps(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeCapBps)
+        .unwrap_or(MAX_FEE_CAP_BPS)
+}
+
+pub fn set_fee_cap_bps(env: &Env, cap: i128) {
+    env.storage().persistent().set(&StorageKey::FeeCapBps, &cap);
+}
+
+// --- Threshold Signers / Quorum (#378) ---
+
+pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ThresholdSigners)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ThresholdSigners, signers);
+}
+
+pub fn get_threshold_quorum(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ThresholdQuorum)
+        .unwrap_or(0)
+}
+
+pub fn set_threshold_quorum(env: &Env, quorum: u32) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ThresholdQuorum, &quorum);
+}
+
+// --- Market ID list for pagination (#401) ---
+
+pub fn get_market_ids(env: &Env) -> Vec<u32> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::MarketIds)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn append_market_id(env: &Env, market_id: u32) {
+    let mut ids = get_market_ids(env);
+    ids.push_back(market_id);
+    env.storage().persistent().set(&StorageKey::MarketIds, &ids);
 }
 
 #[cfg(test)]
@@ -458,13 +509,9 @@ mod test {
             assert!(!has_treasury(&env));
             assert_eq!(get_treasury(&env), None);
 
-            set_treasury(&env, &Some(treasury.clone()));
+            set_treasury(&env, &treasury);
             assert!(has_treasury(&env));
             assert_eq!(get_treasury(&env), Some(treasury.clone()));
-
-            set_treasury(&env, &None);
-            assert!(!has_treasury(&env));
-            assert_eq!(get_treasury(&env), None);
         });
     }
 
