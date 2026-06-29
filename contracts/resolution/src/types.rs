@@ -20,6 +20,7 @@ pub struct ResolutionCandidate {
     pub market_id: u32,
     pub outcome: bool,
     pub signature: BytesN<64>,
+    pub signature_expiry: u64,
     pub proposer: Address,
     pub evidence_uri: String,
     pub proposed_at: u64,

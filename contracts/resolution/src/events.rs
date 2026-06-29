@@ -29,6 +29,7 @@ pub struct CandidateProposedEvent {
     pub proposer: Address,
     pub evidence_uri: String,
     pub challenge_deadline: u64,
+    pub signature_expiry: u64,
 }
 
 pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCandidate) {
@@ -39,6 +40,7 @@ pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCa
         proposer: candidate.proposer.clone(),
         evidence_uri: candidate.evidence_uri.clone(),
         challenge_deadline: candidate.challenge_deadline,
+        signature_expiry: candidate.signature_expiry,
     }
     .publish(env);
 }
