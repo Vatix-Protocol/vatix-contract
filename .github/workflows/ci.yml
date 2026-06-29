@@ -68,7 +68,7 @@ jobs:
       # Tests are defined alongside the contract source under `contracts/market/src/`
       # using Soroban SDK test utilities. A new test should be added for every
       # public contract function to maintain coverage.
-      - name: Tests
+      - name: Tests (market)
         run: cd contracts/market && cargo test
 
       # Runs the workspace-level integration tests located in tests/.
@@ -106,15 +106,43 @@ jobs:
           path: contracts/market/src/.proptest-regressions
           if-no-files-found: ignore
 
-      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
-      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
-      # contracts/market/Makefile; run `cd contracts/market && make build` locally
-      # to reproduce this check and see the output WASM size.
-      - name: Build
+      # Build and test the Treasury contract.
+      - name: Tests (treasury)
+        run: |
+          cd contracts/treasury && cargo test
+          cargo test -p vatix-treasury-contract
+
+      # Build and test the Outcome Token contract.
+      - name: Tests (outcome-token)
+        run: |
+          cd contracts/outcome-token && cargo test
+          cargo test -p vatix-outcome-token-contract
+
+      # Build and test the Resolution contract.
+      - name: Tests (resolution)
+        run: |
+          cd contracts/resolution && cargo test
+          cargo test -p vatix-resolution-contract
+
+      # Compiles all contracts to WASM (wasm32-unknown-unknown) — the binary format
+      # required by the Stellar Soroban runtime.
+      - name: Build market contract
         run: cd contracts/market && stellar contract build
 
-      # Verify the WASM artifact was created at the expected path
-      - name: Verify WASM artifact
+      # Build Treasury contract WASM.
+      - name: Build treasury contract
+        run: cd contracts/treasury && stellar contract build
+
+      # Build Outcome Token contract WASM.
+      - name: Build outcome-token contract
+        run: cd contracts/outcome-token && stellar contract build
+
+      # Build Resolution contract WASM.
+      - name: Build resolution contract
+        run: cd contracts/resolution && stellar contract build
+
+      # Verify all WASM artifacts were created at the expected paths
+      - name: Verify WASM artifacts
         run: |
           ls -lh target/wasm32v1-none/release/*.wasm
           echo "WASM artifact size:"
