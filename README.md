@@ -69,6 +69,33 @@ The Market contract uses storage versioning to ensure data integrity across upgr
 - Fee distribution
 - Market expiration and settlement
 
+## Recent Features
+
+### Close Market to Deposits (v1.2)
+
+Allows administrators to prevent new collateral deposits into a market while preserving all other functionality (trading, withdrawals, and settlement). 
+
+**Use Cases**:
+- Prevent new positions when approaching market expiration
+- Lock down markets during resolution or dispute windows
+- Manage market liquidity and exposure
+
+**API**: 
+```rust
+pub fn close_market_to_deposits(env: Env, admin: Address, market_id: u32) -> Result<(), ContractError>
+```
+
+**Event**:
+```
+MarketClosedToDepositsEvent {
+    market_id: u32,
+    admin: Address,
+    closed_at: u64,
+}
+```
+
+For detailed documentation, see [CLOSE_MARKET_FEATURE.md](CLOSE_MARKET_FEATURE.md).
+
 ## Resolution Lifecycle
 
 The Market Contract still owns the final `resolve_market(market_id, outcome, signature)` state transition. The separate Resolution Contract adds the missing on-chain challenge window that mirrors the backend `ResolutionCandidate` flow:

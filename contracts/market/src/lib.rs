@@ -280,6 +280,7 @@ impl MarketContract {
             resolved_at: None,
             adapter_type: crate::types::AdapterType::Ed25519,
             outcome_count: 2,
+            closed_to_deposits: false,
         };
 
         // 5. Store market

@@ -45,6 +45,9 @@ pub struct Market {
     /// Number of possible outcomes for this market. Always 2 (YES/NO) for binary
     /// prediction markets. Set once at creation and immutable thereafter.
     pub outcome_count: u32,
+    /// Flag indicating whether the market is closed to new deposits.
+    /// When true, users cannot deposit new collateral, but can still withdraw and trade.
+    pub closed_to_deposits: bool,
 }
 
 /// Tracks the position and shares of a specific user in a market.

@@ -64,6 +64,10 @@ pub fn deposit_collateral(
         return Err(ContractError::MarketNotActive);
     }
 
+    if market.closed_to_deposits {
+        return Err(ContractError::MarketClosedToDeposits);
+    }
+
     if env.ledger().timestamp() > market.end_time {
         return Err(ContractError::MarketExpired);
     }

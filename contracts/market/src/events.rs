@@ -214,6 +214,45 @@ pub fn emit_market_created(
     .publish(env);
 }
 
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketClosedToDepositsEvent {
+    #[topic]
+    pub market_id: u32,
+    pub admin: Address,
+    pub closed_at: u64,
+}
+
+/// Emit event when a market is closed to new deposits
+///
+/// Publishes a [`MarketClosedToDepositsEvent`] to the Soroban event stream when
+/// an admin closes a market to prevent new collateral deposits. The event is indexed
+/// by `market_id` as a topic for efficient lookup by off-chain indexers.
+///
+/// # Arguments
+/// * env - Contract environment
+/// * market_id - Unique identifier of the market being closed
+/// * admin - Address of the admin who closed the market
+/// * closed_at - Unix timestamp when the market was closed
+///
+/// # Example
+/// ```ignore
+/// emit_market_closed_to_deposits(&env, 1, &admin, env.ledger().timestamp());
+/// ```
+pub fn emit_market_closed_to_deposits(
+    env: &Env,
+    market_id: u32,
+    admin: &Address,
+    closed_at: u64,
+) {
+    MarketClosedToDepositsEvent {
+        market_id,
+        admin: admin.clone(),
+        closed_at,
+    }
+    .publish(env);
+}
+
 /// Emit event for withdraw edge case when user has zero collateral deposited
 ///
 /// Publishes a [`WithdrawEdgeCase`] when a user attempts to withdraw
