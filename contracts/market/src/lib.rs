@@ -234,6 +234,7 @@ impl MarketContract {
         end_time: u64,
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
+        metadata_uri: Option<String>,
     ) -> Result<u32, ContractError> {
         validation::require_initialized(&env)?;
         validation::require_not_paused(&env)?;
@@ -247,6 +248,7 @@ impl MarketContract {
         // 2. Validate inputs
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
+        validation::validate_metadata_uri(&metadata_uri)?;
 
         // Guard: an all-zero pubkey can never produce a valid Ed25519 signature,
         // making the market permanently unresolvable.
@@ -288,7 +290,7 @@ impl MarketContract {
         storage::append_market_id(&env, market_id);
 
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &creator, &question, end_time);
+        events::emit_market_created(&env, market_id, &creator, &question, end_time, &metadata_uri);
 
         // 7. Return market ID
         Ok(market_id)

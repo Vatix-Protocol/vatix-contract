@@ -80,6 +80,7 @@ pub struct MarketCreated {
     pub creator: Address,
     pub question: String,
     pub end_time: u64,
+    pub metadata_uri: Option<String>,
 }
 
 #[contractevent]
@@ -203,6 +204,7 @@ pub fn emit_market_created(
     creator: &Address,
     question: &String,
     end_time: u64,
+    metadata_uri: &Option<String>,
 ) {
     // Publish the event with topics and data
     MarketCreated {
@@ -210,6 +212,7 @@ pub fn emit_market_created(
         creator: creator.clone(),
         question: question.clone(),
         end_time,
+        metadata_uri: metadata_uri.clone(),
     }
     .publish(env);
 }
