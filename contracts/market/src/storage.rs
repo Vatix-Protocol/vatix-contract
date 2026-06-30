@@ -168,20 +168,6 @@ pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
 }
 
-// --- Resolution Contract Storage ---
-
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::ResolutionContract)
-}
-
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::ResolutionContract, contract);
-}
-
 // --- Outcome Token Storage ---
 
 pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
