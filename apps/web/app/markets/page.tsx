@@ -1,12 +1,11 @@
 import { Suspense } from "react";
 import { MarketCard } from "@/components/MarketCard";
 import { LoadingSkeleton } from "@/components/LoadingSkeleton";
-import { getMarkets, MOCK_MARKETS } from "@/lib/markets";
+import { getMarkets } from "@/lib/markets";
 import { containerClass } from "@/lib/responsive";
 
 async function MarketList() {
-  const fetched = await getMarkets();
-  const markets = fetched.length > 0 ? fetched : MOCK_MARKETS;
+  const markets = await getMarkets();
 
   if (markets.length === 0) {
     return (
@@ -40,9 +39,6 @@ export default function MarketsPage() {
   return (
     <div className={`${containerClass()} py-10`}>
       <h1 className="text-2xl font-semibold">All markets</h1>
-      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-        Mock data for UI development — replace with Soroban contract reads.
-      </p>
       <Suspense fallback={<LoadingSkeleton />}>
         <MarketList />
       </Suspense>

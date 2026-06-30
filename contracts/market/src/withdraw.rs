@@ -76,7 +76,10 @@ pub fn withdraw_unused_collateral(
         .total_deposited
         .saturating_sub(position.locked_collateral);
 
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    // Only emit the fee event when a non-zero fee is actually deducted (#345).
+    if fee_amount > 0 {
+        emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    }
 
     let total_required = amount
         .checked_add(fee_amount)
@@ -464,7 +467,6 @@ mod tests {
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury_id.clone()));
         });
         env.mock_all_auths();
         let result = env.as_contract(&contract_id, || {

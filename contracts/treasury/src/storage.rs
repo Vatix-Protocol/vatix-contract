@@ -22,6 +22,8 @@ pub enum StorageKey {
     CumulativeFees(Address),
     /// Global monotone counter: total of all fees ever collected across all tokens.
     TotalCollected,
+    /// When `true`, `collect_fee` and `withdraw_fees` are blocked until unpaused.
+    Paused,
 }
 
 // ── Version ───────────────────────────────────────────────────────────────────
@@ -125,4 +127,17 @@ pub fn set_total_collected(env: &Env, amount: i128) {
     env.storage()
         .instance()
         .set(&StorageKey::TotalCollected, &amount);
+}
+
+// ── Pause flag ────────────────────────────────────────────────────────────────
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&StorageKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&StorageKey::Paused, &paused);
 }

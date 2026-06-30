@@ -3,7 +3,7 @@ use soroban_sdk::{contractevent, Address, Env};
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TokenMintedEvent {
+pub struct TokenMinted {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -21,7 +21,7 @@ pub fn emit_token_minted(
     amount: i128,
     new_balance: i128,
 ) {
-    TokenMintedEvent {
+    TokenMinted {
         market_id,
         user: user.clone(),
         kind,
@@ -33,7 +33,7 @@ pub fn emit_token_minted(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TokenBurnedEvent {
+pub struct TokenBurned {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -51,7 +51,7 @@ pub fn emit_token_burned(
     amount: i128,
     new_balance: i128,
 ) {
-    TokenBurnedEvent {
+    TokenBurned {
         market_id,
         user: user.clone(),
         kind,
