@@ -5,12 +5,40 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// Bump this constant whenever the storage layout changes in a breaking way.
 /// `initialize()` writes this value; every storage accessor asserts it.
 ///
-/// ## Migration procedure (testnet)
-/// 1. Increment `STORAGE_VERSION` in this file.
-/// 2. Redeploy the contract WASM (`make build` then `soroban contract deploy`).
-/// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
-/// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
-///    any call that touches storage will return that error.
+/// # Migration Guide
+///
+/// **IMPORTANT:** See `STORAGE_MIGRATION_GUIDE.md` for comprehensive documentation
+/// on when and how to bump this version, including:
+/// - When to increment the version
+/// - Step-by-step migration procedures for testnet and mainnet
+/// - Testing strategies
+/// - Rollback and recovery procedures
+/// - Common pitfalls and how to avoid them
+///
+/// # Quick Reference
+///
+/// ## Always bump version when:
+/// - Adding/removing fields in storage types (Market, Position, etc.)
+/// - Changing field types or semantics
+/// - Adding new StorageKey variants
+/// - Changing how existing data is computed or interpreted
+///
+/// ## Migration procedure (testnet):
+/// 1. Increment `STORAGE_VERSION` in this file
+/// 2. Document the change in `MIGRATION.md`
+/// 3. Build the contract: `stellar contract build`
+/// 4. Deploy: `stellar contract deploy --wasm <path> --network testnet`
+/// 5. Initialize: `stellar contract invoke ... -- initialize --admin <addr>`
+/// 6. Verify old deployment returns `UpgradeRequired` error
+///
+/// ## Current version: 3
+///
+/// ### Version history:
+/// - **v3:** Added Treasury, Outcome Token, Resolution Contract, Threshold Signers
+/// - **v2:** Fixed locked_collateral semantics (#262)
+/// - **v1:** Initial storage layout
+///
+/// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
 pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
