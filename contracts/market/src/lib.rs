@@ -1,6 +1,55 @@
 #![no_std]
 #![deny(clippy::all)]
 
+//! # Market Contract
+//!
+//! Core prediction market contract for the Vatix protocol. Manages market
+//! creation, collateral deposits/withdrawals, share trading (YES/NO), oracle
+//! resolution, and position settlement.
+//!
+//! ## Fee flow
+//!
+//! ```text
+//!  User withdrawal
+//!      │  fee_amount = amount * fee_rate_bps / 10_000
+//!      ▼
+//!  MarketContract
+//!      │  token.transfer(market → treasury, fee_amount)  (if treasury registered)
+//!      │  treasury.collect_fee(market, token, market_id, fee_amount)
+//!      ▼
+//!  TreasuryContract  ← accumulates per-token balances
+//! ```
+//!
+//! ## Authorization model
+//!
+//! | Operation                          | Who may call                    |
+//! |------------------------------------|---------------------------------|
+//! | `initialize`                       | anyone (once)                   |
+//! | `initialize_market` / set_*        | admin                           |
+//! | `deposit_collateral`               | any user                        |
+//! | `update_position`                  | any user (active market)        |
+//! | `withdraw_unused_collateral`       | any user                        |
+//! | `resolve_market` (oracle key)      | anyone (valid signature wins)   |
+//! | `resolve_market` (admin forced)    | admin (when oracle key is zero) |
+//! | `settle_position` / `batch_settle` | any user (resolved market)      |
+//!
+//! ## Storage layout
+//!
+//! | Key                                 | Type            | Description                                        |
+//! |-------------------------------------|-----------------|----------------------------------------------------|
+//! | `StorageVersion`                    | `u32`           | Schema version guard (bumped on breaking changes)  |
+//! | `Admin`                             | `Address`       | Protocol admin                                     |
+//! | `PendingAdmin`                      | `Address`       | Nominated admin for two-step transfer              |
+//! | `MarketCounter`                     | `u32`           | Auto-increment counter for market IDs              |
+//! | `Market(u32)`                       | `Market`        | Per-market metadata                                |
+//! | `Position(u32, Address)`            | `Position`      | Per-user, per-market position (shares, collateral) |
+//! | `Treasury`                          | `Address`       | Optional treasury contract for fee collection      |
+//! | `FeeRateBps`                        | `i128`          | Withdrawal fee rate in basis points (0–10_000)     |
+//! | `OutcomeTokenContract`              | `Address`       | Optional outcome-token contract for mint/burn      |
+//! | `ResolutionContract`                | `Address`       | Optional resolution contract that gates resolution |
+//! | `ThresholdSigners`                  | `Vec<BytesN<32>>` | Multi-signer quorum public keys (#378)           |
+//! | `ThresholdQuorum`                   | `u32`           | Min valid signatures required for resolution (#378)|
+
 mod deposit;
 mod error;
 mod events;
