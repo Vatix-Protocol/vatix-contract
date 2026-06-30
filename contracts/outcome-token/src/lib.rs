@@ -25,22 +25,23 @@ mod test;
 
 use crate::error::ContractError;
 use crate::types::{OutcomeTokenConfig, TokenKind};
-use soroban_sdk::{contract, contractimpl, Address, Env};
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
 #[contract]
 pub struct OutcomeTokenContract;
 
 #[contractimpl]
 impl OutcomeTokenContract {
-    /// Bootstrap the contract by registering the admin and the sole market
-    /// contract allowed to call `mint` and `burn`.
+    /// Bootstrap the contract.
     ///
-    /// Must be called once immediately after deployment. Returns
-    /// [`ContractError::AlreadyInitialized`] on subsequent calls.
+    /// `name` and `symbol` are SAC-compatible metadata stored on-chain.
+    /// `decimals` is a compile-time constant (7) and is not stored.
     pub fn initialize(
         env: Env,
         admin: Address,
         market_contract: Address,
+        name: String,
+        symbol: String,
     ) -> Result<(), ContractError> {
         admin.require_auth();
         if storage::has_config(&env) {
@@ -51,6 +52,8 @@ impl OutcomeTokenContract {
             &OutcomeTokenConfig {
                 admin,
                 market_contract,
+                name,
+                symbol,
             },
         );
         Ok(())
@@ -61,8 +64,6 @@ impl OutcomeTokenContract {
     }
 
     /// Update the market contract address allowed to mint/burn tokens.
-    ///
-    /// Only the stored admin may call this.
     pub fn set_market_contract(
         env: Env,
         admin: Address,
@@ -76,6 +77,39 @@ impl OutcomeTokenContract {
         config.market_contract = market_contract;
         storage::set_config(&env, &config);
         Ok(())
+    }
+
+    /// Update the SAC metadata (name and symbol). Admin only.
+    pub fn set_metadata(
+        env: Env,
+        admin: Address,
+        name: String,
+        symbol: String,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let mut config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        config.name = name;
+        config.symbol = symbol;
+        storage::set_config(&env, &config);
+        Ok(())
+    }
+
+    // ── SAC metadata getters ──────────────────────────────────────────────────
+
+    pub fn name(env: Env) -> String {
+        storage::get_config(&env).name
+    }
+
+    pub fn symbol(env: Env) -> String {
+        storage::get_config(&env).symbol
+    }
+
+    /// Number of decimal places (SAC standard: 7).
+    pub fn decimals(_env: Env) -> u32 {
+        7
     }
 
     /// Mint `amount` tokens of `kind` (Yes or No) for `user` in `market_id`.
@@ -147,13 +181,5 @@ impl OutcomeTokenContract {
     /// Return the total outstanding supply for a `(market_id, kind)` pair.
     pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
         storage::get_total_supply(&env, market_id, &kind)
-    }
-
-    /// Return the number of decimal places used by this token.
-    ///
-    /// Aligned with the Stellar Asset Contract (SAC) standard: 7 decimals,
-    /// meaning 1 token = 10_000_000 stroops.
-    pub fn decimals(_env: Env) -> u32 {
-        7
     }
 }
