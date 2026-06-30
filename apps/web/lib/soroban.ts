@@ -1,5 +1,5 @@
 /**
- * Soroban RPC helpers using @stellar/stellar-sdk.
+ * Soroban / indexer helpers.
  *
  * All config comes from Next.js public env vars.
  */
@@ -26,11 +26,17 @@ export const HORIZON_URL =
   process.env.NEXT_PUBLIC_HORIZON_URL ??
   "https://horizon-testnet.stellar.org";
 
+export const INDEXER_API_URL =
+  process.env.NEXT_PUBLIC_INDEXER_API_URL ?? "";
+
+// Re-export MARKET_CONTRACT_ID so existing callers don't need to change imports.
+export { MARKET_CONTRACT_ID } from "./contract-client";
+
 // ---------------------------------------------------------------------------
-// Market reads (contract or indexer)
+// Market reads (indexer API)
 // ---------------------------------------------------------------------------
 
-interface RpcMarket {
+export interface RpcMarket {
   id: string;
   question: string;
   yes_price: number;
@@ -45,11 +51,11 @@ interface GetMarketsResult {
 }
 
 /**
- * Fetch markets from the contract via Soroban RPC.
- * Falls back to an empty array on error so the UI degrades gracefully.
+ * Fetch markets from the backend indexer API.
+ * Falls back to an empty array on error or when the URL is not configured.
  */
 export async function fetchContractMarkets(): Promise<GetMarketsResult> {
-  if (!CONTRACT_ID) {
+  if (!INDEXER_API_URL) {
     return { markets: [] };
   }
   try {
@@ -64,15 +70,17 @@ export async function fetchContractMarkets(): Promise<GetMarketsResult> {
     if (!result || !result.val) {
       return { markets: [] };
     }
-    // Deserialisation depends on your indexer schema; return empty until wired.
-    return { markets: [] };
+    const data = await res.json();
+    // Accept both `{ markets: [...] }` and a bare array from the indexer.
+    const markets: RpcMarket[] = Array.isArray(data) ? data : (data.markets ?? []);
+    return { markets };
   } catch {
     return { markets: [] };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Signed invocations
+// invokeContract re-exported from contract-client for backward compat
 // ---------------------------------------------------------------------------
 
 interface SendResult {
