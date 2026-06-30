@@ -255,6 +255,82 @@ fn withdraw_fees_errors_when_not_initialized() {
     assert_eq!(err, TreasuryError::NotInitialized);
 }
 
+// ── #384: admin withdraw accumulated fees ─────────────────────────────────────
+
+/// Admin can withdraw ALL accumulated fees, draining the per-token balance
+/// while preserving the cumulative counter.
+#[test]
+fn admin_withdraws_accumulated_fees_in_full() {
+    let s = setup();
+    let total_collected = 1_000_000i128;
+    fund_treasury(&s, total_collected);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &total_collected);
+
+    assert_eq!(
+        s.client.token_balance(&s.token),
+        0,
+        "balance fully drained after withdrawing all accumulated fees"
+    );
+    assert_eq!(
+        s.client.get_cumulative_fees(&s.token),
+        total_collected,
+        "cumulative fees counter remains unchanged after withdrawal"
+    );
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&recipient),
+        total_collected,
+        "recipient received the full accumulated fee amount"
+    );
+}
+
+/// Admin can withdraw a PARTIAL amount of accumulated fees.
+#[test]
+fn admin_withdraws_partial_accumulated_fees() {
+    let s = setup();
+    let total_collected = 500_000i128;
+    fund_treasury(&s, total_collected);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+
+    let partial = 200_000i128;
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &partial);
+
+    assert_eq!(
+        s.client.token_balance(&s.token),
+        total_collected - partial,
+        "remaining balance reflects partial withdrawal"
+    );
+    assert_eq!(
+        s.client.get_cumulative_fees(&s.token),
+        total_collected,
+        "cumulative fees counter is monotone and unchanged"
+    );
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&recipient),
+        partial,
+        "recipient received the partial amount"
+    );
+}
+
+/// Withdrawing fees from an uninitialized treasury is rejected.
+#[test]
+fn withdraw_fees_before_initialize_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let err = client
+        .try_withdraw_fees(&admin, &token, &admin, &1_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::NotInitialized);
+}
+
 // ── cumulative stays monotone ─────────────────────────────────────────────────
 
 #[test]
@@ -382,11 +458,11 @@ fn transfer_admin_emits_event() {
     s.client.transfer_admin(&s.admin, &new_admin);
 
     let events = s.env.events().all();
-    // Last event is AdminTransferred
+    // Last event is AdminTransferred (topic: admin_transferred)
     let ev = events.last().unwrap();
     let topics = &ev.1;
     let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
-    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred_event"));
+    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred"));
 
     let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
     let old_val: Address = data.get(Symbol::new(&s.env, "old_admin")).unwrap().into_val(&s.env);

@@ -52,7 +52,10 @@ pub fn deposit_collateral(
     // Authorization
     user.require_auth();
 
-    // Validation
+    // Validation: reject zero or negative deposits explicitly
+    if amount <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
     validation::validate_collateral_amount(amount)?;
 
     let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
@@ -429,7 +432,7 @@ mod tests {
 
         // Topic 0 = event name symbol
         let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited_event"));
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited"));
 
         // Topic 1 = user
         let topic1: Address = last.1.get(1).unwrap().into_val(&env);
