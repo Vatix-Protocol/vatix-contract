@@ -6,6 +6,7 @@
  */
 
 import {
+  Address,
   Contract,
   rpc,
   TransactionBuilder,
