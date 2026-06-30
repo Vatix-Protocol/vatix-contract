@@ -1,6 +1,6 @@
 use crate::types::TokenKind;
 use crate::{ContractError, OutcomeTokenContract, OutcomeTokenContractClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 fn setup(env: &Env) -> (OutcomeTokenContractClient<'_>, Address, Address) {
     env.mock_all_auths();
@@ -8,7 +8,9 @@ fn setup(env: &Env) -> (OutcomeTokenContractClient<'_>, Address, Address) {
     let client = OutcomeTokenContractClient::new(env, &contract_id);
     let admin = Address::generate(env);
     let market_contract = Address::generate(env);
-    client.initialize(&admin, &market_contract);
+    let name = String::from_str(env, "Vatix YES Token");
+    let symbol = String::from_str(env, "vYES");
+    client.initialize(&admin, &market_contract, &name, &symbol);
     (client, admin, market_contract)
 }
 
@@ -21,15 +23,60 @@ fn initialize_stores_config() {
     let config = client.get_config();
     assert_eq!(config.admin, admin);
     assert_eq!(config.market_contract, market_contract);
+    assert_eq!(config.name, String::from_str(&env, "Vatix YES Token"));
+    assert_eq!(config.symbol, String::from_str(&env, "vYES"));
 }
 
 #[test]
 fn initialize_twice_is_rejected() {
     let env = Env::default();
     let (client, admin, market_contract) = setup(&env);
+    let name = String::from_str(&env, "X");
+    let symbol = String::from_str(&env, "X");
     assert_eq!(
-        client.try_initialize(&admin, &market_contract),
+        client.try_initialize(&admin, &market_contract, &name, &symbol),
         Err(Ok(ContractError::AlreadyInitialized))
+    );
+}
+
+// ── SAC metadata (#382) ──────────────────────────────────────────────────────
+
+#[test]
+fn name_and_symbol_getters_return_stored_values() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    assert_eq!(client.name(), String::from_str(&env, "Vatix YES Token"));
+    assert_eq!(client.symbol(), String::from_str(&env, "vYES"));
+}
+
+#[test]
+fn decimals_returns_seven() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    assert_eq!(client.decimals(), 7u32);
+}
+
+#[test]
+fn admin_can_update_metadata() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    let new_name = String::from_str(&env, "Vatix NO Token");
+    let new_symbol = String::from_str(&env, "vNO");
+    client.set_metadata(&admin, &new_name, &new_symbol);
+    assert_eq!(client.name(), new_name);
+    assert_eq!(client.symbol(), new_symbol);
+}
+
+#[test]
+fn non_admin_cannot_update_metadata() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    let stranger = Address::generate(&env);
+    let n = String::from_str(&env, "Bad");
+    let s = String::from_str(&env, "BAD");
+    assert_eq!(
+        client.try_set_metadata(&stranger, &n, &s),
+        Err(Ok(ContractError::Unauthorized))
     );
 }
 
@@ -178,14 +225,4 @@ fn non_admin_cannot_update_market_contract() {
         client.try_set_market_contract(&stranger, &new_market),
         Err(Ok(ContractError::Unauthorized))
     );
-}
-
-// ── decimals ────────────────────────────────────────────────────────────────
-
-/// #405: decimals() returns 7 to match the Stellar Asset Contract (SAC) standard.
-#[test]
-fn decimals_returns_seven() {
-    let env = Env::default();
-    let (client, _, _) = setup(&env);
-    assert_eq!(client.decimals(), 7u32);
 }

@@ -1,6 +1,5 @@
 use soroban_sdk::contracterror;
 
-/// Error codes for the Vatix resolution candidate contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
