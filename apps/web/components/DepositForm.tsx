@@ -2,14 +2,17 @@
 
 import { useState } from "react";
 import { useWallet } from "@/context/WalletContext";
-import { invokeContract, MARKET_CONTRACT_ID } from "@/lib/soroban";
-import { amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
-import { TxResult } from "@/components/TxResult";
+import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
 
-export function DepositForm() {
+interface DepositFormProps {
+  /** Pre-select a market. When provided the market ID field is hidden. */
+  marketId?: string;
+}
+
+export function DepositForm({ marketId: marketIdProp }: DepositFormProps) {
   const { address } = useWallet();
   const [amount, setAmount] = useState("");
-  const [marketId, setMarketId] = useState("1");
+  const [marketId, setMarketId] = useState(marketIdProp ?? "1");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -31,17 +34,13 @@ export function DepositForm() {
     setTxHash(null);
 
     try {
-      // Convert amount to stroops (1 token = 10^7 stroops for USDC-like tokens)
       const amountInStroops = Math.floor(parseFloat(amount) * 10_000_000).toString();
-      
-      // Prepare contract arguments for deposit_collateral(market_id: u32, user: Address, amount: i128)
       const args = [
         u32ToScVal(parseInt(marketId)),
         addressToScVal(address),
         amountToScVal(amountInStroops),
       ];
 
-      // Invoke the deposit_collateral method
       const result = await invokeContract(
         MARKET_CONTRACT_ID,
         "deposit_collateral",
@@ -66,22 +65,24 @@ export function DepositForm() {
     >
       <h3 className="text-base font-semibold sm:text-lg">Deposit funds</h3>
       <div className="mt-4 space-y-4">
-        <div>
-          <label
-            htmlFor="market-id"
-            className="block text-sm font-medium text-slate-700 dark:text-slate-300"
-          >
-            Market ID
-          </label>
-          <input
-            id="market-id"
-            type="number"
-            value={marketId}
-            onChange={(e) => setMarketId(e.target.value)}
-            placeholder="1"
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
-          />
-        </div>
+        {!marketIdProp && (
+          <div>
+            <label
+              htmlFor="market-id"
+              className="block text-sm font-medium text-slate-700 dark:text-slate-300"
+            >
+              Market ID
+            </label>
+            <input
+              id="market-id"
+              type="number"
+              value={marketId}
+              onChange={(e) => setMarketId(e.target.value)}
+              placeholder="1"
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500"
+            />
+          </div>
+        )}
         <div>
           <label
             htmlFor="amount"

@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(clippy::all)]
 
 //! # Treasury Contract
 //!
@@ -103,6 +104,9 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
+        if storage::is_paused(&env) {
+            return Err(TreasuryError::ContractPaused);
+        }
         let market_contract = storage::get_authorized_market(&env)?;
         if caller != market_contract {
             return Err(TreasuryError::CallerNotMarket);
@@ -151,6 +155,9 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
+        if storage::is_paused(&env) {
+            return Err(TreasuryError::ContractPaused);
+        }
         let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
@@ -187,7 +194,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
         }
@@ -221,7 +228,55 @@ impl TreasuryContract {
         Ok(())
     }
 
+    /// Pause the treasury, blocking `collect_fee` and `withdraw_fees`.
+    ///
+    /// Intended for use during contract upgrades or incident response. Only the
+    /// admin may call this.
+    ///
+    /// # Errors
+    /// - [`TreasuryError::NotInitialized`] – treasury not initialized.
+    /// - [`TreasuryError::Unauthorized`] – caller is not the admin.
+    pub fn pause(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_paused(&env, true);
+        events::emit_treasury_paused(&env, &caller);
+        Ok(())
+    }
+
+    /// Unpause the treasury, restoring normal operation.
+    ///
+    /// Only the admin may call this.
+    ///
+    /// # Errors
+    /// - [`TreasuryError::NotInitialized`] – treasury not initialized.
+    /// - [`TreasuryError::Unauthorized`] – caller is not the admin.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_paused(&env, false);
+        events::emit_treasury_unpaused(&env, &caller);
+        Ok(())
+    }
+
     // ── Getters ────────────────────────────────────────────────────────────────
+
+    /// Return whether the treasury is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
+    }
 
     /// Return the admin address. Returns `UpgradeRequired` if version mismatches.
     pub fn admin(env: Env) -> Result<Address, TreasuryError> {
