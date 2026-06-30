@@ -7,9 +7,10 @@
 import {
   Contract,
   nativeToScVal,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
 } from "@stellar/stellar-sdk";
+import { addressToScVal, amountToScVal } from "./contract-client";
 
 export const CONTRACT_ID = process.env.NEXT_PUBLIC_CONTRACT_ID ?? "";
 
@@ -52,13 +53,13 @@ export async function fetchContractMarkets(): Promise<GetMarketsResult> {
     return { markets: [] };
   }
   try {
-    const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+    const server = new rpc.Server(SOROBAN_RPC_URL);
     // `getContractData` is a low-level key/value read; the actual key depends
     // on your indexer. Adjust StorageKey to match your contract's storage layout.
     const result = await server.getContractData(
       CONTRACT_ID,
       nativeToScVal("MARKETS"),
-      SorobanRpc.Durability.Persistent,
+      rpc.Durability.Persistent,
     );
     if (!result || !result.val) {
       return { markets: [] };
@@ -99,7 +100,7 @@ export async function invokeContract(
     );
   }
 
-  const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+  const server = new rpc.Server(SOROBAN_RPC_URL);
 
   // 1. Load source account (needed for sequence number)
   const account = await server.getAccount(args.address);
@@ -113,8 +114,8 @@ export async function invokeContract(
     .addOperation(
       contract.call(
         functionName,
-        nativeToScVal(args.address, { type: "address" }),
-        nativeToScVal(BigInt(args.amount), { type: "i128" }),
+        addressToScVal(args.address),
+        amountToScVal(args.amount),
       ),
     )
     .setTimeout(30)
@@ -122,10 +123,10 @@ export async function invokeContract(
 
   // 3. Simulate to get resource fees and footprint
   const sim = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(sim)) {
+  if (rpc.Api.isSimulationError(sim)) {
     throw new Error(`Simulation failed: ${sim.error}`);
   }
-  const preparedTx = SorobanRpc.assembleTransaction(tx, sim).build();
+  const preparedTx = rpc.assembleTransaction(tx, sim).build();
 
   // 4. Sign with Freighter
   const { signTransaction } = await import("@stellar/freighter-api");
