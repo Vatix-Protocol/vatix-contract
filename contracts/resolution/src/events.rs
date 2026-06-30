@@ -2,7 +2,7 @@ use soroban_sdk::{contractevent, Address, Env, String};
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct ResolutionRegisteredEvent {
+pub struct ResolutionRegistered {
     #[topic]
     pub factory: Address,
     pub market_contract: Address,
@@ -10,7 +10,7 @@ pub struct ResolutionRegisteredEvent {
 }
 
 pub fn emit_resolution_registered(env: &Env, factory: &Address, market_contract: &Address) {
-    ResolutionRegisteredEvent {
+    ResolutionRegistered {
         factory: factory.clone(),
         market_contract: market_contract.clone(),
         registered_at: env.ledger().timestamp(),
@@ -20,7 +20,7 @@ pub fn emit_resolution_registered(env: &Env, factory: &Address, market_contract:
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct CandidateProposedEvent {
+pub struct CandidateProposed {
     #[topic]
     pub candidate_id: u32,
     #[topic]
@@ -33,7 +33,7 @@ pub struct CandidateProposedEvent {
 }
 
 pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCandidate) {
-    CandidateProposedEvent {
+    CandidateProposed {
         candidate_id: candidate.id,
         market_id: candidate.market_id,
         outcome: candidate.outcome,
@@ -47,7 +47,7 @@ pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCa
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct CandidateChallengedEvent {
+pub struct CandidateChallenged {
     #[topic]
     pub candidate_id: u32,
     #[topic]
@@ -64,7 +64,7 @@ pub fn emit_candidate_challenged(
     challenger: &Address,
     challenge_uri: &String,
 ) {
-    CandidateChallengedEvent {
+    CandidateChallenged {
         candidate_id,
         market_id,
         challenger: challenger.clone(),
@@ -76,7 +76,7 @@ pub fn emit_candidate_challenged(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct CandidateFinalizedEvent {
+pub struct CandidateFinalized {
     #[topic]
     pub candidate_id: u32,
     #[topic]
@@ -86,7 +86,7 @@ pub struct CandidateFinalizedEvent {
 }
 
 pub fn emit_candidate_finalized(env: &Env, candidate: &crate::types::ResolutionCandidate) {
-    CandidateFinalizedEvent {
+    CandidateFinalized {
         candidate_id: candidate.id,
         market_id: candidate.market_id,
         outcome: candidate.outcome,

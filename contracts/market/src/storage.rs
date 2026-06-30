@@ -5,12 +5,40 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// Bump this constant whenever the storage layout changes in a breaking way.
 /// `initialize()` writes this value; every storage accessor asserts it.
 ///
-/// ## Migration procedure (testnet)
-/// 1. Increment `STORAGE_VERSION` in this file.
-/// 2. Redeploy the contract WASM (`make build` then `soroban contract deploy`).
-/// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
-/// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
-///    any call that touches storage will return that error.
+/// # Migration Guide
+///
+/// **IMPORTANT:** See `STORAGE_MIGRATION_GUIDE.md` for comprehensive documentation
+/// on when and how to bump this version, including:
+/// - When to increment the version
+/// - Step-by-step migration procedures for testnet and mainnet
+/// - Testing strategies
+/// - Rollback and recovery procedures
+/// - Common pitfalls and how to avoid them
+///
+/// # Quick Reference
+///
+/// ## Always bump version when:
+/// - Adding/removing fields in storage types (Market, Position, etc.)
+/// - Changing field types or semantics
+/// - Adding new StorageKey variants
+/// - Changing how existing data is computed or interpreted
+///
+/// ## Migration procedure (testnet):
+/// 1. Increment `STORAGE_VERSION` in this file
+/// 2. Document the change in `MIGRATION.md`
+/// 3. Build the contract: `stellar contract build`
+/// 4. Deploy: `stellar contract deploy --wasm <path> --network testnet`
+/// 5. Initialize: `stellar contract invoke ... -- initialize --admin <addr>`
+/// 6. Verify old deployment returns `UpgradeRequired` error
+///
+/// ## Current version: 3
+///
+/// ### Version history:
+/// - **v3:** Added Treasury, Outcome Token, Resolution Contract, Threshold Signers
+/// - **v2:** Fixed locked_collateral semantics (#262)
+/// - **v1:** Initial storage layout
+///
+/// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
 pub const STORAGE_VERSION: u32 = 3;
 
 #[contracttype]
@@ -37,10 +65,9 @@ pub enum StorageKey {
     ThresholdSigners,
     /// Minimum number of valid signatures required to resolve a market (#378).
     ThresholdQuorum,
-    /// Ledger timestamp of a user's most recent deposit into a market (issue #413).
-    LastDepositTime(u32, Address),
-    /// Flag indicating a pending admin renounce proposal (issue #414).
-    PendingRenounce,
+    /// Flag indicating the contract is paused for emergency maintenance.
+    /// When true, all state-mutating operations are rejected.
+    Paused,
 }
 
 // --- Version helpers ---
@@ -157,30 +184,12 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 /// Register (or replace) the treasury contract address for protocol fee routing.
-/// Pass `None` to remove the treasury and disable fee routing.
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage().persistent().set(&StorageKey::Treasury, treasury);
 }
 
 pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
-}
-
-// --- Resolution Contract Storage ---
-
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::ResolutionContract)
-}
-
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::ResolutionContract, contract);
 }
 
 // --- Outcome Token Storage ---
@@ -193,14 +202,28 @@ pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
     env.storage().persistent().set(&StorageKey::OutcomeTokenContract, contract);
 }
 
-// --- Resolution Contract Storage ---
+// --- Threshold Signers Storage ---
 
-pub fn get_resolution_contract(env: &Env) -> Option<Address> {
-    env.storage().persistent().get(&StorageKey::ResolutionContract)
+pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ThresholdSigners)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
-pub fn set_resolution_contract(env: &Env, contract: &Address) {
-    env.storage().persistent().set(&StorageKey::ResolutionContract, contract);
+pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
+    env.storage().persistent().set(&StorageKey::ThresholdSigners, signers);
+}
+
+pub fn get_threshold_quorum(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ThresholdQuorum)
+        .unwrap_or(0)
+}
+
+pub fn set_threshold_quorum(env: &Env, quorum: u32) {
+    env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
 }
 
 // --- Deposit Timestamp Storage (issue #413) ---
@@ -247,6 +270,19 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
 }
 
+
+// --- Pause Storage ---
+
+/// Check whether the contract is in a paused state.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().persistent().get(&StorageKey::Paused).unwrap_or(false)
+}
+
+/// Pause or unpause the contract (emergency halt).
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().persistent().set(&StorageKey::Paused, &paused);
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -288,6 +324,37 @@ mod test {
             set_admin(&env, &admin);
             assert!(has_admin(&env));
             assert_eq!(get_admin(&env).unwrap(), admin);
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_defaults_to_50() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_fee_rate_bps(&env),
+                DEFAULT_FEE_RATE_BPS,
+                "fee rate must default to 50 bps"
+            );
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            set_fee_rate_bps(&env, 100);
+            assert_eq!(get_fee_rate_bps(&env), 100);
+
+            set_fee_rate_bps(&env, 0);
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            set_fee_rate_bps(&env, MAX_FEE_RATE_BPS);
+            assert_eq!(get_fee_rate_bps(&env), MAX_FEE_RATE_BPS);
         });
     }
 
@@ -496,13 +563,9 @@ mod test {
             assert!(!has_treasury(&env));
             assert_eq!(get_treasury(&env), None);
 
-            set_treasury(&env, &Some(treasury.clone()));
+            set_treasury(&env, &treasury);
             assert!(has_treasury(&env));
             assert_eq!(get_treasury(&env), Some(treasury.clone()));
-
-            set_treasury(&env, &None);
-            assert!(!has_treasury(&env));
-            assert_eq!(get_treasury(&env), None);
         });
     }
 
@@ -520,6 +583,46 @@ mod test {
 
             set_resolution_contract(&env, &resolution);
             assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
+        });
+    }
+
+    // ── Pause storage helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_defaults_to_false() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert!(!is_paused(&env), "fresh contract should not be paused");
+        });
+    }
+
+    #[test]
+    fn test_pause_can_be_set_and_cleared() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn test_pause_toggle_returns_to_unpaused() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, true);
+            assert!(is_paused(&env), "pausing again should stay paused");
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
         });
     }
 }

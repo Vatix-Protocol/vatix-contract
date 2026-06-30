@@ -1,6 +1,6 @@
 use crate::error::ContractError;
 use crate::types::MarketStatus;
-use soroban_sdk::String;
+use soroban_sdk::{Env, String};
 
 /// Minimum collateral deposit in stroops (1 USDC = 10_000_000 stroops).
 pub const MIN_DEPOSIT_AMOUNT: i128 = 10_000_000;
@@ -229,6 +229,29 @@ pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractE
         .ok_or(ContractError::ArithmeticOverflow)
 }
 
+/// Guard: reject operations when the contract has not been initialized.
+///
+/// # Errors
+/// - [`ContractError::NotInitialized`] – the contract has no admin set.
+pub fn require_initialized(env: &Env) -> Result<(), ContractError> {
+    if !crate::storage::has_admin(env) {
+        return Err(ContractError::NotInitialized);
+    }
+    Ok(())
+}
+
+/// Guard: reject state-mutating operations when the contract is paused.
+///
+/// # Errors
+/// - [`ContractError::ContractPaused`] – the contract is in emergency halt.
+pub fn require_not_paused(env: &Env) -> Result<(), ContractError> {
+    if crate::storage::is_paused(env) {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,5 +491,72 @@ mod tests {
             validate_cancelable(&MarketStatus::Canceled),
             Err(ContractError::MarketNotActive)
         );
+    }
+
+    #[test]
+    fn test_validate_admin_address_account_ok() {
+        let env = soroban_sdk::Env::default();
+        // Generate a user account address (starts with 'G')
+        let admin = Address::generate(&env);
+        assert!(validate_admin_address(&admin).is_ok());
+    }
+
+    #[test]
+    fn test_validate_admin_address_contract_fails() {
+        let env = soroban_sdk::Env::default();
+        // Register a contract to get a contract address (starts with 'C')
+        let contract_id = env.register(crate::MarketContract, ());
+        assert_eq!(
+            validate_admin_address(&contract_id),
+            Err(ContractError::InvalidAdmin)
+        );
+    }
+}
+
+    #[test]
+    fn test_validate_cancelable_already_canceled_fails() {
+        assert_eq!(
+            validate_cancelable(&MarketStatus::Canceled),
+            Err(ContractError::MarketNotActive)
+        );
+    }
+
+    #[test]
+    fn test_require_initialized_when_has_admin() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = soroban_sdk::Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            crate::storage::set_admin(&env, &admin);
+            assert!(require_initialized(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_require_initialized_returns_not_initialized() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            assert_eq!(require_initialized(&env), Err(ContractError::NotInitialized));
+        });
+    }
+
+    #[test]
+    fn test_require_not_paused_returns_ok_when_not_paused() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            assert!(require_not_paused(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_require_not_paused_returns_contract_paused_when_paused() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            crate::storage::set_paused(&env, true);
+            assert_eq!(require_not_paused(&env), Err(ContractError::ContractPaused));
+        });
     }
 }

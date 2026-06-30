@@ -1,6 +1,6 @@
 //! Persistent storage helpers for the Vatix Treasury contract.
 
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 /// Bump this constant whenever the treasury storage layout changes in a breaking way.
 /// `initialize()` writes this value so that future migrations can detect stale deployments.
@@ -14,14 +14,16 @@ pub enum StorageKey {
     StorageVersion,
     /// The address that can call `withdraw_fees` and other admin operations.
     Admin,
-    /// The single market contract address allowed to call `collect_fee`.
-    AuthorizedMarket,
+    /// The set of market contract addresses allowed to call `collect_fee`.
+    AuthorizedMarkets,
     /// Current custodied balance for a specific token (decreases on withdrawal).
     TokenBalance(Address),
     /// Monotonically increasing cumulative fees collected per token (never decreases).
     CumulativeFees(Address),
     /// Global monotone counter: total of all fees ever collected across all tokens.
     TotalCollected,
+    /// When `true`, `collect_fee` and `withdraw_fees` are blocked until unpaused.
+    Paused,
 }
 
 // ── Version ───────────────────────────────────────────────────────────────────
@@ -55,7 +57,7 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&StorageKey::Admin, admin);
 }
 
-// ── Authorized market ─────────────────────────────────────────────────────────
+// ── Authorized markets registry ───────────────────────────────────────────────
 
 pub fn get_authorized_market(env: &Env) -> Result<Address, TreasuryError> {
     assert_version(env)?;
@@ -66,10 +68,14 @@ pub fn get_authorized_market(env: &Env) -> Result<Address, TreasuryError> {
         .expect("treasury not initialized"))
 }
 
-pub fn set_authorized_market(env: &Env, market: &Address) {
+pub fn set_authorized_markets(env: &Env, markets: &Vec<Address>) {
     env.storage()
         .instance()
-        .set(&StorageKey::AuthorizedMarket, market);
+        .set(&StorageKey::AuthorizedMarkets, markets);
+}
+
+pub fn is_authorized_market(env: &Env, market: &Address) -> bool {
+    get_authorized_markets(env).contains(market)
 }
 
 // ── Token balance (current, decreasable on withdrawal) ────────────────────────
@@ -121,4 +127,17 @@ pub fn set_total_collected(env: &Env, amount: i128) {
     env.storage()
         .instance()
         .set(&StorageKey::TotalCollected, &amount);
+}
+
+// ── Pause flag ────────────────────────────────────────────────────────────────
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&StorageKey::Paused)
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&StorageKey::Paused, &paused);
 }

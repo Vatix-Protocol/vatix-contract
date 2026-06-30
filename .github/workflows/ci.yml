@@ -46,21 +46,14 @@ jobs:
       - name: Format check
         run: cd contracts/market && cargo fmt --check
 
-      # Echo guard: this step currently runs clippy with `-D warnings` to catch
-      # lint issues early, but does not yet enforce a full set of custom lints.
+      # Clippy enforces lint hygiene across all contracts. Project-specific deny
+      # attributes are declared at the crate root (`lib.rs`) in each contract:
       #
-      # What the real implementation should do:
-      #   - Add project-specific `#[deny(...)]` or `#[warn(...)]` attributes in
-      #     lib.rs / main.rs to lock in the exact lint set for this codebase.
-      #   - Consider enabling additional Clippy lint groups such as
-      #     `clippy::pedantic` or `clippy::nursery` for stricter checks.
-      #   - Use `#[allow(lint_name)]` at the call-site for any lint that is
-      #     intentionally acceptable, rather than weakening `-D warnings` globally.
+      #   #![deny(clippy::all)]  – all default Clippy lints are hard errors
       #
-      # See scripts/README.md for the full tooling reference.
-      # The scripts README documents the intent of these "echo guard" scripts
-      # and provides guidance for maintainers on how to replace guards with
-      # real CI actions (credentials, expected outputs, and invocation examples).
+      # The `-D warnings` flag here ensures any lint not covered by the crate
+      # attributes also fails the build. Use `#[allow(clippy::lint_name)]` at
+      # the call-site for any lint that is intentionally acceptable.
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
 
@@ -68,7 +61,7 @@ jobs:
       # Tests are defined alongside the contract source under `contracts/market/src/`
       # using Soroban SDK test utilities. A new test should be added for every
       # public contract function to maintain coverage.
-      - name: Tests
+      - name: Tests (market)
         run: cd contracts/market && cargo test
 
       # Runs the workspace-level integration tests located in tests/.
@@ -106,15 +99,43 @@ jobs:
           path: contracts/market/src/.proptest-regressions
           if-no-files-found: ignore
 
-      # Compiles the contract to WASM (wasm32-unknown-unknown) — the binary format
-      # required by the Stellar Soroban runtime. Mirrors the `make build` target in
-      # contracts/market/Makefile; run `cd contracts/market && make build` locally
-      # to reproduce this check and see the output WASM size.
-      - name: Build
+      # Build and test the Treasury contract.
+      - name: Tests (treasury)
+        run: |
+          cd contracts/treasury && cargo test
+          cargo test -p vatix-treasury-contract
+
+      # Build and test the Outcome Token contract.
+      - name: Tests (outcome-token)
+        run: |
+          cd contracts/outcome-token && cargo test
+          cargo test -p vatix-outcome-token-contract
+
+      # Build and test the Resolution contract.
+      - name: Tests (resolution)
+        run: |
+          cd contracts/resolution && cargo test
+          cargo test -p vatix-resolution-contract
+
+      # Compiles all contracts to WASM (wasm32-unknown-unknown) — the binary format
+      # required by the Stellar Soroban runtime.
+      - name: Build market contract
         run: cd contracts/market && stellar contract build
 
-      # Verify the WASM artifact was created at the expected path
-      - name: Verify WASM artifact
+      # Build Treasury contract WASM.
+      - name: Build treasury contract
+        run: cd contracts/treasury && stellar contract build
+
+      # Build Outcome Token contract WASM.
+      - name: Build outcome-token contract
+        run: cd contracts/outcome-token && stellar contract build
+
+      # Build Resolution contract WASM.
+      - name: Build resolution contract
+        run: cd contracts/resolution && stellar contract build
+
+      # Verify all WASM artifacts were created at the expected paths
+      - name: Verify WASM artifacts
         run: |
           ls -lh target/wasm32v1-none/release/*.wasm
           echo "WASM artifact size:"
@@ -138,18 +159,14 @@ jobs:
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
-      # deploy-testnet.sh deploys the compiled contract to the Stellar testnet.
-      # It runs as a CI step to verify the script is reachable and executable.
-      # Purpose: validate the end-to-end deployment path on testnet before any
-      # mainnet release. When the real implementation is wired up it will:
-      #   1. Build the release WASM via cargo
-      #   2. Call `soroban contract deploy --network testnet` with credentials
-      #      stored as repository secrets (TESTNET_SOURCE_ACCOUNT, etc.)
-      #   3. Log and export the returned contract ID for use in downstream steps
-      # See scripts/README.md for the full tooling reference.
-      # The scripts README documents the intent of these "echo guard" scripts
-      # and provides guidance for maintainers on how to replace guards with
-      # real CI actions (credentials, expected outputs, and invocation examples).
+      # deploy-testnet.sh builds the contract via `stellar contract build` and
+      # deploys it to the Stellar testnet. The WASM artefact is always located
+      # at the canonical output path: target/wasm32v1-none/release/*.wasm
+      #
+      # In CI (no TESTNET_SECRET_KEY): runs in guard mode — builds the contract,
+      # verifies the canonical artefact path, then exits 0 without deploying.
+      # When TESTNET_SECRET_KEY is set: performs a full build + deploy and
+      # exports the contract ID via $GITHUB_OUTPUT for downstream steps.
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
@@ -183,7 +200,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown,wasm32v1-none
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
 
       - name: Install Stellar CLI
         run: |
@@ -196,6 +218,12 @@ jobs:
 
       - name: Generate TypeScript bindings
         run: pnpm build:bindings
+
+      - name: Verify bindings output
+        run: |
+          test -f apps/web/lib/contracts/index.ts || (echo "ERROR: contracts/index.ts missing" && exit 1)
+          echo "Bindings output:"
+          ls -lh apps/web/lib/contracts/
 
       - name: Lint web app
         run: pnpm --filter web lint

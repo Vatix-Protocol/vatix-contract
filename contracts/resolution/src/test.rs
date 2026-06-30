@@ -1,8 +1,11 @@
 use crate::{ContractError, ResolutionContract, ResolutionContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
+    token::{Client as TokenClient, StellarAssetClient},
     Address, BytesN, Env, String,
 };
+
+const DEFAULT_WINDOW: u64 = 300;
 
 fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address) {
     env.mock_all_auths();
@@ -11,7 +14,7 @@ fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address) {
     let admin = Address::generate(env);
     let factory = Address::generate(env);
     let market_contract = Address::generate(env);
-    client.initialize(&admin, &factory, &market_contract);
+    client.initialize(&admin, &factory, &market_contract, &DEFAULT_WINDOW);
     (client, admin, market_contract)
 }
 
@@ -162,4 +165,46 @@ fn finalize_calls_resolve_market_on_market_contract() {
     assert_eq!(candidate.market_id, 5);
     assert_eq!(candidate.outcome, true);
     assert!(candidate.finalized_at.is_some());
+}
+
+// ── #380: default challenge window ────────────────────────────────────────────
+
+#[test]
+fn initialize_stores_default_challenge_window() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    assert_eq!(client.get_default_challenge_window(), DEFAULT_WINDOW);
+}
+
+#[test]
+fn admin_can_update_default_challenge_window() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    client.set_default_challenge_window(&admin, &600);
+    assert_eq!(client.get_default_challenge_window(), 600);
+}
+
+#[test]
+fn set_default_challenge_window_rejects_non_admin() {
+    let env = Env::default();
+    let (client, _, _) = setup(&env);
+    let rando = Address::generate(&env);
+    assert_eq!(
+        client.try_set_default_challenge_window(&rando, &600),
+        Err(Ok(ContractError::NotAdmin))
+    );
+}
+
+#[test]
+fn set_default_challenge_window_rejects_out_of_bounds() {
+    let env = Env::default();
+    let (client, admin, _) = setup(&env);
+    assert_eq!(
+        client.try_set_default_challenge_window(&admin, &10),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
+    assert_eq!(
+        client.try_set_default_challenge_window(&admin, &(14 * 24 * 60 * 60 + 1)),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
 }

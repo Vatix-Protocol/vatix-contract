@@ -52,8 +52,11 @@ pub fn deposit_collateral(
     // Authorization
     user.require_auth();
 
-    // Validation
-    validation::validate_deposit_amount(amount)?;
+    // Validation: reject zero or negative deposits explicitly
+    if amount <= 0 {
+        return Err(ContractError::InvalidQuantity);
+    }
+    validation::validate_collateral_amount(amount)?;
 
     let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
@@ -432,7 +435,7 @@ mod tests {
 
         // Topic 0 = event name symbol
         let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited_event"));
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited"));
 
         // Topic 1 = user
         let topic1: Address = last.1.get(1).unwrap().into_val(&env);
@@ -462,6 +465,36 @@ mod tests {
         let new_total2: i128 = data2.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
         assert_eq!(amount2, second);
         assert_eq!(new_total2, first + second);
+    }
+
+    // --- #344: market expiry enforcement on deposit ---
+
+    #[test]
+    fn test_deposit_rejected_after_market_expiry() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        // Create market with end_time in the past
+        let mut market = create_test_market(&env, market_id, &collateral_token);
+        market.end_time = 0; // expired
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        env.mock_all_auths();
+        let sac = soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token);
+        sac.mint(&user, &20_000);
+
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, 5_000)
+        });
+        assert_eq!(result, Err(ContractError::MarketExpired));
     }
 
     // --- #374: total_deposited accumulates correctly across multiple deposits ---
