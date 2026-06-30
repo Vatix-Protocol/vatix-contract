@@ -801,6 +801,39 @@ impl MarketContract {
         Ok(market.outcome_count)
     }
 
+    /// Return a read-only view of a user's position in a market.
+    ///
+    /// Returns the user's current position including share balances, locked collateral,
+    /// and deposit history. If no position exists, returns None.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `market_id` - Market identifier
+    /// * `user` - User's address
+    ///
+    /// # Returns
+    /// `Ok(Some(Position))` with user's current position, or `Ok(None)` if no position exists.
+    ///
+    /// # Errors
+    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let position = client.get_position(&market_id, &user);
+    /// match position {
+    ///     Ok(Some(pos)) => println!("YES: {}, NO: {}", pos.yes_shares, pos.no_shares),
+    ///     Ok(None) => println!("User has no position in this market"),
+    ///     Err(e) => println!("Error: {:?}", e),
+    /// }
+    /// ```
+    pub fn get_position(
+        env: Env,
+        market_id: u32,
+        user: Address,
+    ) -> Result<Option<crate::types::Position>, ContractError> {
+        storage::get_position(&env, market_id, &user)
+    }
+
     /// Cancel an active market, preventing further deposits and withdrawals.
     ///
     /// Only the stored admin may call this. 0 disables fees.
