@@ -480,6 +480,25 @@ mod tests {
             Err(ContractError::MarketNotActive)
         );
     }
+
+    #[test]
+    fn test_validate_admin_address_account_ok() {
+        let env = soroban_sdk::Env::default();
+        // Generate a user account address (starts with 'G')
+        let admin = Address::generate(&env);
+        assert!(validate_admin_address(&admin).is_ok());
+    }
+
+    #[test]
+    fn test_validate_admin_address_contract_fails() {
+        let env = soroban_sdk::Env::default();
+        // Register a contract to get a contract address (starts with 'C')
+        let contract_id = env.register(crate::MarketContract, ());
+        assert_eq!(
+            validate_admin_address(&contract_id),
+            Err(ContractError::InvalidAdmin)
+        );
+    }
 }
 
     #[test]

@@ -77,14 +77,46 @@ impl MarketContract {
     ///
     /// Must be called once by the admin immediately after deployment.
     /// Subsequent calls return [`ContractError::AlreadyInitialized`].
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `admin` - Admin address (must be a user account, not a contract)
+    ///
+    /// # Returns
+    /// `Ok(())` on successful initialization
+    ///
+    /// # Errors
+    /// - [`ContractError::AlreadyInitialized`] – contract was previously initialized
+    /// - [`ContractError::InvalidAdmin`] – admin address is a contract or otherwise invalid
+    ///
+    /// # Security
+    /// - Requires authorization from the admin address
+    /// - Can only be called once per deployment
+    /// - Validates admin is a user account, not a contract
+    ///
+    /// # Example
+    /// ```ignore
+    /// client.initialize(&admin_address)?;
+    /// ```
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
+        // 1. Validate admin address before authorization to fail fast
+        validation::validate_admin_address(&admin)?;
+        
+        // 2. Require authorization from the admin
         admin.require_auth();
+        
+        // 3. Check if already initialized
         if storage::has_admin(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
+        
+        // 4. Set admin and version
         storage::set_admin(&env, &admin);
         storage::set_version(&env);
+        
+        // 5. Emit initialization event
         events::emit_contract_initialized(&env, &admin);
+        
         Ok(())
     }
 
@@ -94,8 +126,14 @@ impl MarketContract {
     /// pending admin and must confirm the transfer by calling [`accept_admin`].
     /// Calling this again before acceptance overwrites the previous nomination.
     ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `current_admin` - Current admin authorizing the transfer
+    /// * `new_admin` - Address to nominate as pending admin (must be a user account)
+    ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] – contract is not initialized or `current_admin` is not the stored admin
+    /// - [`ContractError::InvalidAdmin`] – `new_admin` is a contract or otherwise invalid
     pub fn propose_admin(
         env: Env,
         current_admin: Address,
@@ -105,12 +143,15 @@ impl MarketContract {
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
+        
+        // 3. Verify current admin
         let stored_admin = storage::get_admin(&env)?;
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
         storage::set_pending_admin(&env, &new_admin);
         events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
+        
         Ok(())
     }
 
