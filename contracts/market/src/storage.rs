@@ -256,6 +256,37 @@ mod test {
     }
 
     #[test]
+    fn test_fee_rate_bps_defaults_to_50() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_fee_rate_bps(&env),
+                DEFAULT_FEE_RATE_BPS,
+                "fee rate must default to 50 bps"
+            );
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            set_fee_rate_bps(&env, 100);
+            assert_eq!(get_fee_rate_bps(&env), 100);
+
+            set_fee_rate_bps(&env, 0);
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            set_fee_rate_bps(&env, MAX_FEE_RATE_BPS);
+            assert_eq!(get_fee_rate_bps(&env), MAX_FEE_RATE_BPS);
+        });
+    }
+
+    #[test]
     fn test_market_id_counter() {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());

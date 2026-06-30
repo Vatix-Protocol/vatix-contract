@@ -208,6 +208,7 @@ mod tests {
         assert_eq!(ContractError::InvalidQuantity as u32, 31);
         assert_eq!(ContractError::InvalidTimestamp as u32, 32);
         assert_eq!(ContractError::InvalidQuestion as u32, 33);
+        assert_eq!(ContractError::InvalidFeeRate as u32, 34);
         assert_eq!(ContractError::Unauthorized as u32, 40);
         assert_eq!(ContractError::NotAdmin as u32, 41);
         assert_eq!(ContractError::AlreadyInitialized as u32, 42);
