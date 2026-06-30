@@ -102,11 +102,7 @@ export function WithdrawForm() {
             {error}
           </p>
         )}
-        {txHash && (
-          <p className="text-sm text-green-600 dark:text-green-400">
-            Withdrawn! Tx: {txHash.slice(0, 8)}...{txHash.slice(-8)}
-          </p>
-        )}
+        {txHash && <TxResult hash={txHash} label="Withdrawal" />}
         <button
           type="submit"
           disabled={isLoading || !amount || !address}

@@ -105,11 +105,7 @@ export function DepositForm({ marketId: marketIdProp }: DepositFormProps) {
             {error}
           </p>
         )}
-        {txHash && (
-          <p className="text-sm text-green-600 dark:text-green-400">
-            Deposited! Tx: {txHash.slice(0, 8)}...{txHash.slice(-8)}
-          </p>
-        )}
+        {txHash && <TxResult hash={txHash} label="Deposit" />}
         <button
           type="submit"
           disabled={isLoading || !amount || !address}
