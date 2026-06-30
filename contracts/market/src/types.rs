@@ -45,6 +45,14 @@ pub struct Market {
     /// Number of possible outcomes for this market. Always 2 (YES/NO) for binary
     /// prediction markets. Set once at creation and immutable thereafter.
     pub outcome_count: u32,
+    /// Flag indicating whether the market is closed to new deposits.
+    /// When true, users cannot deposit new collateral, but can still withdraw and trade.
+    pub closed_to_deposits: bool,
+    /// Optional URI pointing to off-chain market metadata.
+    /// Can reference IPFS (ipfs://...), Arweave (ar://...), or HTTP endpoints.
+    /// If Some, must be non-empty and at most 2048 characters.
+    /// Stores rich metadata: description, images, rules, creator credentials.
+    pub metadata_uri: Option<String>,
 }
 
 /// Tracks the position and shares of a specific user in a market.

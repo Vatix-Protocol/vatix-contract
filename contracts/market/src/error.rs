@@ -52,6 +52,11 @@ pub enum ContractError {
     /// Only Active markets accept new trades and collateral deposits.
     MarketNotActive = 5,
 
+    /// Metadata URI is invalid (empty, too long, or malformed).
+    ///
+    /// If provided, metadata_uri must be non-empty and at most 2048 characters.
+    InvalidMetadataUri = 7,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -184,6 +189,7 @@ mod tests {
         assert_eq!(ContractError::MarketNotResolved as u32, 3);
         assert_eq!(ContractError::MarketExpired as u32, 4);
         assert_eq!(ContractError::MarketNotActive as u32, 5);
+        assert_eq!(ContractError::InvalidMetadataUri as u32, 7);
         assert_eq!(ContractError::InsufficientCollateral as u32, 10);
         assert_eq!(ContractError::PositionAlreadySettled as u32, 11);
         assert_eq!(ContractError::NoPositionFound as u32, 12);

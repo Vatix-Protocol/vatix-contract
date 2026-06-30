@@ -58,6 +58,40 @@ fn validate_question_format(question: &String) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Validates metadata URI format if provided
+///
+/// If metadata_uri is Some, it must:
+/// - Be non-empty
+/// - Be at most 2048 characters
+///
+/// If metadata_uri is None, validation passes (optional field).
+///
+/// # Arguments
+/// * `metadata_uri` - The metadata URI to validate
+///
+/// # Returns
+/// `Ok(())` if valid, `Err(ContractError::InvalidMetadataUri)` if invalid
+///
+/// # Example
+/// ```ignore
+/// let uri = Some(String::from_str(&env, "ipfs://QmXxx..."));
+/// validation::validate_metadata_uri(&uri)?;
+/// ```
+pub fn validate_metadata_uri(metadata_uri: &Option<String>) -> Result<(), ContractError> {
+    if let Some(uri) = metadata_uri {
+        let len = uri.len();
+        // Check non-empty
+        if len == 0 {
+            return Err(ContractError::InvalidMetadataUri);
+        }
+        // Check max length (2048 is standard URI limit)
+        if len > 2048 {
+            return Err(ContractError::InvalidMetadataUri);
+        }
+    }
+    Ok(())
+}
+
 /// Validates that amount is positive
 fn validate_amount_positive(amount: i128) -> Result<(), ContractError> {
     if amount <= 0 {

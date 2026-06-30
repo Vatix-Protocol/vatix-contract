@@ -142,6 +142,7 @@ impl MarketContract {
         end_time: u64,
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
+        metadata_uri: Option<String>,
     ) -> Result<u32, ContractError> {
         // 1. Verify creator is admin
         creator.require_auth();
@@ -153,6 +154,7 @@ impl MarketContract {
         // 2. Validate inputs
         let current_time = env.ledger().timestamp();
         validation::validate_market_creation(&question, end_time, current_time)?;
+        validation::validate_metadata_uri(&metadata_uri)?;
 
         // Guard: an all-zero pubkey can never produce a valid Ed25519 signature,
         // making the market permanently unresolvable.
@@ -186,13 +188,15 @@ impl MarketContract {
             resolved_at: None,
             adapter_type: crate::types::AdapterType::Ed25519,
             outcome_count: 2,
+            closed_to_deposits: false,
+            metadata_uri: metadata_uri.clone(),
         };
 
         // 5. Store market
         storage::set_market(&env, market_id, &market)?;
 
         // 6. Emit event
-        events::emit_market_created(&env, market_id, &creator, &question, end_time);
+        events::emit_market_created(&env, market_id, &creator, &question, end_time, &metadata_uri);
 
         // 7. Return market ID
         Ok(market_id)

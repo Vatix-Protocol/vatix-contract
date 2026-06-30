@@ -1216,4 +1216,187 @@ mod test {
         let stranger = Address::generate(&env);
         client.withdraw_canceled_collateral(&stranger, &market_id);
     }
+
+    // ========== Metadata URI Tests ==========
+
+    #[test]
+    fn test_initialize_market_with_ipfs_metadata() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+        let metadata_uri = Some(String::from_str(&env, "ipfs://QmXxxxxxxxxxxxxxxxxxx"));
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+
+        assert_eq!(market_id, 1);
+
+        let market: Market = env.as_contract(&env.register(crate::MarketContract, ()), || {
+            crate::storage::get_market(&env, market_id)
+                .expect("version check failed")
+                .expect("Market should exist")
+        });
+        assert_eq!(market.metadata_uri, metadata_uri);
+    }
+
+    #[test]
+    fn test_initialize_market_without_metadata() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will ETH reach $5k?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[2u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &None,
+        );
+
+        assert_eq!(market_id, 1);
+
+        let market: Market = env.as_contract(&env.register(crate::MarketContract, ()), || {
+            crate::storage::get_market(&env, market_id)
+                .expect("version check failed")
+                .expect("Market should exist")
+        });
+        assert_eq!(market.metadata_uri, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_initialize_market_empty_metadata_uri_fails() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will SOL reach $200?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[3u8; 32]);
+        let collateral_token = Address::generate(&env);
+        let metadata_uri = Some(String::from_str(&env, ""));
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #7)")]
+    fn test_initialize_market_metadata_uri_too_long_fails() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will ADA reach $1?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[4u8; 32]);
+        let collateral_token = Address::generate(&env);
+        
+        // Create a string longer than 2048 chars
+        let mut long_uri = String::new(&env);
+        for _ in 0..2049 {
+            long_uri = soroban_sdk::String::from_str(&env, &format!("x"));
+        }
+        let metadata_uri = Some(long_uri);
+
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+    }
+
+    #[test]
+    fn test_initialize_market_metadata_uri_max_length_succeeds() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will XRP reach $2?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[5u8; 32]);
+        let collateral_token = Address::generate(&env);
+        
+        // Create a string exactly 2048 chars
+        let mut max_uri = String::from_str(&env, "");
+        for i in 0..2048 {
+            if i == 0 {
+                max_uri = String::from_str(&env, "a");
+            } else {
+                max_uri = soroban_sdk::String::from_str(&env, &format!("{}{}", max_uri, "a"));
+            }
+        }
+        let metadata_uri = Some(max_uri);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+
+        assert_eq!(market_id, 1);
+    }
+
+    #[test]
+    fn test_initialize_market_with_arweave_metadata() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will DOT reach $30?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[6u8; 32]);
+        let collateral_token = Address::generate(&env);
+        let metadata_uri = Some(String::from_str(&env, "ar://txIdxxxxxxxxxxxxxxxx"));
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+
+        assert_eq!(market_id, 1);
+    }
+
+    #[test]
+    fn test_initialize_market_with_http_metadata() {
+        let (env, admin, _user, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Will AVAX reach $100?");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[7u8; 32]);
+        let collateral_token = Address::generate(&env);
+        let metadata_uri = Some(String::from_str(&env, "https://example.com/metadata.json"));
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &metadata_uri,
+        );
+
+        assert_eq!(market_id, 1);
+    }
 }
