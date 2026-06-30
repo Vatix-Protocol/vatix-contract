@@ -8,11 +8,6 @@ pub enum CandidateStatus {
     Finalized,
 }
 
-/// On-chain mirror of the backend `ResolutionCandidate` concept.
-///
-/// The backend may keep richer metadata, but the fields here are the minimum
-/// needed to make a proposed outcome challengeable before it is handed to the
-/// market contract's `resolve_market` entry point.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct ResolutionCandidate {
@@ -37,4 +32,7 @@ pub struct ResolutionConfig {
     pub admin: Address,
     pub factory: Address,
     pub market_contract: Address,
+    /// Default challenge window in seconds. Must be within
+    /// `MIN_CHALLENGE_WINDOW_SECONDS..=MAX_CHALLENGE_WINDOW_SECONDS`.
+    pub default_challenge_window_seconds: u64,
 }
