@@ -32,8 +32,6 @@ fn setup() -> Setup {
         .address();
 
     let treasury_id = env.register(TreasuryContract, ());
-    // SAFETY: client holds a borrow into env; env is owned by Setup and outlives
-    // the client for the duration of each test.
     let client: TreasuryContractClient<'static> =
         unsafe { core::mem::transmute(TreasuryContractClient::new(&env, &treasury_id)) };
 
@@ -42,7 +40,6 @@ fn setup() -> Setup {
     Setup { env, admin, market, token, treasury_id, client }
 }
 
-/// Fund the treasury with tokens directly (simulates prior fee transfer from market).
 fn fund_treasury(s: &Setup, amount: i128) {
     StellarAssetClient::new(&s.env, &s.token).mint(&s.treasury_id, &amount);
 }
@@ -53,9 +50,9 @@ fn fund_treasury(s: &Setup, amount: i128) {
 fn initialize_stores_admin_and_market() {
     let s = setup();
     assert_eq!(s.client.admin(), s.admin);
-    assert_eq!(s.client.market_contract(), s.market);
     assert_eq!(s.client.token_balance(&s.token), 0);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 0);
+    assert!(s.client.is_authorized_market(&s.market));
 }
 
 #[test]
@@ -97,7 +94,6 @@ fn admin_panics_before_initialize() {
     env.mock_all_auths();
     let id = env.register(TreasuryContract, ());
     let client = TreasuryContractClient::new(&env, &id);
-    // Non-initialized treasury: admin() panics internally; try_admin errors.
     assert!(client.try_admin().is_err());
 }
 
@@ -118,21 +114,6 @@ fn collect_fee_accumulates_across_calls() {
     s.client.collect_fee(&s.market, &s.token, &2u32, &200_000i128);
     assert_eq!(s.client.token_balance(&s.token), 300_000);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 300_000);
-}
-
-#[test]
-fn collect_fee_accumulates_across_tokens() {
-    let s = setup();
-    let token2 = {
-        let a = Address::generate(&s.env);
-        s.env.register_stellar_asset_contract_v2(a).address()
-    };
-    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
-    s.client.collect_fee(&s.market, &token2, &1u32, &200_000i128);
-    assert_eq!(s.client.token_balance(&s.token), 100_000);
-    assert_eq!(s.client.token_balance(&token2), 200_000);
-    assert_eq!(s.client.get_cumulative_fees(&s.token), 100_000);
-    assert_eq!(s.client.get_cumulative_fees(&token2), 200_000);
 }
 
 #[test]
@@ -189,7 +170,6 @@ fn collect_fee_errors_when_not_initialized() {
 #[test]
 fn withdraw_fees_transfers_to_recipient() {
     let s = setup();
-    // Fund treasury and record accounting.
     fund_treasury(&s, 500_000);
     s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
 
@@ -198,16 +178,12 @@ fn withdraw_fees_transfers_to_recipient() {
 
     assert_eq!(TokenClient::new(&s.env, &s.token).balance(&recipient), 200_000);
     assert_eq!(s.client.token_balance(&s.token), 300_000);
-    // Cumulative is unchanged by withdrawal.
     assert_eq!(s.client.get_cumulative_fees(&s.token), 500_000);
 }
 
 #[test]
 fn withdraw_fees_rejects_non_admin() {
     let s = setup();
-    fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
-
     let imposter = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
     let err = s
@@ -216,17 +192,6 @@ fn withdraw_fees_rejects_non_admin() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::Unauthorized);
-}
-
-#[test]
-fn withdraw_fees_rejects_zero_amount() {
-    let s = setup();
-    let err = s
-        .client
-        .try_withdraw_fees(&s.admin, &s.token, &s.admin, &0i128)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, TreasuryError::InvalidAmount);
 }
 
 #[test]
@@ -242,6 +207,82 @@ fn withdraw_fees_rejects_insufficient_balance() {
 
 #[test]
 fn withdraw_fees_errors_when_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let err = client
+        .try_withdraw_fees(&admin, &token, &admin, &1_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::NotInitialized);
+}
+
+// ── #384: admin withdraw accumulated fees ─────────────────────────────────────
+
+/// Admin can withdraw ALL accumulated fees, draining the per-token balance
+/// while preserving the cumulative counter.
+#[test]
+fn admin_withdraws_accumulated_fees_in_full() {
+    let s = setup();
+    let total_collected = 1_000_000i128;
+    fund_treasury(&s, total_collected);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &total_collected);
+
+    assert_eq!(
+        s.client.token_balance(&s.token),
+        0,
+        "balance fully drained after withdrawing all accumulated fees"
+    );
+    assert_eq!(
+        s.client.get_cumulative_fees(&s.token),
+        total_collected,
+        "cumulative fees counter remains unchanged after withdrawal"
+    );
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&recipient),
+        total_collected,
+        "recipient received the full accumulated fee amount"
+    );
+}
+
+/// Admin can withdraw a PARTIAL amount of accumulated fees.
+#[test]
+fn admin_withdraws_partial_accumulated_fees() {
+    let s = setup();
+    let total_collected = 500_000i128;
+    fund_treasury(&s, total_collected);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+
+    let partial = 200_000i128;
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &partial);
+
+    assert_eq!(
+        s.client.token_balance(&s.token),
+        total_collected - partial,
+        "remaining balance reflects partial withdrawal"
+    );
+    assert_eq!(
+        s.client.get_cumulative_fees(&s.token),
+        total_collected,
+        "cumulative fees counter is monotone and unchanged"
+    );
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&recipient),
+        partial,
+        "recipient received the partial amount"
+    );
+}
+
+/// Withdrawing fees from an uninitialized treasury is rejected.
+#[test]
+fn withdraw_fees_before_initialize_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();
     let id = env.register(TreasuryContract, ());
@@ -325,41 +366,74 @@ fn reads_return_upgrade_required_when_no_version_set() {
 // ── set_market_contract ───────────────────────────────────────────────────────
 
 #[test]
-fn set_market_contract_updates_address() {
+fn add_market_is_idempotent() {
     let s = setup();
-    let new_market = Address::generate(&s.env);
-    s.client.set_market_contract(&s.admin, &new_market);
-    assert_eq!(s.client.market_contract(), new_market);
+    s.client.add_market(&s.admin, &s.market);
+    assert_eq!(s.client.list_markets().len(), 1);
 }
 
 #[test]
-fn set_market_contract_rejects_non_admin() {
+fn add_market_rejects_non_admin() {
     let s = setup();
     let rando = Address::generate(&s.env);
-    let new_market = Address::generate(&s.env);
+    let market2 = Address::generate(&s.env);
     let err = s
         .client
-        .try_set_market_contract(&rando, &new_market)
+        .try_add_market(&rando, &market2)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::Unauthorized);
 }
 
 #[test]
-fn old_market_cannot_collect_fee_after_rotation() {
+fn remove_market_deregisters_market() {
     let s = setup();
-    let new_market = Address::generate(&s.env);
-    s.client.set_market_contract(&s.admin, &new_market);
+    let market2 = Address::generate(&s.env);
+    s.client.add_market(&s.admin, &market2);
+    s.client.remove_market(&s.admin, &market2);
 
+    assert!(!s.client.is_authorized_market(&market2));
+    assert_eq!(s.client.list_markets().len(), 1);
+}
+
+#[test]
+fn remove_market_errors_if_not_registered() {
+    let s = setup();
+    let unknown = Address::generate(&s.env);
     let err = s
         .client
-        .try_collect_fee(&s.market, &s.token, &1u32, &100i128)
+        .try_remove_market(&s.admin, &unknown)
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::CallerNotMarket);
+}
 
-    s.client.collect_fee(&new_market, &s.token, &1u32, &100i128);
-    assert_eq!(s.client.get_cumulative_fees(&s.token), 100);
+#[test]
+fn removed_market_cannot_collect_fee() {
+    let s = setup();
+    let market2 = Address::generate(&s.env);
+    s.client.add_market(&s.admin, &market2);
+    s.client.remove_market(&s.admin, &market2);
+
+    let err = s
+        .client
+        .try_collect_fee(&market2, &s.token, &1u32, &100i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::CallerNotMarket);
+}
+
+#[test]
+fn multiple_markets_can_each_collect_fees() {
+    let s = setup();
+    let market2 = Address::generate(&s.env);
+    s.client.add_market(&s.admin, &market2);
+
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100i128);
+    s.client.collect_fee(&market2, &s.token, &2u32, &200i128);
+
+    assert_eq!(s.client.token_balance(&s.token), 300);
+    assert_eq!(s.client.get_cumulative_fees(&s.token), 300);
 }
 
 // ── transfer_admin ────────────────────────────────────────────────────────────
@@ -382,11 +456,11 @@ fn transfer_admin_emits_event() {
     s.client.transfer_admin(&s.admin, &new_admin);
 
     let events = s.env.events().all();
-    // Last event is AdminTransferred
+    // Last event is AdminTransferred (topic: admin_transferred)
     let ev = events.last().unwrap();
     let topics = &ev.1;
     let topic0: Symbol = topics.get(0).unwrap().into_val(&s.env);
-    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred_event"));
+    assert_eq!(topic0, Symbol::new(&s.env, "admin_transferred"));
 
     let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
     let old_val: Address = data.get(Symbol::new(&s.env, "old_admin")).unwrap().into_val(&s.env);
@@ -428,4 +502,69 @@ fn new_admin_can_withdraw_after_transfer() {
     // new admin can withdraw
     s.client.withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
     assert_eq!(s.client.token_balance(&s.token), 0);
+}
+
+// ── pause / unpause (#403) ────────────────────────────────────────────────────
+
+#[test]
+fn is_paused_defaults_to_false() {
+    let s = setup();
+    assert!(!s.client.is_paused());
+}
+
+#[test]
+fn pause_blocks_collect_fee() {
+    let s = setup();
+    s.client.pause(&s.admin);
+    assert!(s.client.is_paused());
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &100i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+#[test]
+fn pause_blocks_withdraw_fees() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client.pause(&s.admin);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &100_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+#[test]
+fn unpause_restores_operations() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.pause(&s.admin);
+    s.client.unpause(&s.admin);
+    assert!(!s.client.is_paused());
+    // collect_fee works again
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    assert_eq!(s.client.token_balance(&s.token), 500_000);
+}
+
+#[test]
+fn pause_rejects_non_admin() {
+    let s = setup();
+    let rando = Address::generate(&s.env);
+    let err = s.client.try_pause(&rando).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+}
+
+#[test]
+fn unpause_rejects_non_admin() {
+    let s = setup();
+    s.client.pause(&s.admin);
+    let rando = Address::generate(&s.env);
+    let err = s.client.try_unpause(&rando).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
 }

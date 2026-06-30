@@ -1,4 +1,18 @@
 //! Event emission helpers for the Vatix Treasury contract.
+//!
+//! # Index-friendly topic naming (Issue #389)
+//!
+//! Event struct names follow the `{Noun}{Verb}` PascalCase pattern. Soroban
+//! converts them to snake_case topics automatically, producing clean,
+//! indexer-friendly topic strings without redundant `_event` suffixes.
+//!
+//! | Struct                  | Topic symbol                       |
+//! |-------------------------|------------------------------------|
+//! | `TreasuryInitialized`   | `treasury_initialized`             |
+//! | `FeeCollected`          | `fee_collected`                    |
+//! | `FeesWithdrawn`         | `fees_withdrawn`                   |
+//! | `AdminTransferred`      | `admin_transferred`                |
+//! | `MarketContractUpdated` | `market_contract_updated`          |
 
 use soroban_sdk::{contractevent, Address, Env};
 
@@ -6,7 +20,7 @@ use soroban_sdk::{contractevent, Address, Env};
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TreasuryInitializedEvent {
+pub struct TreasuryInitialized {
     #[topic]
     pub admin: Address,
     #[topic]
@@ -15,7 +29,7 @@ pub struct TreasuryInitializedEvent {
 }
 
 pub fn emit_treasury_initialized(env: &Env, admin: &Address, market_contract: &Address) {
-    TreasuryInitializedEvent {
+    TreasuryInitialized {
         admin: admin.clone(),
         market_contract: market_contract.clone(),
         initialized_at: env.ledger().timestamp(),
@@ -27,7 +41,7 @@ pub fn emit_treasury_initialized(env: &Env, admin: &Address, market_contract: &A
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct FeeCollectedEvent {
+pub struct FeeCollected {
     /// Market that generated the fee.
     #[topic]
     pub market_id: u32,
@@ -50,7 +64,7 @@ pub fn emit_fee_collected(
     new_token_balance: i128,
     new_cumulative_fees: i128,
 ) {
-    FeeCollectedEvent {
+    FeeCollected {
         market_id,
         token: token.clone(),
         fee_amount,
@@ -64,7 +78,7 @@ pub fn emit_fee_collected(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct FeesWithdrawnEvent {
+pub struct FeesWithdrawn {
     #[topic]
     pub token: Address,
     #[topic]
@@ -80,7 +94,7 @@ pub fn emit_fees_withdrawn(
     amount: i128,
     remaining_token_balance: i128,
 ) {
-    FeesWithdrawnEvent {
+    FeesWithdrawn {
         token: token.clone(),
         to: to.clone(),
         amount,
@@ -93,7 +107,7 @@ pub fn emit_fees_withdrawn(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct AdminTransferredEvent {
+pub struct AdminTransferred {
     #[topic]
     pub old_admin: Address,
     #[topic]
@@ -102,7 +116,7 @@ pub struct AdminTransferredEvent {
 }
 
 pub fn emit_admin_transferred(env: &Env, old_admin: &Address, new_admin: &Address) {
-    AdminTransferredEvent {
+    AdminTransferred {
         old_admin: old_admin.clone(),
         new_admin: new_admin.clone(),
         transferred_at: env.ledger().timestamp(),
@@ -114,7 +128,7 @@ pub fn emit_admin_transferred(env: &Env, old_admin: &Address, new_admin: &Addres
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketContractUpdatedEvent {
+pub struct MarketContractUpdated {
     #[topic]
     pub old_market_contract: Address,
     #[topic]
@@ -126,9 +140,43 @@ pub fn emit_market_contract_updated(
     old_market_contract: &Address,
     new_market_contract: &Address,
 ) {
-    MarketContractUpdatedEvent {
+    MarketContractUpdated {
         old_market_contract: old_market_contract.clone(),
         new_market_contract: new_market_contract.clone(),
+    }
+    .publish(env);
+}
+
+// ── Pause ─────────────────────────────────────────────────────────────────────
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasuryPausedEvent {
+    #[topic]
+    pub admin: Address,
+    pub paused_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasuryUnpausedEvent {
+    #[topic]
+    pub admin: Address,
+    pub unpaused_at: u64,
+}
+
+pub fn emit_treasury_paused(env: &Env, admin: &Address) {
+    TreasuryPausedEvent {
+        admin: admin.clone(),
+        paused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+pub fn emit_treasury_unpaused(env: &Env, admin: &Address) {
+    TreasuryUnpausedEvent {
+        admin: admin.clone(),
+        unpaused_at: env.ledger().timestamp(),
     }
     .publish(env);
 }
