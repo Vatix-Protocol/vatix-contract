@@ -1216,4 +1216,117 @@ mod test {
         let stranger = Address::generate(&env);
         client.withdraw_canceled_collateral(&stranger, &market_id);
     }
+
+    // ========== Close Market to Deposits Tests ==========
+
+    #[test]
+    fn test_close_market_to_deposits_success() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Verify the market is not initially closed to deposits
+        let market_before = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_before.closed_to_deposits, false);
+
+        // Close the market to deposits
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // Verify the market is now closed to deposits
+        let market_after = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_after.closed_to_deposits, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_close_market_to_deposits_not_admin_fails() {
+        let (env, _admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Non-admin tries to close market to deposits
+        let attacker = Address::generate(&env);
+        client.close_market_to_deposits(&attacker, &market_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_close_market_to_deposits_not_found_fails() {
+        let (_env, admin, _user, client, _contract_id, _market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Try to close a non-existent market
+        client.close_market_to_deposits(&admin, &999u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")]
+    fn test_deposit_rejected_when_closed_to_deposits() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let (env, admin, user, client, _contract_id, market_id, collateral_token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Close market to new deposits
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // User tries to deposit more - should fail
+        let stellar_asset_client = StellarAssetClient::new(&env, &collateral_token);
+        stellar_asset_client.mint(&user, &2_000_000);
+
+        client.deposit_collateral(&user, &market_id, &1_000_000);
+    }
+
+    #[test]
+    fn test_withdraw_still_works_after_close_to_deposits() {
+        let (env, admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Close market to new deposits
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // User should still be able to withdraw their collateral
+        // (This should succeed without panic, demonstrating that withdraw is not affected)
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.withdraw_unused_collateral(&user, &market_id, &500_000);
+        }));
+
+        // If result is Ok, the withdrawal succeeded
+        assert!(result.is_ok(), "Withdrawal should still work after closing market to deposits");
+    }
+
+    #[test]
+    fn test_multiple_close_market_to_deposits_idempotent() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Close the market to deposits
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // Verify it's closed
+        let market_after = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_after.closed_to_deposits, true);
+
+        // Close it again - should succeed (idempotent operation)
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // Verify it's still closed
+        let market_after_second = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_after_second.closed_to_deposits, true);
+    }
+
+    #[test]
+    fn test_close_market_event_emitted() {
+        let (env, admin, _user, client, contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(1_000);
+
+        // Clear any existing events
+        let events = env.events();
+        events.all();
+
+        // Close the market to deposits
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // Check that the event was emitted
+        let events = env.events().all();
+        assert!(!events.is_empty(), "MarketClosedToDepositsEvent should be emitted");
+    }
 }

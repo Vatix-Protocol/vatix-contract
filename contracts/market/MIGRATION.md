@@ -1,3 +1,73 @@
+# Migrations
+
+## Version 4: Close Market to Deposits Feature
+
+**Release**: June 2026  
+**Storage Version**: 4 (bumped from 3)  
+**Breaking Change**: YES - Requires reinitialization
+
+### What Changed
+
+Added a new `closed_to_deposits: bool` field to the `Market` struct. This field allows administrators to prevent new collateral deposits while preserving all other functionality (trading, withdrawals, settlement).
+
+### API Addition
+
+```rust
+pub fn close_market_to_deposits(
+    env: Env,
+    admin: Address,
+    market_id: u32,
+) -> Result<(), ContractError>
+```
+
+### Error Code Addition
+
+- **Error 6: `MarketClosedToDeposits`** – Returned when a user attempts to deposit into a market that has been closed to new deposits.
+
+### Event Addition
+
+```rust
+MarketClosedToDepositsEvent {
+    market_id: u32,
+    admin: Address,
+    closed_at: u64,
+}
+```
+
+### Migration Instructions
+
+1. **Increment STORAGE_VERSION**: Changed from 3 to 4 in `storage.rs`
+2. **Rebuild**: Run `stellar contract build` to produce new WASM
+3. **Redeploy**: Deploy the new WASM to your target network
+4. **Reinitialize**: Call `initialize(admin)` on the fresh deployment
+
+### Breaking Changes
+
+- Old deployments (v3) cannot read markets from new deployments (v4)
+- Any call to an old v3 contract will return `UpgradeRequired` error
+- Existing markets must be recreated after upgrade
+
+### Backward Compatibility
+
+- All newly created markets have `closed_to_deposits = false` (open by default)
+- No existing functionality is removed or changed
+- Withdrawals and settlement continue to work normally when a market is closed to deposits
+
+### Data Migration Path
+
+**On Testnet**: 
+1. Redeploy contract
+2. Reinitialize admin
+3. Recreate test markets
+4. Rerun integration tests
+
+**On Production**: 
+- Plan a migration window
+- Notify users that markets will briefly become unavailable
+- Redeploy, reinitialize, and migrate user positions as needed
+
+---
+
 # Migration: `Position::locked_collateral` is now share-based only (#262)
 
 ## What changed

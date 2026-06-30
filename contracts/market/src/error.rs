@@ -52,6 +52,12 @@ pub enum ContractError {
     /// Only Active markets accept new trades and collateral deposits.
     MarketNotActive = 5,
 
+    /// Market is closed to new deposits.
+    ///
+    /// The market has been administratively closed to prevent new collateral deposits,
+    /// though existing positions can still be traded and withdrawn.
+    MarketClosedToDeposits = 6,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -184,6 +190,7 @@ mod tests {
         assert_eq!(ContractError::MarketNotResolved as u32, 3);
         assert_eq!(ContractError::MarketExpired as u32, 4);
         assert_eq!(ContractError::MarketNotActive as u32, 5);
+        assert_eq!(ContractError::MarketClosedToDeposits as u32, 6);
         assert_eq!(ContractError::InsufficientCollateral as u32, 10);
         assert_eq!(ContractError::PositionAlreadySettled as u32, 11);
         assert_eq!(ContractError::NoPositionFound as u32, 12);

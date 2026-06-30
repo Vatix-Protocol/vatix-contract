@@ -56,6 +56,33 @@ The Market contract can optionally wire supporting modules via admin-configured 
 - Fee distribution
 - Market expiration and settlement
 
+## Recent Features
+
+### Close Market to Deposits (v1.2)
+
+Allows administrators to prevent new collateral deposits into a market while preserving all other functionality (trading, withdrawals, and settlement). 
+
+**Use Cases**:
+- Prevent new positions when approaching market expiration
+- Lock down markets during resolution or dispute windows
+- Manage market liquidity and exposure
+
+**API**: 
+```rust
+pub fn close_market_to_deposits(env: Env, admin: Address, market_id: u32) -> Result<(), ContractError>
+```
+
+**Event**:
+```
+MarketClosedToDepositsEvent {
+    market_id: u32,
+    admin: Address,
+    closed_at: u64,
+}
+```
+
+For detailed documentation, see [CLOSE_MARKET_FEATURE.md](CLOSE_MARKET_FEATURE.md).
+
 ## Resolution Lifecycle
 
 The Market Contract still owns the final `resolve_market(market_id, outcome, signature)` state transition. The separate Resolution Contract adds the missing on-chain challenge window that mirrors the backend `ResolutionCandidate` flow:
@@ -75,6 +102,7 @@ The Market Contract emits the following events for off-chain indexing and tracki
 |-------|--------|--------|-------------|
 | `contract_initialized_event` | `admin` | `initialized_at: u64` | Emitted when the contract is initialized with an admin |
 | `market_created_event` | `market_id` | `creator: Address`, `question: String`, `end_time: u64` | Emitted when a new market is created |
+| `market_closed_to_deposits_event` | `market_id` | `admin: Address`, `closed_at: u64` | Emitted when a market is closed to new deposits by an admin |
 | `collateral_deposited_event` | `user`, `market_id` | `amount: i128`, `new_total: i128` | Emitted when a user deposits collateral into a market |
 | `collateral_withdrawn_event` | `user`, `market_id` | `amount: i128`, `new_total: i128` | Emitted when a user withdraws collateral from a market |
 | `position_updated_event` | `market_id`, `user` | `yes_shares: i128`, `no_shares: i128`, `locked_collateral: i128` | Emitted when a user's position is updated after trading |

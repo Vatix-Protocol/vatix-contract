@@ -186,6 +186,7 @@ impl MarketContract {
             resolved_at: None,
             adapter_type: crate::types::AdapterType::Ed25519,
             outcome_count: 2,
+            closed_to_deposits: false,
         };
 
         // 5. Store market
@@ -799,6 +800,50 @@ impl MarketContract {
         let market = storage::get_market(&env, market_id)?
             .ok_or(ContractError::MarketNotFound)?;
         Ok(market.outcome_count)
+    }
+
+    /// Close a market to new collateral deposits.
+    ///
+    /// Prevents users from depositing new collateral into the market, though
+    /// existing positions can still be traded and withdrawn. Only the stored
+    /// admin may call this.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `admin` - Admin address authorizing this action
+    /// * `market_id` - ID of the market to close to deposits
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
+    /// - [`ContractError::MarketNotFound`] – market does not exist.
+    ///
+    /// # Events
+    /// Emits [`MarketClosedToDepositsEvent`] with admin address, market ID, and
+    /// the ledger timestamp when the market was closed.
+    pub fn close_market_to_deposits(
+        env: Env,
+        admin: Address,
+        market_id: u32,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        let mut market = storage::get_market(&env, market_id)?
+            .ok_or(ContractError::MarketNotFound)?;
+
+        // Set the flag to close market to deposits
+        market.closed_to_deposits = true;
+
+        // Persist the updated market
+        storage::set_market(&env, market_id, &market)?;
+
+        // Emit event
+        events::emit_market_closed_to_deposits(&env, market_id, &admin, env.ledger().timestamp());
+
+        Ok(())
     }
 
     /// Cancel an active market, preventing further deposits and withdrawals.

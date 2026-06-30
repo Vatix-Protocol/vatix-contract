@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// 3. Call `initialize(admin)` on the fresh deployment — it writes the new version.
 /// 4. The old deployment is now permanently locked behind `UpgradeRequired`;
 ///    any call that touches storage will return that error.
-pub const STORAGE_VERSION: u32 = 3;
+pub const STORAGE_VERSION: u32 = 4;
 
 #[contracttype]
 pub enum StorageKey {
