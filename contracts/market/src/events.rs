@@ -28,6 +28,26 @@ pub fn emit_contract_initialized(env: &Env, admin: &Address) {
     .publish(env);
 }
 
+/// Event emitted when the contract is paused or unpaused for emergency maintenance.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EmergencyPauseToggledEvent {
+    #[topic]
+    pub paused: bool,
+    /// Ledger timestamp when the pause state was changed.
+    pub timestamp: u64,
+}
+
+/// Emit event when the emergency pause flag is toggled.
+pub fn emit_emergency_pause_toggled(env: &Env, paused: bool) {
+    EmergencyPauseToggledEvent {
+        paused,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct MarketCreatedEvent {

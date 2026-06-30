@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { useWallet } from "@/context/WalletContext";
-import { invokeContract, MARKET_CONTRACT_ID } from "@/lib/soroban";
-import { amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
+import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
 
 interface DepositFormProps {
   /** Pre-select a market. When provided the market ID field is hidden. */

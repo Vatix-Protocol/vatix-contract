@@ -24,16 +24,16 @@ use vatix_market_contract::{oracle, storage, MarketContract};
 /// Stroops per USDC (1 USDC = 10^7 stroops), shared across integration tests.
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
 
-/// Register the `MarketContract` and bootstrap its admin and storage version.
+/// Register the `MarketContract` and initialize it with an admin.
 ///
-/// Returns `(admin, contract_id)`. The storage version must be set or any
-/// market/position read or write returns `ContractError::UpgradeRequired`.
+/// Returns `(admin, contract_id)`. Uses the `initialize` entry point
+/// to set the admin, which is the contract's official initialization path.
+/// The storage version is set during `initialize`.
 pub fn register_contract(env: &Env) -> (Address, Address) {
     let contract_id = env.register(MarketContract, ());
     let admin = Address::generate(env);
     env.as_contract(&contract_id, || {
-        storage::set_admin(env, &admin);
-        storage::set_version(env);
+        MarketContract::initialize(env.clone(), admin.clone()).unwrap();
     });
     (admin, contract_id)
 }
