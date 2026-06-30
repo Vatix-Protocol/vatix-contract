@@ -77,6 +77,110 @@ mod test {
     }
 
     // Rest of tests remain the same...
+    // ========== Initialize Function Tests ==========
+    
+    #[test]
+    fn test_initialize_with_valid_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // Initialize should succeed with a valid account address
+        let result = client.initialize(&admin);
+        assert!(result.is_ok());
+        
+        // Verify admin was set
+        let stored_admin = env.as_contract(&contract_id, || {
+            storage::get_admin(&env).expect("Admin should be set")
+        });
+        assert_eq!(stored_admin, admin);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_initialize_with_contract_address_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        // Try to use another contract address as admin (should fail)
+        let other_contract = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.initialize(&other_contract);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn test_initialize_twice_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // First initialization should succeed
+        client.initialize(&admin);
+        
+        // Second initialization should fail with AlreadyInitialized (#42)
+        let another_admin = Address::generate(&env);
+        client.initialize(&another_admin);
+    }
+    
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0);
+        
+        // Check for contract_initialized_event
+        let event_found = events.iter().any(|e| {
+            e.topics.iter().any(|t| {
+                t.to_string().contains("contract_initialized")
+            })
+        });
+        assert!(event_found, "contract_initialized_event should be emitted");
+    }
+    
+    #[test]
+    fn test_initialize_sets_version() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify storage version was set
+        env.as_contract(&contract_id, || {
+            let result = storage::assert_version(&env);
+            assert!(result.is_ok(), "Storage version should be set correctly");
+        });
+    }
+
+    // ========== Initialize Market Function Tests ==========
+    
     #[test]
     fn test_initialize_market_success() {
         let (env, admin, client, contract_id) = create_test_contract();
@@ -725,6 +829,98 @@ mod test {
         client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
     }
 
+    // ========== set_fee_rate_bps / get_fee_rate_bps tests ==========
+
+    #[test]
+    fn test_get_fee_rate_bps_default_is_50() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        assert_eq!(client.get_fee_rate_bps(), 50u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_admin_can_update() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &100u32);
+        assert_eq!(client.get_fee_rate_bps(), 100u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_zero_is_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &0u32);
+        assert_eq!(client.get_fee_rate_bps(), 0u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_max_boundary_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_000u32);
+        assert_eq!(client.get_fee_rate_bps(), 10_000u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #34)")]
+    fn test_set_fee_rate_bps_exceeds_max_rejected() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_001u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_set_fee_rate_bps_non_admin_rejected() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let non_admin = Address::generate(&env);
+        client.set_fee_rate_bps(&non_admin, &50u32);
+    }
+
+    // ========== token_balance tests ==========
+
+    #[test]
+    fn test_token_balance_returns_contract_balance() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        // Mint directly to the market contract to simulate held collateral.
+        sac.mint(&contract_id, &500i128);
+
+        assert_eq!(client.token_balance(&collateral_token), 500i128);
+    }
+
+    #[test]
+    fn test_token_balance_zero_when_no_funds() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+
+        assert_eq!(client.token_balance(&collateral_token), 0i128);
+    }
+
     // ========== Validation guard tests ==========
 
     #[test]
@@ -775,6 +971,18 @@ mod test {
 
         let events = env.events().all();
         assert!(events.len() > 0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_propose_admin_with_contract_address_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        
+        // Try to propose a contract address as admin
+        let contract_admin = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.propose_admin(&admin, &contract_admin);
     }
 
     #[test]
