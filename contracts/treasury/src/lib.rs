@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(clippy::all)]
 
 //! # Treasury Contract
 //!
@@ -187,7 +188,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
         }

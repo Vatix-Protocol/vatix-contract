@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(clippy::all)]
 
 mod deposit;
 mod error;
@@ -814,58 +815,5 @@ impl MarketContract {
         let market = storage::get_market(&env, market_id)?
             .ok_or(ContractError::MarketNotFound)?;
         Ok(market.outcome_count)
-    }
-
-    /// Cancel an active market, preventing further deposits and withdrawals.
-    ///
-    /// Only the stored admin may call this. 0 disables fees.
-    ///
-    /// # Errors
-    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
-    /// - [`ContractError::InvalidPrice`] – `fee_rate_bps` is outside 0–10_000.
-    pub fn set_fee_rate(
-        env: Env,
-        admin: Address,
-        fee_rate_bps: i128,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
-        }
-        validation::validate_fee_rate_bps(fee_rate_bps)?;
-        storage::set_fee_rate_bps(&env, fee_rate_bps);
-        Ok(())
-    }
-
-    /// Pause or unpause the contract for emergency maintenance.
-    ///
-    /// When paused, all state-mutating operations (deposit, withdraw, trade,
-    /// resolve, cancel, create market) are rejected with
-    /// [`ContractError::ContractPaused`]. Read-only getters remain available.
-    ///
-    /// Only the stored admin may call this.
-    ///
-    /// # Errors
-    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
-    pub fn set_paused(
-        env: Env,
-        admin: Address,
-        paused: bool,
-    ) -> Result<(), ContractError> {
-        validation::require_initialized(&env)?;
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
-        }
-        storage::set_paused(&env, paused);
-        events::emit_emergency_pause_toggled(&env, paused);
-        Ok(())
-    }
-
-    /// Return whether the contract is currently paused.
-    pub fn is_paused(env: Env) -> bool {
-        storage::is_paused(&env)
     }
 }
