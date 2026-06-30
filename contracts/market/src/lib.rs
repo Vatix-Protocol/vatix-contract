@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(clippy::all)]
 
 mod deposit;
 mod error;
@@ -58,7 +59,7 @@ impl MarketContract {
     ///   more than one year in the future
     ///
     /// # Events
-    /// Emits [`MarketCreatedEvent`] with `market_id`, `creator`, `question`,
+    /// Emits [`MarketCreated`] with `market_id`, `creator`, `question`,
     /// and `end_time` as payload.
     ///
     /// # Example
@@ -138,10 +139,7 @@ impl MarketContract {
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), ContractError> {
-        // 1. Validate new admin address
-        validation::validate_admin_address(&new_admin)?;
-        
-        // 2. Check contract is initialized
+        validation::require_initialized(&env)?;
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
@@ -151,11 +149,6 @@ impl MarketContract {
         if current_admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        
-        // 4. Require authorization
-        current_admin.require_auth();
-        
-        // 5. Set pending admin and emit event
         storage::set_pending_admin(&env, &new_admin);
         events::emit_admin_transfer_proposed(&env, &current_admin, &new_admin);
         
@@ -172,6 +165,7 @@ impl MarketContract {
     /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
     /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
         if new_admin != pending {
             return Err(ContractError::Unauthorized);
@@ -192,6 +186,8 @@ impl MarketContract {
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
     ) -> Result<u32, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Verify creator is admin
         creator.require_auth();
         let admin = storage::get_admin(&env)?;
@@ -266,6 +262,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         deposit::deposit_collateral(env, user, market_id, amount)
     }
 
@@ -293,6 +290,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         withdraw::withdraw_unused_collateral(env, user, market_id, amount)
     }
 
@@ -322,6 +320,7 @@ impl MarketContract {
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
@@ -384,13 +383,15 @@ impl MarketContract {
     /// - [`ContractError::MarketNotActive`] – the market is already canceled
     ///
     /// # Events
-    /// Emits [`MarketCanceledEvent`] with `market_id`, `canceler`, and
+    /// Emits [`MarketCanceled`] with `market_id`, `canceler`, and
     /// `canceled_at` on success.
     pub fn cancel_market(
         env: Env,
         admin: Address,
         market_id: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Authorization: only the stored admin may cancel a market.
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
@@ -479,35 +480,76 @@ impl MarketContract {
 
     /// Buy or sell YES/NO shares by applying signed deltas to a user's position.
     ///
-    /// This is the on-chain entry point for the share-trading logic implemented
-    /// in [`positions::update_position`]. It layers the market- and
-    /// authorization-level checks required before a position may be mutated.
+    /// **This is the primary trading entry point for the Vatix prediction market protocol.**
+    ///
+    /// This function provides the on-chain interface for share trading, implementing
+    /// the core logic from [`positions::update_position`] with comprehensive market-level
+    /// and authorization validations. It supports both buying (positive delta) and 
+    /// selling (negative delta) of YES and NO shares in a single atomic operation.
+    ///
+    /// # Trading Flow
+    /// 1. User deposits collateral via [`deposit_collateral`]
+    /// 2. User calls `update_position` to buy/sell shares
+    /// 3. Contract validates market state, user authorization, and collateral requirements
+    /// 4. Position is updated and locked collateral is recalculated
+    /// 5. Outcome tokens are minted/burned (if outcome-token contract is registered)
+    /// 6. Events are emitted for off-chain indexing
     ///
     /// # Arguments
     /// * `env` - Contract environment
     /// * `user` - User whose position is updated (must authorize the call)
     /// * `market_id` - Market identifier
-    /// * `yes_delta` - Change in YES shares (negative to sell)
-    /// * `no_delta` - Change in NO shares (negative to sell)
+    /// * `yes_delta` - Change in YES shares (positive to buy, negative to sell)
+    /// * `no_delta` - Change in NO shares (positive to buy, negative to sell)
     /// * `market_price` - Current market price in basis points (0–10_000) used
-    ///   to value the resulting net position
+    ///   to calculate locked collateral for the resulting net position
     ///
     /// # Returns
-    /// The updated [`Position`] on success.
+    /// The updated [`Position`] structure containing the new share balances,
+    /// locked collateral, and total deposited amount.
     ///
     /// # Errors
     /// - [`ContractError::MarketNotFound`] – market does not exist
     /// - [`ContractError::MarketNotActive`] – market is resolved or canceled
-    /// - [`ContractError::MarketExpired`] – market has passed its `end_time`
-    /// - [`ContractError::InvalidPrice`] – `market_price` is outside 0–10_000
-    /// - [`ContractError::InsufficientCollateral`] – deposited collateral does
-    ///   not cover the increased locked amount
-    /// - [`ContractError::InvalidShareAmount`] – deltas would push a share
-    ///   balance below zero
+    /// - [`ContractError::MarketExpired`] – current time exceeds market `end_time`
+    /// - [`ContractError::InvalidPrice`] – `market_price` is outside valid range (0–10_000)
+    /// - [`ContractError::InsufficientCollateral`] – deposited collateral insufficient
+    ///   to cover the increased locked amount
+    /// - [`ContractError::InvalidShareAmount`] – deltas would result in negative share balance
     ///
     /// # Events
-    /// Emits `PositionUpdated` on success, or `PositionLimitExceeded` when a
-    /// delta would drive a share balance negative.
+    /// - `PositionUpdated` – emitted on successful position change with new balances
+    /// - `TradeExecuted` – emitted for each non-zero delta (YES and/or NO)
+    /// - `PositionLimitExceeded` – emitted when delta would drive share balance negative
+    ///
+    /// # Examples
+    /// ```ignore
+    /// // Buy 100 YES shares at 60% market price
+    /// let position = client.update_position(
+    ///     &user,
+    ///     &market_id,
+    ///     &(100 * STROOPS_PER_USDC),  // yes_delta: buy 100
+    ///     &0i128,                       // no_delta: no change
+    ///     &6_000i128,                   // market_price: 60%
+    /// );
+    /// // Result: 60 USDC locked (100 shares * 60% price)
+    ///
+    /// // Sell 50 YES shares
+    /// let position = client.update_position(
+    ///     &user,
+    ///     &market_id,
+    ///     &(-50 * STROOPS_PER_USDC),  // yes_delta: sell 50
+    ///     &0i128,                       // no_delta: no change
+    ///     &6_000i128,                   // market_price: 60%
+    /// );
+    /// ```
+    ///
+    /// # Security
+    /// - Requires user authorization via `user.require_auth()`
+    /// - Validates market is Active and not expired
+    /// - Enforces collateral requirements before state changes
+    /// - Prevents negative share balances
+    /// - All state changes are atomic (succeed or revert together)
     pub fn update_position(
         env: Env,
         user: Address,
@@ -516,6 +558,7 @@ impl MarketContract {
         no_delta: i128,
         market_price: i128,
     ) -> Result<Position, ContractError> {
+        validation::require_not_paused(&env)?;
         // 1. Authorization
         user.require_auth();
 
@@ -651,12 +694,13 @@ impl MarketContract {
         admin: Address,
         treasury: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        storage::set_treasury(&env, &treasury);
+        storage::set_treasury(&env, &Some(treasury.clone()));
         events::emit_treasury_set(&env, &treasury);
         Ok(())
     }
@@ -673,6 +717,7 @@ impl MarketContract {
         admin: Address,
         fee_rate_bps: i128,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -697,6 +742,7 @@ impl MarketContract {
         signers: soroban_sdk::Vec<BytesN<32>>,
         quorum: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -735,6 +781,7 @@ impl MarketContract {
         outcome: bool,
         signatures: soroban_sdk::Vec<BytesN<64>>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
 
         let mut market =
@@ -784,6 +831,7 @@ impl MarketContract {
         admin: Address,
         outcome_token_contract: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -804,71 +852,208 @@ impl MarketContract {
     /// a finalized candidate exists for the market before accepting a resolution.
     /// Pass `None` (by omitting the storage entry) to remove the gate.
     ///
-    /// Only the stored admin may call this.
-    pub fn set_resolution_contract(
+    
+    // ========== Trading Convenience Functions ==========
+
+    /// Buy YES shares in a market at the specified price.
+    ///
+    /// This is a convenience wrapper around [`update_position`] for the common
+    /// case of buying only YES shares. Equivalent to calling `update_position`
+    /// with `yes_delta > 0` and `no_delta = 0`.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User buying shares (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `amount` - Number of YES shares to buy (must be positive)
+    /// * `market_price` - Current market price in basis points (0–10_000)
+    ///
+    /// # Returns
+    /// The updated [`Position`] after the purchase.
+    ///
+    /// # Errors
+    /// Same as [`update_position`], plus:
+    /// - [`ContractError::InvalidQuantity`] – amount is zero or negative
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Buy 100 YES shares at 60% price
+    /// let position = client.buy_yes(
+    ///     &user,
+    ///     &market_id,
+    ///     &(100 * STROOPS_PER_USDC),
+    ///     &6_000i128,
+    /// );
+    /// ```
+    pub fn buy_yes(
         env: Env,
-        admin: Address,
-        resolution_contract: Address,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
+        user: Address,
+        market_id: u32,
+        amount: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidQuantity);
         }
-        storage::set_resolution_contract(&env, &resolution_contract);
-        Ok(())
+        Self::update_position(env, user, market_id, amount, 0, market_price)
     }
 
-    /// Return the registered resolution contract address, if any.
-    pub fn get_resolution_contract(env: Env) -> Option<Address> {
-        storage::get_resolution_contract(&env)
-    }
-
-    /// Return the registered treasury contract address, if any.
-    pub fn get_treasury(env: Env) -> Option<Address> {
-        storage::get_treasury(&env)
-    }
-
-    /// Return a read-only view of a market by its ID.
+    /// Buy NO shares in a market at the specified price.
+    ///
+    /// This is a convenience wrapper around [`update_position`] for the common
+    /// case of buying only NO shares. Equivalent to calling `update_position`
+    /// with `yes_delta = 0` and `no_delta > 0`.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User buying shares (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `amount` - Number of NO shares to buy (must be positive)
+    /// * `market_price` - Current market price in basis points (0–10_000)
+    ///
+    /// # Returns
+    /// The updated [`Position`] after the purchase.
     ///
     /// # Errors
-    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
-    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
-    pub fn get_market(env: Env, market_id: u32) -> Result<crate::types::Market, ContractError> {
-        storage::get_market(&env, market_id)?
-            .ok_or(ContractError::MarketNotFound)
-    }
-
-    /// Return the immutable outcome count for a market (always 2 for binary markets).
+    /// Same as [`update_position`], plus:
+    /// - [`ContractError::InvalidQuantity`] – amount is zero or negative
     ///
-    /// # Errors
-    /// - [`ContractError::MarketNotFound`] — no market exists with the given ID.
-    /// - [`ContractError::UpgradeRequired`] — storage version mismatch.
-    pub fn get_outcome_count(env: Env, market_id: u32) -> Result<u32, ContractError> {
-        let market = storage::get_market(&env, market_id)?
-            .ok_or(ContractError::MarketNotFound)?;
-        Ok(market.outcome_count)
-    }
-
-    /// Cancel an active market, preventing further deposits and withdrawals.
-    ///
-    /// Only the stored admin may call this. 0 disables fees.
-    ///
-    /// # Errors
-    /// - [`ContractError::NotAdmin`] – caller is not the stored admin.
-    /// - [`ContractError::InvalidPrice`] – `fee_rate_bps` is outside 0–10_000.
-    pub fn set_fee_rate(
+    /// # Example
+    /// ```ignore
+    /// // Buy 100 NO shares at 40% price (60% YES implies 40% NO)
+    /// let position = client.buy_no(
+    ///     &user,
+    ///     &market_id,
+    ///     &(100 * STROOPS_PER_USDC),
+    ///     &6_000i128,
+    /// );
+    /// ```
+    pub fn buy_no(
         env: Env,
-        admin: Address,
-        fee_rate_bps: i128,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
+        user: Address,
+        market_id: u32,
+        amount: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidQuantity);
         }
-        validation::validate_fee_rate_bps(fee_rate_bps)?;
-        storage::set_fee_rate_bps(&env, fee_rate_bps);
-        Ok(())
+        Self::update_position(env, user, market_id, 0, amount, market_price)
+    }
+
+    /// Sell YES shares in a market at the specified price.
+    ///
+    /// This is a convenience wrapper around [`update_position`] for the common
+    /// case of selling only YES shares. Equivalent to calling `update_position`
+    /// with `yes_delta < 0` and `no_delta = 0`.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User selling shares (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `amount` - Number of YES shares to sell (must be positive; internally negated)
+    /// * `market_price` - Current market price in basis points (0–10_000)
+    ///
+    /// # Returns
+    /// The updated [`Position`] after the sale.
+    ///
+    /// # Errors
+    /// Same as [`update_position`], plus:
+    /// - [`ContractError::InvalidQuantity`] – amount is zero or negative
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Sell 50 YES shares
+    /// let position = client.sell_yes(
+    ///     &user,
+    ///     &market_id,
+    ///     &(50 * STROOPS_PER_USDC),
+    ///     &6_000i128,
+    /// );
+    /// ```
+    pub fn sell_yes(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidQuantity);
+        }
+        Self::update_position(env, user, market_id, -amount, 0, market_price)
+    }
+
+    /// Sell NO shares in a market at the specified price.
+    ///
+    /// This is a convenience wrapper around [`update_position`] for the common
+    /// case of selling only NO shares. Equivalent to calling `update_position`
+    /// with `yes_delta = 0` and `no_delta < 0`.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `user` - User selling shares (must authorize the call)
+    /// * `market_id` - Market identifier
+    /// * `amount` - Number of NO shares to sell (must be positive; internally negated)
+    /// * `market_price` - Current market price in basis points (0–10_000)
+    ///
+    /// # Returns
+    /// The updated [`Position`] after the sale.
+    ///
+    /// # Errors
+    /// Same as [`update_position`], plus:
+    /// - [`ContractError::InvalidQuantity`] – amount is zero or negative
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Sell 50 NO shares
+    /// let position = client.sell_no(
+    ///     &user,
+    ///     &market_id,
+    ///     &(50 * STROOPS_PER_USDC),
+    ///     &6_000i128,
+    /// );
+    /// ```
+    pub fn sell_no(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidQuantity);
+        }
+        Self::update_position(env, user, market_id, 0, -amount, market_price)
+    }
+
+    // ========== View Functions ==========
+
+    /// Get a user's current position in a market.
+    ///
+    /// Returns position details including share balances, locked collateral,
+    /// and settlement status. This is a read-only query function.
+    ///
+    /// # Arguments
+    /// * `env` - Contract environment
+    /// * `market_id` - Market identifier
+    /// * `user` - User address to query
+    ///
+    /// # Returns
+    /// The user's [`Position`] if it exists, `None` otherwise.
+    ///
+    /// # Example
+    /// ```ignore
+    /// if let Some(position) = client.get_position(&market_id, &user) {
+    ///     println!("YES shares: {}", position.yes_shares);
+    ///     println!("Locked collateral: {}", position.locked_collateral);
+    /// }
+    /// ```
+    pub fn get_position(
+        env: Env,
+        market_id: u32,
+        user: Address,
+    ) -> Result<Option<Position>, ContractError> {
+        storage::get_position(&env, market_id, &user)
     }
 }

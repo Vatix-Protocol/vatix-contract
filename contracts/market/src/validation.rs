@@ -1,41 +1,6 @@
 use crate::error::ContractError;
 use crate::types::MarketStatus;
-use soroban_sdk::{Address, String};
-
-/// Validates that an admin address is suitable for contract administration.
-///
-/// The admin address must be a valid user account. This function rejects:
-/// - Contract addresses (to prevent circular dependencies or governance attacks)
-///
-/// # Arguments
-/// * `admin` - Address to validate as admin
-///
-/// # Returns
-/// `Ok(())` if the address is valid for use as admin
-///
-/// # Errors
-/// - [`ContractError::InvalidAdmin`] – address is a contract or otherwise unsuitable
-///
-/// # Security Notes
-/// Contract addresses as admin could lead to:
-/// - Circular dependency issues
-/// - Complex governance attack vectors
-/// - Unintended behavior if contract is upgraded or self-destructs
-///
-/// # Example
-/// ```ignore
-/// validation::validate_admin_address(&admin)?;
-/// ```
-pub fn validate_admin_address(admin: &Address) -> Result<(), ContractError> {
-    // Reject contract addresses - admin should be an account
-    // In Soroban, this check ensures we're not setting a contract as admin
-    // which could lead to complex governance issues
-    if admin.to_string().starts_with("C") {
-        return Err(ContractError::InvalidAdmin);
-    }
-    
-    Ok(())
-}
+use soroban_sdk::{Env, String};
 
 /// Guard function to validate input before processing.
 ///
@@ -252,6 +217,29 @@ pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractE
         .ok_or(ContractError::ArithmeticOverflow)
 }
 
+/// Guard: reject operations when the contract has not been initialized.
+///
+/// # Errors
+/// - [`ContractError::NotInitialized`] – the contract has no admin set.
+pub fn require_initialized(env: &Env) -> Result<(), ContractError> {
+    if !crate::storage::has_admin(env) {
+        return Err(ContractError::NotInitialized);
+    }
+    Ok(())
+}
+
+/// Guard: reject state-mutating operations when the contract is paused.
+///
+/// # Errors
+/// - [`ContractError::ContractPaused`] – the contract is in emergency halt.
+pub fn require_not_paused(env: &Env) -> Result<(), ContractError> {
+    if crate::storage::is_paused(env) {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,5 +498,53 @@ mod tests {
             validate_admin_address(&contract_id),
             Err(ContractError::InvalidAdmin)
         );
+    }
+}
+
+    #[test]
+    fn test_validate_cancelable_already_canceled_fails() {
+        assert_eq!(
+            validate_cancelable(&MarketStatus::Canceled),
+            Err(ContractError::MarketNotActive)
+        );
+    }
+
+    #[test]
+    fn test_require_initialized_when_has_admin() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = soroban_sdk::Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            crate::storage::set_admin(&env, &admin);
+            assert!(require_initialized(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_require_initialized_returns_not_initialized() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            assert_eq!(require_initialized(&env), Err(ContractError::NotInitialized));
+        });
+    }
+
+    #[test]
+    fn test_require_not_paused_returns_ok_when_not_paused() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            assert!(require_not_paused(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_require_not_paused_returns_contract_paused_when_paused() {
+        let env = soroban_sdk::Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            crate::storage::set_paused(&env, true);
+            assert_eq!(require_not_paused(&env), Err(ContractError::ContractPaused));
+        });
     }
 }

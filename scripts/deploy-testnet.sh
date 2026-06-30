@@ -3,9 +3,13 @@
 # deploy-testnet.sh — build the market contract and deploy it to the Stellar
 # testnet, printing (and exporting) the resulting contract ID.
 #
-# This replaces the previous echo guard with a real build + deploy flow that
-# mirrors `contracts/market/Makefile` (single source of truth for the build:
-# `stellar contract build`).
+# Uses the canonical build command `stellar contract build`, which outputs
+# the WASM artefact to the canonical path:
+#
+#   target/wasm32v1-none/release/<contract-name>.wasm
+#
+# This path is the single source of truth across Makefile, CI, and deploy
+# scripts, ensuring byte-for-byte identical artefacts everywhere.
 #
 # Requirements:
 #   - The `stellar` CLI on PATH (https://developers.stellar.org/docs/tools/cli)
@@ -15,7 +19,13 @@
 # Optional environment overrides:
 #   SOROBAN_NETWORK   Network to deploy to             (default: testnet)
 #   CONTRACT_DIR      Contract crate to build/deploy   (default: contracts/market)
-#   WASM_PATH         Explicit path to the built .wasm (default: auto-discovered)
+#   WASM_PATH         Explicit path to the built .wasm (default: auto-discovered
+#                     from canonical path target/wasm32v1-none/release/)
+#
+# Guard mode (CI without credentials):
+#   When TESTNET_SECRET_KEY is unset the script validates that the canonical
+#   build artefact exists and exits 0 — no deployment is attempted. This lets
+#   the CI step act as a reachability + path check without real credentials.
 #
 # Output:
 #   - Prints the deployed contract ID on stdout (last line).
@@ -27,6 +37,9 @@ set -euo pipefail
 NETWORK="${SOROBAN_NETWORK:-testnet}"
 CONTRACT_DIR="${CONTRACT_DIR:-contracts/market}"
 
+# Canonical WASM output path produced by `stellar contract build`.
+CANONICAL_WASM_DIR="target/wasm32v1-none/release"
+
 log() { printf '[deploy-testnet] %s\n' "$*" >&2; }
 
 if ! command -v stellar >/dev/null 2>&1; then
@@ -35,30 +48,32 @@ if ! command -v stellar >/dev/null 2>&1; then
   exit 127
 fi
 
-if [[ -z "${TESTNET_SECRET_KEY:-}" ]]; then
-  log "ERROR: TESTNET_SECRET_KEY is not set."
-  log "Provide a funded testnet account secret key (S...) via the"
-  log "TESTNET_SECRET_KEY environment variable / repository secret."
-  exit 1
-fi
-
-# 1. Build the contract WASM using the canonical Makefile build approach.
+# 1. Build using the canonical command so the artefact lands at
+#    target/wasm32v1-none/release/<name>.wasm.
 log "Building ${CONTRACT_DIR} (stellar contract build)..."
 stellar contract build --manifest-path "${CONTRACT_DIR}/Cargo.toml"
 
-# 2. Locate the build artefact. `stellar contract build` emits to
-#    target/wasm32v1-none/release/. Allow an explicit override for flexibility.
+# 2. Locate the artefact at the canonical output path.
+#    Allow an explicit WASM_PATH override for flexibility.
 if [[ -z "${WASM_PATH:-}" ]]; then
-  WASM_PATH="$(find target/wasm32v1-none/release -maxdepth 1 -name '*.wasm' 2>/dev/null | head -n1 || true)"
+  WASM_PATH="$(find "${CANONICAL_WASM_DIR}" -maxdepth 1 -name '*.wasm' 2>/dev/null | head -n1 || true)"
 fi
 if [[ -z "${WASM_PATH:-}" || ! -f "${WASM_PATH}" ]]; then
   log "ERROR: could not locate a built .wasm artefact."
-  log "Looked in target/wasm32v1-none/release/. Set WASM_PATH to override."
+  log "Looked in ${CANONICAL_WASM_DIR}/. Set WASM_PATH to override."
   exit 1
 fi
 log "Using WASM artefact: ${WASM_PATH}"
 
-# 3. Deploy to the target network. The contract ID is printed to stdout.
+# 3. Guard mode: when no credentials are present, verify the artefact path and
+#    exit cleanly without attempting a live deployment.
+if [[ -z "${TESTNET_SECRET_KEY:-}" ]]; then
+  log "TESTNET_SECRET_KEY not set — skipping deployment (guard mode)."
+  log "Artefact path verified: ${WASM_PATH}"
+  exit 0
+fi
+
+# 4. Deploy to the target network. The contract ID is printed to stdout.
 log "Deploying to network '${NETWORK}'..."
 CONTRACT_ID="$(
   stellar contract deploy \
@@ -74,7 +89,7 @@ fi
 
 log "Deployed contract ID: ${CONTRACT_ID}"
 
-# 4. Export the contract ID for downstream CI steps and print it on stdout.
+# 5. Export the contract ID for downstream CI steps and print it on stdout.
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "contract_id=${CONTRACT_ID}" >>"${GITHUB_OUTPUT}"
 fi
