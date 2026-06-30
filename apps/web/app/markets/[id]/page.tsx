@@ -1,19 +1,19 @@
-import { MOCK_MARKETS } from "@/lib/markets";
 import { findMarketById } from "@/lib/market-helpers";
+import { DepositForm } from "@/components/DepositForm";
 
-export default function MarketDetailPage({
+export default async function MarketDetailPage({
   params,
 }: {
   params: { id: string };
 }) {
-  const market = findMarketById(params.id);
+  const market = await findMarketById(params.id);
 
   if (!market) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-2xl font-semibold">Market not found</h1>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-          The market you're looking for doesn't exist.
+          The market you&apos;re looking for doesn&apos;t exist.
         </p>
         <a
           href="/markets"
@@ -38,6 +38,9 @@ export default function MarketDetailPage({
         <p>Status: {market.status}</p>
         <p>Ends: {market.endsAt}</p>
         <p>Volume: {market.volume}</p>
+      </div>
+      <div className="mt-8">
+        <DepositForm marketId={market.id} />
       </div>
     </div>
   );

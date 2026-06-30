@@ -8,13 +8,13 @@
 import {
   Address,
   Contract,
-  SorobanRpc,
+  rpc,
   TransactionBuilder,
-  Networks,
   BASE_FEE,
   Account,
-  Operation,
   xdr,
+  Address,
+  nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "@stellar/freighter-api";
 
@@ -42,7 +42,7 @@ export const RESOLUTION_CONTRACT_ID =
   process.env.NEXT_PUBLIC_RESOLUTION_CONTRACT_ID ?? "";
 
 // Initialize RPC server
-const server = new SorobanRpc.Server(SOROBAN_RPC_URL);
+const server = new rpc.Server(SOROBAN_RPC_URL);
 
 /**
  * Contract invocation result
@@ -100,7 +100,7 @@ export async function invokeContract(
     // 4. Simulate the transaction
     const simulated = await server.simulateTransaction(transaction);
 
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
+    if (rpc.Api.isSimulationError(simulated)) {
       throw new Error(`Simulation failed: ${simulated.error}`);
     }
 
@@ -109,7 +109,7 @@ export async function invokeContract(
     }
 
     // 5. Prepare the transaction with simulation results
-    const prepared = SorobanRpc.assembleTransaction(
+    const prepared = rpc.assembleTransaction(
       transaction,
       simulated
     ).build();
@@ -144,7 +144,7 @@ export async function invokeContract(
     const maxAttempts = 20;
 
     while (
-      getResponse.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      getResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
       attempts < maxAttempts
     ) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -152,7 +152,7 @@ export async function invokeContract(
       attempts++;
     }
 
-    if (getResponse.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+    if (getResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
       throw new Error(`Transaction failed: ${getResponse.resultXdr}`);
     }
 
@@ -206,7 +206,7 @@ export async function queryContract<T>(
 
     const simulated = await server.simulateTransaction(transaction);
 
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
+    if (rpc.Api.isSimulationError(simulated)) {
       throw new Error(`Simulation failed: ${simulated.error}`);
     }
 
@@ -228,25 +228,15 @@ export async function queryContract<T>(
 /**
  * Helper to convert string amounts to i128 XDR values (Soroban amounts are i128)
  */
-export function amountToScVal(amount: string | number): xdr.ScVal {
-  const amountBigInt = BigInt(amount);
-  return xdr.ScVal.scvI128(
-    new xdr.Int128Parts({
-      lo: xdr.Uint64.fromString((amountBigInt & BigInt("0xFFFFFFFFFFFFFFFF")).toString()),
-      hi: xdr.Int64.fromString((amountBigInt >> BigInt(64)).toString()),
-    })
-  );
+export function amountToScVal(amount: string | number | bigint): xdr.ScVal {
+  return nativeToScVal(BigInt(amount), { type: "i128" });
 }
 
 /**
- * Helper to convert a Stellar account address (strkey G…) to ScVal.
- *
- * Uses `Address.fromString` from stellar-sdk so the raw 32-byte Ed25519
- * public key is decoded correctly from the base32/strkey encoding rather
- * than base64.
+ * Helper to convert Stellar addresses (G... or C...) to ScVal
  */
-export function addressToScVal(address: string): xdr.ScVal {
-  return new Address(address).toScVal();
+export function addressToScVal(stellarAddress: string): xdr.ScVal {
+  return nativeToScVal(new Address(stellarAddress), { type: "address" });
 }
 
 /**

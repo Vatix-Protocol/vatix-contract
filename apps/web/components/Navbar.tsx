@@ -11,7 +11,7 @@ import { WalletConnectButton } from "./WalletConnectButton";
  * When the user has no wallet connected, shows a friendly prompt to connect.
  */
 export function Navbar() {
-  const { address, isConnecting, connect, disconnect } = useWallet();
+  const { address, isConnecting, connectError, connect, disconnect } = useWallet();
 
   return (
     <header className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
@@ -31,6 +31,7 @@ export function Navbar() {
           <WalletConnectButton
             address={address}
             isConnecting={isConnecting}
+            connectError={connectError}
             onConnect={connect}
             onDisconnect={disconnect}
           />

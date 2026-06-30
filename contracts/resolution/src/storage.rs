@@ -7,6 +7,7 @@ pub enum StorageKey {
     CandidateCounter,
     Candidate(u32),
     CandidateByMarket(u32),
+    ProposerCollateral(Address),
 }
 
 pub fn has_config(env: &Env) -> bool {
@@ -57,4 +58,17 @@ pub fn get_candidate_id_for_market(env: &Env, market_id: u32) -> Option<u32> {
     env.storage()
         .persistent()
         .get(&StorageKey::CandidateByMarket(market_id))
+}
+
+pub fn get_proposer_collateral(env: &Env, proposer: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ProposerCollateral(proposer.clone()))
+        .unwrap_or(0i128)
+}
+
+pub fn set_proposer_collateral(env: &Env, proposer: &Address, amount: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ProposerCollateral(proposer.clone()), &amount);
 }

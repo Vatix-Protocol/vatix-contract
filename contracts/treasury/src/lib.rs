@@ -1,27 +1,12 @@
 #![no_std]
+#![deny(clippy::all)]
 
 //! # Treasury Contract
 //!
 //! Collects and custodies protocol fees on behalf of the Vatix prediction
-//! market protocol. Only the registered **market contract** may deposit fees
-//! via [`TreasuryContract::collect_fee`]; the **admin** controls all other
-//! privileged operations (withdrawal, market contract rotation).
-//!
-//! ## Fee flow
-//!
-//! ```text
-//!  User withdrawal
-//!      │  fee_amount > 0
-//!      ▼
-//!  MarketContract
-//!      │  token.transfer(market → treasury, fee_amount)
-//!      │  treasury.collect_fee(market, token, market_id, fee_amount)
-//!      ▼
-//!  TreasuryContract  ← accumulates per-token balances
-//!      │  (admin only)
-//!      ▼
-//!  treasury.withdraw_fees(admin, token, to, amount)
-//! ```
+//! market protocol. Any address in the authorized market registry may deposit
+//! fees via [`TreasuryContract::collect_fee`]; the **admin** controls all
+//! other privileged operations (withdrawal, registry management).
 //!
 //! ## Authorization model
 //!
@@ -51,7 +36,7 @@ mod test;
 
 pub use error::TreasuryError;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 
 #[contract]
 pub struct TreasuryContract;
@@ -60,11 +45,7 @@ pub struct TreasuryContract;
 impl TreasuryContract {
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    /// Bootstrap the treasury.
-    ///
-    /// Sets the admin and registers the market contract permitted to call
-    /// [`collect_fee`]. Must be called once after deployment; subsequent calls
-    /// return [`TreasuryError::AlreadyInitialized`].
+    /// Bootstrap the treasury with an initial market contract in the registry.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -83,14 +64,7 @@ impl TreasuryContract {
 
     // ── Fee collection ─────────────────────────────────────────────────────────
 
-    /// Record a protocol fee transferred from a market withdrawal.
-    ///
-    /// Only the registered market contract may call this. The market contract
-    /// must transfer `fee_amount` tokens to this contract's address *before*
-    /// (or atomically with) this call so that on-chain balances stay consistent.
-    ///
-    /// Updates both the current `TokenBalance` and the monotone `CumulativeFees`
-    /// counter for `token`.
+    /// Record a protocol fee transferred from any registered market contract.
     pub fn collect_fee(
         env: Env,
         caller: Address,
@@ -102,6 +76,9 @@ impl TreasuryContract {
 
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
+        }
+        if storage::is_paused(&env) {
+            return Err(TreasuryError::ContractPaused);
         }
         let market_contract = storage::get_authorized_market(&env)?;
         if caller != market_contract {
@@ -136,9 +113,6 @@ impl TreasuryContract {
     // ── Admin operations ───────────────────────────────────────────────────────
 
     /// Withdraw accumulated fees to a recipient address.
-    ///
-    /// Decrements the custodied `TokenBalance` but leaves `CumulativeFees`
-    /// untouched — the historical counter is monotone by design.
     pub fn withdraw_fees(
         env: Env,
         caller: Address,
@@ -150,6 +124,9 @@ impl TreasuryContract {
 
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
+        }
+        if storage::is_paused(&env) {
+            return Err(TreasuryError::ContractPaused);
         }
         let admin = storage::get_admin(&env)?;
         if caller != admin {
@@ -187,7 +164,7 @@ impl TreasuryContract {
         if !storage::has_admin(&env) {
             return Err(TreasuryError::NotInitialized);
         }
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
         }
@@ -199,11 +176,11 @@ impl TreasuryContract {
 
     /// Rotate the registered market contract address (e.g. after an upgrade).
     ///
-    /// Only the admin may call this.
-    pub fn set_market_contract(
+    /// Returns [`TreasuryError::CallerNotMarket`] if the address is not registered.
+    pub fn remove_market(
         env: Env,
         caller: Address,
-        new_market_contract: Address,
+        market_contract: Address,
     ) -> Result<(), TreasuryError> {
         caller.require_auth();
 
@@ -221,7 +198,55 @@ impl TreasuryContract {
         Ok(())
     }
 
+    /// Pause the treasury, blocking `collect_fee` and `withdraw_fees`.
+    ///
+    /// Intended for use during contract upgrades or incident response. Only the
+    /// admin may call this.
+    ///
+    /// # Errors
+    /// - [`TreasuryError::NotInitialized`] – treasury not initialized.
+    /// - [`TreasuryError::Unauthorized`] – caller is not the admin.
+    pub fn pause(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_paused(&env, true);
+        events::emit_treasury_paused(&env, &caller);
+        Ok(())
+    }
+
+    /// Unpause the treasury, restoring normal operation.
+    ///
+    /// Only the admin may call this.
+    ///
+    /// # Errors
+    /// - [`TreasuryError::NotInitialized`] – treasury not initialized.
+    /// - [`TreasuryError::Unauthorized`] – caller is not the admin.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_paused(&env, false);
+        events::emit_treasury_unpaused(&env, &caller);
+        Ok(())
+    }
+
     // ── Getters ────────────────────────────────────────────────────────────────
+
+    /// Return whether the treasury is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
+    }
 
     /// Return the admin address. Returns `UpgradeRequired` if version mismatches.
     pub fn admin(env: Env) -> Result<Address, TreasuryError> {

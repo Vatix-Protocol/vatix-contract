@@ -21,6 +21,9 @@ use crate::validation;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{Address, Env, IntoVal, Symbol, Val, Vec};
 
+/// Seconds a user must wait after their last deposit before withdrawing (issue #413).
+const WITHDRAW_COOLDOWN_SECONDS: u64 = 3_600;
+
 /// Withdraw `amount` of unused (unlocked) collateral from a market.
 ///
 /// # Locked-collateral enforcement (#376)
@@ -51,7 +54,15 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::MarketNotActive);
     }
 
-    // 3. Load position; an absent or zero-deposited position cannot be withdrawn.
+    // 3. Enforce cooldown: user must wait WITHDRAW_COOLDOWN_SECONDS after their last deposit.
+    if let Some(last_deposit_time) = storage::get_last_deposit_time(&env, market_id, &user) {
+        let elapsed = env.ledger().timestamp().saturating_sub(last_deposit_time);
+        if elapsed < WITHDRAW_COOLDOWN_SECONDS {
+            return Err(ContractError::WithdrawCooldownActive);
+        }
+    }
+
+    // 4. Load position; an absent or zero-deposited position cannot be withdrawn.
     let mut position = storage::get_position(&env, market_id, &user)?
         .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
 
@@ -60,7 +71,7 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
-    // 4. Compute the fee (single path, no duplication).
+    // 5. Compute the fee (single path, no duplication).
     let fee_rate_bps = storage::get_fee_rate_bps(&env);
     validation::validate_fee_rate_bps(fee_rate_bps)?;
     let fee_amount = if fee_rate_bps > 0 {
@@ -69,14 +80,17 @@ pub fn withdraw_unused_collateral(
         0
     };
 
-    // 5. Enforce locked collateral (#376).
+    // 6. Enforce locked collateral (#376).
     //    available = total_deposited - locked_collateral (floored at 0).
     //    The user must have `amount + fee_amount` of available (unlocked) collateral.
     let available = position
         .total_deposited
         .saturating_sub(position.locked_collateral);
 
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    // Only emit the fee event when a non-zero fee is actually deducted (#345).
+    if fee_amount > 0 {
+        emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    }
 
     let total_required = amount
         .checked_add(fee_amount)
@@ -86,7 +100,7 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
-    // 6. Route fee to treasury if one is registered.
+    // 7. Route fee to treasury if one is registered.
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
 
@@ -110,7 +124,7 @@ pub fn withdraw_unused_collateral(
         // When no treasury is registered the fee stays in the contract.
     }
 
-    // 7. Deduct both withdrawal and fee from total_deposited.
+    // 8. Deduct both withdrawal and fee from total_deposited.
     let total_deducted = amount
         .checked_add(fee_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
@@ -121,7 +135,7 @@ pub fn withdraw_unused_collateral(
 
     storage::set_position(&env, market_id, &user, &position)?;
 
-    // 8. Transfer the requested amount to the user.
+    // 9. Transfer the requested amount to the user.
     token_client.transfer(&contract_address, &user, &amount);
 
     emit_collateral_withdrawn(&env, &user, market_id, amount, position.total_deposited);
@@ -464,7 +478,6 @@ mod tests {
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
             storage::set_fee_rate_bps(&env, 1000); // 10% fee
-            storage::set_treasury(&env, &Some(treasury_id.clone()));
         });
         env.mock_all_auths();
         let result = env.as_contract(&contract_id, || {
