@@ -521,7 +521,17 @@ impl MarketContract {
         position.locked_collateral = 0;
         storage::set_position(&env, market_id, &user, &position)?;
 
-        // 6. Reuse the collateral-withdrawn event so indexers track the refund.
+        // 6. Emit position_updated so indexers see the zeroed balances.
+        events::emit_position_updated(
+            &env,
+            market_id,
+            &user,
+            position.yes_shares,
+            position.no_shares,
+            position.locked_collateral,
+        );
+
+        // 7. Reuse the collateral-withdrawn event so indexers track the refund.
         events::emit_collateral_withdrawn(&env, &user, market_id, refund, position.total_deposited);
 
         Ok(refund)
