@@ -6,6 +6,7 @@
  */
 
 import {
+  Address,
   Contract,
   SorobanRpc,
   TransactionBuilder,
@@ -238,14 +239,14 @@ export function amountToScVal(amount: string | number): xdr.ScVal {
 }
 
 /**
- * Helper to convert addresses to ScVal
+ * Helper to convert a Stellar account address (strkey G…) to ScVal.
+ *
+ * Uses `Address.fromString` from stellar-sdk so the raw 32-byte Ed25519
+ * public key is decoded correctly from the base32/strkey encoding rather
+ * than base64.
  */
 export function addressToScVal(address: string): xdr.ScVal {
-  return xdr.ScVal.scvAddress(xdr.ScAddress.scAddressTypeAccount(
-    xdr.PublicKey.publicKeyTypeEd25519(
-      Buffer.from(address, 'base64')
-    )
-  ));
+  return new Address(address).toScVal();
 }
 
 /**
