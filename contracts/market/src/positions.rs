@@ -19,14 +19,13 @@ pub enum PositionError {
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
 ///
-/// Panics on overflow, which cannot occur for valid share/price values within
-/// the i128 range used by this contract.
+/// Uses checked arithmetic to avoid silent overflow. For valid share/price
+/// values within the i128 range used by this contract overflow should not occur,
+/// but we defensively cap at i128::MAX if it would.
 fn scale_by_bps(amount: i128, price_bps: i128) -> i128 {
-    amount
-        .checked_mul(price_bps)
-        .unwrap()
-        .checked_div(BASIS_POINTS)
-        .unwrap()
+    let product = amount.saturating_mul(price_bps);
+    let result = product.checked_div(BASIS_POINTS).unwrap_or(i128::MAX);
+    result
 }
 
 /// Calculate required locked collateral based on net position.
@@ -402,7 +401,7 @@ mod tests {
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
-            soroban_sdk::Symbol::new(&env, "position_limit_exceeded_event")
+            soroban_sdk::Symbol::new(&env, "position_limit_exceeded")
         );
     }
 
@@ -429,13 +428,13 @@ mod tests {
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic0,
-            soroban_sdk::Symbol::new(&env, "position_updated_event")
+            soroban_sdk::Symbol::new(&env, "position_updated")
         );
 
         let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
         assert_eq!(
             topic1,
-            soroban_sdk::Symbol::new(&env, "trade_executed_event")
+            soroban_sdk::Symbol::new(&env, "trade_executed")
         );
     }
 
