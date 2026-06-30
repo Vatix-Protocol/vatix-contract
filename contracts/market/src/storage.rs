@@ -37,6 +37,9 @@ pub enum StorageKey {
     ThresholdSigners,
     /// Minimum number of valid signatures required to resolve a market (#378).
     ThresholdQuorum,
+    /// Flag indicating the contract is paused for emergency maintenance.
+    /// When true, all state-mutating operations are rejected.
+    Paused,
 }
 
 // --- Version helpers ---
@@ -195,22 +198,17 @@ pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
     env.storage().persistent().set(&StorageKey::FeeRateBps, &fee_rate_bps);
 }
 
-// --- Threshold Signer Storage (#378) ---
 
-pub fn get_threshold_signers(env: &Env) -> Vec<BytesN<32>> {
-    env.storage().persistent().get(&StorageKey::ThresholdSigners).unwrap_or(Vec::new(env))
+// --- Pause Storage ---
+
+/// Check whether the contract is in a paused state.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().persistent().get(&StorageKey::Paused).unwrap_or(false)
 }
 
-pub fn set_threshold_signers(env: &Env, signers: &Vec<BytesN<32>>) {
-    env.storage().persistent().set(&StorageKey::ThresholdSigners, signers);
-}
-
-pub fn get_threshold_quorum(env: &Env) -> u32 {
-    env.storage().persistent().get(&StorageKey::ThresholdQuorum).unwrap_or(0)
-}
-
-pub fn set_threshold_quorum(env: &Env, quorum: u32) {
-    env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
+/// Pause or unpause the contract (emergency halt).
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().persistent().set(&StorageKey::Paused, &paused);
 }
 
 #[cfg(test)]
@@ -486,6 +484,46 @@ mod test {
 
             set_resolution_contract(&env, &resolution);
             assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
+        });
+    }
+
+    // ── Pause storage helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_defaults_to_false() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert!(!is_paused(&env), "fresh contract should not be paused");
+        });
+    }
+
+    #[test]
+    fn test_pause_can_be_set_and_cleared() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn test_pause_toggle_returns_to_unpaused() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, true);
+            assert!(is_paused(&env), "pausing again should stay paused");
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
         });
     }
 }

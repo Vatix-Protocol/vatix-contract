@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(clippy::all)]
 
 mod deposit;
 mod error;
@@ -100,6 +101,7 @@ impl MarketContract {
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         if !storage::has_admin(&env) {
             return Err(ContractError::NotAdmin);
         }
@@ -123,6 +125,7 @@ impl MarketContract {
     /// - [`ContractError::NoPendingAdmin`] – no nomination is outstanding
     /// - [`ContractError::Unauthorized`] – `new_admin` does not match the pending nomination
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         let pending = storage::get_pending_admin(&env).ok_or(ContractError::NoPendingAdmin)?;
         if new_admin != pending {
             return Err(ContractError::Unauthorized);
@@ -143,6 +146,8 @@ impl MarketContract {
         oracle_pubkey: BytesN<32>,
         collateral_token: Address,
     ) -> Result<u32, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Verify creator is admin
         creator.require_auth();
         let admin = storage::get_admin(&env)?;
@@ -217,6 +222,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         deposit::deposit_collateral(env, user, market_id, amount)
     }
 
@@ -244,6 +250,7 @@ impl MarketContract {
         market_id: u32,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         withdraw::withdraw_unused_collateral(env, user, market_id, amount)
     }
 
@@ -273,6 +280,7 @@ impl MarketContract {
         outcome: bool,
         signature: BytesN<64>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
         let market_id = validation::parse_market_id(&market_id)?;
         // Step 1: Load and validate market
@@ -342,6 +350,8 @@ impl MarketContract {
         admin: Address,
         market_id: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
         // 1. Authorization: only the stored admin may cancel a market.
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
@@ -508,6 +518,7 @@ impl MarketContract {
         no_delta: i128,
         market_price: i128,
     ) -> Result<Position, ContractError> {
+        validation::require_not_paused(&env)?;
         // 1. Authorization
         user.require_auth();
 
@@ -643,6 +654,7 @@ impl MarketContract {
         admin: Address,
         treasury: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -665,6 +677,7 @@ impl MarketContract {
         admin: Address,
         fee_rate_bps: i128,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -689,6 +702,7 @@ impl MarketContract {
         signers: soroban_sdk::Vec<BytesN<32>>,
         quorum: u32,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -727,6 +741,7 @@ impl MarketContract {
         outcome: bool,
         signatures: soroban_sdk::Vec<BytesN<64>>,
     ) -> Result<(), ContractError> {
+        validation::require_not_paused(&env)?;
         resolver.require_auth();
 
         let mut market =
@@ -776,6 +791,7 @@ impl MarketContract {
         admin: Address,
         outcome_token_contract: Address,
     ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
         admin.require_auth();
         let stored_admin = storage::get_admin(&env)?;
         if admin != stored_admin {
@@ -999,56 +1015,5 @@ impl MarketContract {
         user: Address,
     ) -> Result<Option<Position>, ContractError> {
         storage::get_position(&env, market_id, &user)
-    }
-
-    /// Get market details by ID.
-    ///
-    /// Returns comprehensive market information including status, resolution,
-    /// timestamps, and configuration. This is a read-only query function.
-    ///
-    /// # Arguments
-    /// * `env` - Contract environment
-    /// * `market_id` - Market identifier
-    ///
-    /// # Returns
-    /// The [`Market`] structure if it exists, `None` otherwise.
-    ///
-    /// # Example
-    /// ```ignore
-    /// if let Some(market) = client.get_market(&market_id) {
-    ///     println!("Question: {}", market.question);
-    ///     println!("Status: {:?}", market.status);
-    ///     println!("Current price: {}", market.price_bps);
-    /// }
-    /// ```
-    pub fn get_market(
-        env: Env,
-        market_id: u32,
-    ) -> Result<Option<Market>, ContractError> {
-        storage::get_market(&env, market_id)
-    }
-    /// Only the stored admin may call this.
-    pub fn set_resolution_contract(
-        env: Env,
-        admin: Address,
-        resolution_contract: Address,
-    ) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored_admin = storage::get_admin(&env)?;
-        if admin != stored_admin {
-            return Err(ContractError::NotAdmin);
-        }
-        storage::set_resolution_contract(&env, &resolution_contract);
-        Ok(())
-    }
-
-    /// Return the registered resolution contract address, if any.
-    pub fn get_resolution_contract(env: Env) -> Option<Address> {
-        storage::get_resolution_contract(&env)
-    }
-
-    /// Return the registered treasury contract address, if any.
-    pub fn get_treasury(env: Env) -> Option<Address> {
-        storage::get_treasury(&env)
     }
 }
