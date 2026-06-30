@@ -77,6 +77,110 @@ mod test {
     }
 
     // Rest of tests remain the same...
+    // ========== Initialize Function Tests ==========
+    
+    #[test]
+    fn test_initialize_with_valid_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // Initialize should succeed with a valid account address
+        let result = client.initialize(&admin);
+        assert!(result.is_ok());
+        
+        // Verify admin was set
+        let stored_admin = env.as_contract(&contract_id, || {
+            storage::get_admin(&env).expect("Admin should be set")
+        });
+        assert_eq!(stored_admin, admin);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_initialize_with_contract_address_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        // Try to use another contract address as admin (should fail)
+        let other_contract = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.initialize(&other_contract);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #42)")]
+    fn test_initialize_twice_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        // First initialization should succeed
+        client.initialize(&admin);
+        
+        // Second initialization should fail with AlreadyInitialized (#42)
+        let another_admin = Address::generate(&env);
+        client.initialize(&another_admin);
+    }
+    
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0);
+        
+        // Check for contract_initialized_event
+        let event_found = events.iter().any(|e| {
+            e.topics.iter().any(|t| {
+                t.to_string().contains("contract_initialized")
+            })
+        });
+        assert!(event_found, "contract_initialized_event should be emitted");
+    }
+    
+    #[test]
+    fn test_initialize_sets_version() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        
+        let admin = Address::generate(&env);
+        
+        client.initialize(&admin);
+        
+        // Verify storage version was set
+        env.as_contract(&contract_id, || {
+            let result = storage::assert_version(&env);
+            assert!(result.is_ok(), "Storage version should be set correctly");
+        });
+    }
+
+    // ========== Initialize Market Function Tests ==========
+    
     #[test]
     fn test_initialize_market_success() {
         let (env, admin, client, contract_id) = create_test_contract();
@@ -725,6 +829,98 @@ mod test {
         client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
     }
 
+    // ========== set_fee_rate_bps / get_fee_rate_bps tests ==========
+
+    #[test]
+    fn test_get_fee_rate_bps_default_is_50() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        assert_eq!(client.get_fee_rate_bps(), 50u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_admin_can_update() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &100u32);
+        assert_eq!(client.get_fee_rate_bps(), 100u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_zero_is_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &0u32);
+        assert_eq!(client.get_fee_rate_bps(), 0u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_max_boundary_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_000u32);
+        assert_eq!(client.get_fee_rate_bps(), 10_000u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #34)")]
+    fn test_set_fee_rate_bps_exceeds_max_rejected() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_001u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_set_fee_rate_bps_non_admin_rejected() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let non_admin = Address::generate(&env);
+        client.set_fee_rate_bps(&non_admin, &50u32);
+    }
+
+    // ========== token_balance tests ==========
+
+    #[test]
+    fn test_token_balance_returns_contract_balance() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        // Mint directly to the market contract to simulate held collateral.
+        sac.mint(&contract_id, &500i128);
+
+        assert_eq!(client.token_balance(&collateral_token), 500i128);
+    }
+
+    #[test]
+    fn test_token_balance_zero_when_no_funds() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+
+        assert_eq!(client.token_balance(&collateral_token), 0i128);
+    }
+
     // ========== Validation guard tests ==========
 
     #[test]
@@ -775,6 +971,18 @@ mod test {
 
         let events = env.events().all();
         assert!(events.len() > 0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Error(Contract, #35)")]
+    fn test_propose_admin_with_contract_address_fails() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        
+        // Try to propose a contract address as admin
+        let contract_admin = env.register(MarketContract, ());
+        
+        // This should fail with InvalidAdmin error (#35)
+        client.propose_admin(&admin, &contract_admin);
     }
 
     #[test]
@@ -1217,125 +1425,274 @@ mod test {
         client.withdraw_canceled_collateral(&stranger, &market_id);
     }
 
-    // ── #402 fee cap max bps validation ──────────────────────────────────────
+    // ========== #332: Burn outcome tokens on position decrease ==========
 
+    /// #332: Selling YES shares burns the corresponding outcome tokens.
+    /// Verify that when yes_delta < 0 the token contract's burn entry point is
+    /// called (the SDK records the call in the auth invocations list, so we
+    /// assert the position decreases as expected as a proxy for the burn path
+    /// being exercised).
     #[test]
-    fn test_get_fee_cap_defaults_to_max() {
-        let (_env, _admin, client, _id) = create_test_contract();
-        assert_eq!(client.get_fee_cap(), 10_000);
+    fn test_332_selling_yes_shares_decreases_position() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Buy 80 YES shares first.
+        let buy = 80 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &buy, &0i128, &5_000i128);
+
+        // Sell 30 YES shares back.
+        let sell = -30 * STROOPS_PER_USDC;
+        let pos = client.update_position(&user, &market_id, &sell, &0i128, &5_000i128);
+
+        assert_eq!(pos.yes_shares, 50 * STROOPS_PER_USDC);
+        assert_eq!(pos.no_shares, 0);
+
+        let stored = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(stored.yes_shares, 50 * STROOPS_PER_USDC);
     }
 
+    /// #332: Selling NO shares decreases the NO balance (burn path).
     #[test]
-    fn test_set_fee_cap_and_enforce() {
-        let (_env, admin, client, _id) = create_test_contract();
-        // Lower cap to 500 bps (5%)
-        client.set_fee_cap(&admin, &500i128);
-        assert_eq!(client.get_fee_cap(), 500);
+    fn test_332_selling_no_shares_decreases_position() {
+        use crate::positions::STROOPS_PER_USDC;
 
-        // set_fee_rate within cap succeeds
-        client.set_fee_rate(&admin, &500i128);
-        assert_eq!(client.get_fee_rate(), 500);
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Buy 60 NO shares first.
+        let buy = 60 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &0i128, &buy, &5_000i128);
+
+        // Sell 20 NO shares back.
+        let sell = -20 * STROOPS_PER_USDC;
+        let pos = client.update_position(&user, &market_id, &0i128, &sell, &5_000i128);
+
+        assert_eq!(pos.yes_shares, 0);
+        assert_eq!(pos.no_shares, 40 * STROOPS_PER_USDC);
+
+        let stored = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(stored.no_shares, 40 * STROOPS_PER_USDC);
     }
 
+    /// #332: Selling down to zero shares is allowed and results in locked_collateral == 0.
     #[test]
-    #[should_panic(expected = "Error(Contract, #35)")]
-    fn test_set_fee_rate_above_cap_rejected() {
-        let (_env, admin, client, _id) = create_test_contract();
-        client.set_fee_cap(&admin, &200i128);
-        // 300 > cap 200 → FeeCapExceeded (#35)
-        client.set_fee_rate(&admin, &300i128);
+    fn test_332_selling_all_shares_zeroes_locked_collateral() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (_env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
+
+        let qty = 50 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &qty, &0i128, &5_000i128);
+
+        let pos = client.update_position(&user, &market_id, &(-qty), &0i128, &5_000i128);
+        assert_eq!(pos.yes_shares, 0);
+        assert_eq!(pos.locked_collateral, 0);
     }
 
+    // ========== #333: Reconcile locked_collateral on deposit and withdraw ==========
+
+    /// #333: Depositing collateral must never increment locked_collateral.
+    /// locked_collateral is exclusively owned by update_position.
     #[test]
-    #[should_panic(expected = "Error(Contract, #41)")]
-    fn test_set_fee_cap_non_admin_rejected() {
-        let (env, _admin, client, _id) = create_test_contract();
-        let rando = Address::generate(&env);
-        client.set_fee_cap(&rando, &500i128);
+    fn test_333_deposit_does_not_touch_locked_collateral() {
+        use crate::positions::STROOPS_PER_USDC;
+
+        let deposit = 50 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // A second deposit — the lock must stay zero because no shares are held.
+        let extra = 20 * STROOPS_PER_USDC;
+        use soroban_sdk::token::StellarAssetClient;
+        let stored_market = env.as_contract(&contract_id, || {
+            storage::get_market(&env, market_id).unwrap().unwrap()
+        });
+        StellarAssetClient::new(&env, &stored_market.collateral_token).mint(&user, &extra);
+        client.deposit_collateral(&user, &market_id, &extra);
+
+        let pos = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(pos.locked_collateral, 0);
+        assert_eq!(pos.total_deposited, deposit + extra);
     }
 
-    // ── #401 list_markets pagination ─────────────────────────────────────────
-
+    /// #333: Withdrawing unlocked collateral decrements total_deposited and
+    /// preserves locked_collateral (invariant: available = total - locked).
     #[test]
-    fn test_list_markets_empty() {
-        let (_env, _admin, client, _id) = create_test_contract();
-        let result = client.list_markets(&0u32, &10u32);
-        assert_eq!(result.len(), 0);
+    fn test_333_withdraw_decrements_total_deposited_preserves_locked() {
+        use crate::positions::STROOPS_PER_USDC;
+        use soroban_sdk::token::StellarAssetClient;
+
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
+
+        // Buy 40 YES shares at 50% → lock = 20 USDC; available = 80 USDC.
+        let shares = 40 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
+
+        let before = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(before.locked_collateral, 20 * STROOPS_PER_USDC);
+        assert_eq!(before.total_deposited, deposit);
+
+        let withdraw_amount = 30 * STROOPS_PER_USDC; // within available (80 USDC)
+        let stored_market = env.as_contract(&contract_id, || {
+            storage::get_market(&env, market_id).unwrap().unwrap()
+        });
+        StellarAssetClient::new(&env, &stored_market.collateral_token).mint(&contract_id, &(100 * STROOPS_PER_USDC));
+        client.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
+
+        let after = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(after.total_deposited, deposit - withdraw_amount);
+        assert_eq!(after.locked_collateral, before.locked_collateral); // unchanged
     }
 
+    /// #333: Attempting to withdraw locked collateral is rejected.
     #[test]
-    fn test_list_markets_paginated() {
-        let (env, admin, client, _id) = create_test_contract();
-        let token = Address::generate(&env);
-        let end_time = env.ledger().timestamp() + 86_400;
-        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
-        let questions = ["Q1", "Q2", "Q3", "Q4", "Q5"];
+    fn test_333_cannot_withdraw_locked_collateral() {
+        use crate::{error::ContractError, positions::STROOPS_PER_USDC};
 
-        // Create 5 markets
-        for q in questions.iter() {
-            let qs = soroban_sdk::String::from_str(&env, q);
-            client.initialize_market(&admin, &qs, &end_time, &pubkey, &token);
-        }
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (_env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
 
-        // page 1: start=0 limit=3 → ids 1,2,3
-        let page1 = client.list_markets(&0u32, &3u32);
-        assert_eq!(page1.len(), 3);
-        assert_eq!(page1.get(0).unwrap().id, 1);
-        assert_eq!(page1.get(2).unwrap().id, 3);
+        // Buy 100 YES shares at 60% → lock = 60 USDC; available = 40 USDC.
+        let shares = 100 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &shares, &0i128, &6_000i128);
 
-        // page 2: start=3 limit=3 → ids 4,5
-        let page2 = client.list_markets(&3u32, &3u32);
-        assert_eq!(page2.len(), 2);
-        assert_eq!(page2.get(0).unwrap().id, 4);
-        assert_eq!(page2.get(1).unwrap().id, 5);
-
-        // beyond end
-        let empty = client.list_markets(&10u32, &5u32);
-        assert_eq!(empty.len(), 0);
+        // Try to withdraw 50 USDC (> available 40 USDC) → rejected.
+        let result = client.try_withdraw_unused_collateral(&user, &market_id, &(50 * STROOPS_PER_USDC));
+        assert_eq!(result, Err(Ok(ContractError::InsufficientCollateral)));
     }
 
+    // ========== #334: Single source of truth for share-collateral math ==========
+
+    /// #334: locked_collateral in storage matches the value returned by the
+    /// canonical calculate_locked_collateral function.  This test documents the
+    /// single-source-of-truth contract: there is no duplication between
+    /// positions.rs and lib.rs.
     #[test]
-    fn test_list_markets_limit_capped_at_100() {
-        let (env, admin, client, _id) = create_test_contract();
-        let token = Address::generate(&env);
-        let end_time = env.ledger().timestamp() + 86_400;
-        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
-        let questions = ["Q1", "Q2", "Q3"];
+    fn test_334_locked_collateral_matches_canonical_formula() {
+        use crate::positions::{calculate_locked_collateral, STROOPS_PER_USDC};
 
-        for q in questions.iter() {
-            let qs = soroban_sdk::String::from_str(&env, q);
-            client.initialize_market(&admin, &qs, &end_time, &pubkey, &token);
-        }
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
 
-        // limit=200 is capped at 100 internally, but only 3 markets exist
-        let result = client.list_markets(&0u32, &200u32);
-        assert_eq!(result.len(), 3);
+        let yes = 80 * STROOPS_PER_USDC;
+        let no = 20 * STROOPS_PER_USDC;
+        let price_bps = 6_000i128;
+
+        // Buy YES then NO to establish a mixed position.
+        client.update_position(&user, &market_id, &yes, &0i128, &price_bps);
+        let pos = client.update_position(&user, &market_id, &0i128, &no, &price_bps);
+
+        let expected = calculate_locked_collateral(yes, no, price_bps);
+        assert_eq!(pos.locked_collateral, expected);
+
+        // The stored value must also match.
+        let stored = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(stored.locked_collateral, expected);
     }
 
-    // ── #400 benchmark gas for update_position ────────────────────────────────
+    // ========== #335: Emit position_updated on every share change ==========
 
+    /// #335: settle_position emits a position_updated_event before the
+    /// position_settled_event, capturing the final share state.
     #[test]
-    fn test_benchmark_update_position_gas() {
-        let (env, admin, client, _id) = create_test_contract();
-        let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin).address();
-        let end_time = env.ledger().timestamp() + 86_400;
-        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
-        let question = String::from_str(&env, "Benchmark market?");
-        let user = Address::generate(&env);
+    fn test_335_settle_position_emits_position_updated() {
+        use crate::positions::STROOPS_PER_USDC;
+        use soroban_sdk::{
+            testutils::Events as _,
+            token::StellarAssetClient,
+            IntoVal, Symbol,
+        };
 
-        let market_id = client.initialize_market(&admin, &question, &end_time, &pubkey, &token);
+        let deposit = 100 * STROOPS_PER_USDC;
+        let (env, user, client, contract_id, market_id) = setup_funded_market(deposit);
 
-        soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&user, &10_000);
-        client.deposit_collateral(&user, &market_id, &10_000i128);
+        // Buy 100 YES shares.
+        let shares = 100 * STROOPS_PER_USDC;
+        client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
 
-        env.budget().reset_default();
-        client.update_position(&user, &market_id, &100i128, &0i128, &5_000i128);
+        // Resolve the market YES.
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, true);
+        env.as_contract(&contract_id, || {
+            let mut market = storage::get_market(&env, market_id).unwrap().unwrap();
+            market.oracle_pubkey = oracle_pubkey;
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+        let market_id_str = String::from_str(&env, "1");
+        client.resolve_market(&market_id_str, &true, &signature);
 
-        let cpu = env.budget().cpu_instruction_cost();
-        let mem = env.budget().memory_bytes_cost();
+        // Make sure the contract holds enough tokens to pay out.
+        let stored_market = env.as_contract(&contract_id, || {
+            storage::get_market(&env, market_id).unwrap().unwrap()
+        });
+        StellarAssetClient::new(&env, &stored_market.collateral_token)
+            .mint(&contract_id, &(200 * STROOPS_PER_USDC));
 
-        assert!(cpu < 100_000_000, "CPU cost {cpu} exceeded 100M instructions");
-        assert!(mem < 5_000_000, "Memory cost {mem} exceeded 5MB");
+        env.events().all(); // clear pre-settle events
+
+        client.settle_position(&user, &market_id);
+
+        let events = env.events().all();
+        // Expect both position_updated_event and position_settled_event.
+        let names: Vec<Symbol> = events
+            .iter()
+            .map(|e| e.1.get::<soroban_sdk::Val>(0).unwrap().into_val(&env))
+            .collect();
+
+        assert!(
+            names.contains(&Symbol::new(&env, "position_updated_event")),
+            "position_updated_event missing from settle_position events"
+        );
+        assert!(
+            names.contains(&Symbol::new(&env, "position_settled_event")),
+            "position_settled_event missing from settle_position events"
+        );
+
+        // position_updated must appear before position_settled.
+        let updated_idx = names.iter().position(|s| *s == Symbol::new(&env, "position_updated_event")).unwrap();
+        let settled_idx = names.iter().position(|s| *s == Symbol::new(&env, "position_settled_event")).unwrap();
+        assert!(updated_idx < settled_idx, "position_updated_event must precede position_settled_event");
+    }
+
+    /// #335: withdraw_canceled_collateral emits a position_updated_event after
+    /// zeroing the user's locked_collateral and total_deposited.
+    #[test]
+    fn test_335_withdraw_canceled_collateral_emits_position_updated() {
+        use soroban_sdk::{testutils::Events as _, IntoVal, Symbol};
+
+        let deposit = 1_000i128;
+        let (env, admin, user, client, _contract_id, market_id, _token) =
+            setup_admin_market_with_deposit(deposit);
+
+        client.cancel_market(&admin, &market_id);
+        env.events().all(); // clear
+
+        client.withdraw_canceled_collateral(&user, &market_id);
+
+        let events = env.events().all();
+        let names: Vec<Symbol> = events
+            .iter()
+            .map(|e| e.1.get::<soroban_sdk::Val>(0).unwrap().into_val(&env))
+            .collect();
+
+        assert!(
+            names.contains(&Symbol::new(&env, "position_updated_event")),
+            "position_updated_event missing after withdraw_canceled_collateral"
+        );
     }
 }

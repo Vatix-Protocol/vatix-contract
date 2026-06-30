@@ -76,7 +76,10 @@ pub fn withdraw_unused_collateral(
         .total_deposited
         .saturating_sub(position.locked_collateral);
 
-    emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    // Only emit the fee event when a non-zero fee is actually deducted (#345).
+    if fee_amount > 0 {
+        emit_fee_calculated(&env, market_id, &user, fee_amount, available);
+    }
 
     let total_required = amount
         .checked_add(fee_amount)
