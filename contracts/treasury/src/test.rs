@@ -505,3 +505,68 @@ fn new_admin_can_withdraw_after_transfer() {
     s.client.withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
     assert_eq!(s.client.token_balance(&s.token), 0);
 }
+
+// ── pause / unpause (#403) ────────────────────────────────────────────────────
+
+#[test]
+fn is_paused_defaults_to_false() {
+    let s = setup();
+    assert!(!s.client.is_paused());
+}
+
+#[test]
+fn pause_blocks_collect_fee() {
+    let s = setup();
+    s.client.pause(&s.admin);
+    assert!(s.client.is_paused());
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &100i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+#[test]
+fn pause_blocks_withdraw_fees() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client.pause(&s.admin);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &100_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+#[test]
+fn unpause_restores_operations() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.pause(&s.admin);
+    s.client.unpause(&s.admin);
+    assert!(!s.client.is_paused());
+    // collect_fee works again
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    assert_eq!(s.client.token_balance(&s.token), 500_000);
+}
+
+#[test]
+fn pause_rejects_non_admin() {
+    let s = setup();
+    let rando = Address::generate(&s.env);
+    let err = s.client.try_pause(&rando).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+}
+
+#[test]
+fn unpause_rejects_non_admin() {
+    let s = setup();
+    s.client.pause(&s.admin);
+    let rando = Address::generate(&s.env);
+    let err = s.client.try_unpause(&rando).unwrap_err().unwrap();
+    assert_eq!(err, TreasuryError::Unauthorized);
+}

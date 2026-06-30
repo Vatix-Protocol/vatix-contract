@@ -284,6 +284,7 @@ impl MarketContract {
 
         // 5. Store market
         storage::set_market(&env, market_id, &market)?;
+        storage::append_market_id(&env, market_id);
 
         // 6. Emit event
         events::emit_market_created(&env, market_id, &creator, &question, end_time);
@@ -767,10 +768,12 @@ impl MarketContract {
     /// Set the withdrawal fee rate in basis points (0–10_000).
     ///
     /// Only the stored admin may call this. A rate of 0 disables fees.
+    /// The rate must not exceed the configured fee cap (see `set_fee_cap`).
     ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
     /// - [`ContractError::InvalidPrice`] — `fee_rate_bps` outside 0–10_000.
+    /// - [`ContractError::FeeCapExceeded`] — `fee_rate_bps` exceeds the fee cap.
     pub fn set_fee_rate(
         env: Env,
         admin: Address,
@@ -783,6 +786,10 @@ impl MarketContract {
             return Err(ContractError::NotAdmin);
         }
         validation::validate_fee_rate_bps(fee_rate_bps)?;
+        let cap = storage::get_fee_cap_bps(&env);
+        if fee_rate_bps > cap {
+            return Err(ContractError::FeeCapExceeded);
+        }
         storage::set_fee_rate_bps(&env, fee_rate_bps);
         Ok(())
     }
@@ -1114,5 +1121,40 @@ impl MarketContract {
         user: Address,
     ) -> Result<Option<Position>, ContractError> {
         storage::get_position(&env, market_id, &user)
+    }
+
+    /// Return the current fee cap in basis points (defaults to 10_000 when unset).
+    pub fn get_fee_cap(env: Env) -> i128 {
+        storage::get_fee_cap_bps(&env)
+    }
+
+    /// Return a paginated slice of markets ordered by creation.
+    ///
+    /// # Arguments
+    /// * `start` - Zero-based index into the ordered list of markets.
+    /// * `limit` - Maximum number of markets to return (capped at 100).
+    ///
+    /// # Returns
+    /// A `Vec<Market>` of up to `limit` markets starting at `start`.
+    /// Returns an empty vec when `start` is beyond the end of the list.
+    pub fn list_markets(
+        env: Env,
+        start: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<crate::types::Market>, ContractError> {
+        let ids = storage::get_market_ids(&env);
+        let total = ids.len();
+        let limit = limit.min(100);
+        let mut result = soroban_sdk::Vec::new(&env);
+        let end = (start + limit).min(total);
+        let mut i = start;
+        while i < end {
+            let market_id = ids.get(i).unwrap();
+            if let Some(market) = storage::get_market(&env, market_id)? {
+                result.push_back(market);
+            }
+            i += 1;
+        }
+        Ok(result)
     }
 }

@@ -39,6 +39,10 @@ pub enum TreasuryError {
     /// `initialize` has already been called.
     AlreadyInitialized = 42,
 
+    // ── Pause (50–59) ─────────────────────────────────────────────────────────
+    /// The treasury is paused; fee collection and withdrawals are suspended.
+    ContractPaused = 50,
+
     // ── Arithmetic (60–69) ────────────────────────────────────────────────────
     /// Arithmetic operation overflowed.
     ArithmeticOverflow = 60,
@@ -58,5 +62,6 @@ mod tests {
         assert_eq!(TreasuryError::Unauthorized as u32, 41);
         assert_eq!(TreasuryError::AlreadyInitialized as u32, 42);
         assert_eq!(TreasuryError::ArithmeticOverflow as u32, 60);
+        assert_eq!(TreasuryError::ContractPaused as u32, 50);
     }
 }

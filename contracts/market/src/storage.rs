@@ -184,12 +184,8 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 /// Register (or replace) the treasury contract address for protocol fee routing.
-/// Pass `None` to remove the treasury and disable fee routing.
-pub fn set_treasury(env: &Env, treasury: &Option<Address>) {
-    match treasury {
-        Some(addr) => env.storage().persistent().set(&StorageKey::Treasury, addr),
-        None => env.storage().persistent().remove(&StorageKey::Treasury),
-    }
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage().persistent().set(&StorageKey::Treasury, treasury);
 }
 
 pub fn has_treasury(env: &Env) -> bool {
@@ -533,13 +529,9 @@ mod test {
             assert!(!has_treasury(&env));
             assert_eq!(get_treasury(&env), None);
 
-            set_treasury(&env, &Some(treasury.clone()));
+            set_treasury(&env, &treasury);
             assert!(has_treasury(&env));
             assert_eq!(get_treasury(&env), Some(treasury.clone()));
-
-            set_treasury(&env, &None);
-            assert!(!has_treasury(&env));
-            assert_eq!(get_treasury(&env), None);
         });
     }
 
