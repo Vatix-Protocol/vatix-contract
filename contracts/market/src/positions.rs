@@ -257,7 +257,7 @@ pub fn update_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types;
+    use crate::types::{self, AdapterType};
     use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
 
     fn setup_env() -> Env {

@@ -738,7 +738,7 @@ impl MarketContract {
     ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
-    pub fn set_treasury(
+    pub fn set_treasury_contract(
         env: Env,
         admin: Address,
         treasury: Address,
