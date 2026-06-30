@@ -110,6 +110,9 @@ pub fn deposit_collateral(
     // Persist updated position
     storage::set_position(&env, market_id, &user, &position)?;
 
+    // Record deposit timestamp for cooldown enforcement on withdrawals (issue #413).
+    storage::set_last_deposit_time(&env, market_id, &user, env.ledger().timestamp());
+
     // TODO(#issue): consider batching deposit events for gas efficiency
     // Emit event
     emit_collateral_deposited(&env, &user, market_id, amount, position.total_deposited);

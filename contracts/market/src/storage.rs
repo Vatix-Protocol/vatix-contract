@@ -226,6 +226,40 @@ pub fn set_threshold_quorum(env: &Env, quorum: u32) {
     env.storage().persistent().set(&StorageKey::ThresholdQuorum, &quorum);
 }
 
+// --- Deposit Timestamp Storage (issue #413) ---
+
+pub fn get_last_deposit_time(env: &Env, market_id: u32, user: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::LastDepositTime(market_id, user.clone()))
+}
+
+pub fn set_last_deposit_time(env: &Env, market_id: u32, user: &Address, timestamp: u64) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::LastDepositTime(market_id, user.clone()), &timestamp);
+}
+
+// --- Pending Renounce Storage (issue #414) ---
+
+pub fn has_pending_renounce(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::PendingRenounce)
+}
+
+pub fn set_pending_renounce(env: &Env) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingRenounce, &true);
+}
+
+pub fn clear_pending_renounce(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingRenounce);
+}
+
+pub fn clear_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::Admin);
+}
+
 // --- Fee Config Storage ---
 
 pub fn get_fee_rate_bps(env: &Env) -> i128 {

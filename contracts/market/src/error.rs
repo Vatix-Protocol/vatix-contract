@@ -52,6 +52,9 @@ pub enum ContractError {
     /// Only Active markets accept new trades and collateral deposits.
     MarketNotActive = 5,
 
+    /// Withdraw attempted before the cooldown period since the last deposit has elapsed.
+    WithdrawCooldownActive = 6,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -151,6 +154,12 @@ pub enum ContractError {
     /// `accept_admin` was called but `propose_admin` has not been issued yet,
     /// or the previous proposal was already accepted.
     NoPendingAdmin = 43,
+
+    /// `confirm_renounce_admin` was called but no renounce proposal is pending.
+    NoRenounceProposal = 44,
+
+    /// A renounce proposal is already pending; cannot propose again until confirmed or canceled.
+    RenounceAlreadyProposed = 45,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed (insufficient balance, approval, etc.).

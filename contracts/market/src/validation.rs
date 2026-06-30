@@ -2,6 +2,9 @@ use crate::error::ContractError;
 use crate::types::MarketStatus;
 use soroban_sdk::{Env, String};
 
+/// Minimum collateral deposit in stroops (1 USDC = 10_000_000 stroops).
+pub const MIN_DEPOSIT_AMOUNT: i128 = 10_000_000;
+
 /// Guard function to validate input before processing.
 ///
 /// This is a general-purpose validation guard that can be used in integration tests
@@ -75,10 +78,19 @@ fn validate_amount_reasonable(amount: i128) -> Result<(), ContractError> {
     Ok(())
 }
 
-/// Validates collateral amount
+/// Validates collateral amount (used for withdrawals — no minimum enforced).
 pub fn validate_collateral_amount(amount: i128) -> Result<(), ContractError> {
     validate_amount_positive(amount)?;
     validate_amount_reasonable(amount)?;
+    Ok(())
+}
+
+/// Validates a deposit amount, enforcing the protocol minimum of MIN_DEPOSIT_AMOUNT.
+pub fn validate_deposit_amount(amount: i128) -> Result<(), ContractError> {
+    validate_collateral_amount(amount)?;
+    if amount < MIN_DEPOSIT_AMOUNT {
+        return Err(ContractError::BelowMinDeposit);
+    }
     Ok(())
 }
 
