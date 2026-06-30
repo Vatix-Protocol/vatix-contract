@@ -38,7 +38,7 @@ mod test;
 
 use crate::error::ContractError;
 use crate::types::{CandidateStatus, ResolutionCandidate, ResolutionConfig};
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, String};
 use soroban_sdk::{IntoVal, Symbol, Val, Vec};
 
 const MIN_CHALLENGE_WINDOW_SECONDS: u64 = 60;
@@ -284,6 +284,56 @@ impl ResolutionContract {
 
     pub fn get_candidate_id_for_market(env: Env, market_id: u32) -> Option<u32> {
         storage::get_candidate_id_for_market(&env, market_id)
+    }
+
+    // ── #381: Proposer collateral ──────────────────────────────────────────────
+
+    pub fn deposit_collateral(
+        env: Env,
+        proposer: Address,
+        collateral_token: Address,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        proposer.require_auth();
+        if amount <= 0 {
+            return Err(ContractError::InvalidCollateral);
+        }
+        token::Client::new(&env, &collateral_token).transfer(
+            &proposer,
+            &env.current_contract_address(),
+            &amount,
+        );
+        let prev = storage::get_proposer_collateral(&env, &proposer);
+        storage::set_proposer_collateral(&env, &proposer, prev + amount);
+        Ok(())
+    }
+
+    /// Slash the full collateral of an incorrect proposer (admin only).
+    pub fn slash_collateral(
+        env: Env,
+        admin: Address,
+        proposer: Address,
+        collateral_token: Address,
+        recipient: Address,
+    ) -> Result<i128, ContractError> {
+        admin.require_auth();
+        let config = storage::get_config(&env);
+        require_admin(&admin, &config)?;
+        let amount = storage::get_proposer_collateral(&env, &proposer);
+        if amount <= 0 {
+            return Err(ContractError::InsufficientCollateral);
+        }
+        storage::set_proposer_collateral(&env, &proposer, 0);
+        token::Client::new(&env, &collateral_token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &amount,
+        );
+        Ok(amount)
+    }
+
+    pub fn get_proposer_collateral(env: Env, proposer: Address) -> i128 {
+        storage::get_proposer_collateral(&env, &proposer)
     }
 }
 

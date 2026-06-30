@@ -1,6 +1,7 @@
 use crate::{ContractError, ResolutionContract, ResolutionContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
+    token::{Client as TokenClient, StellarAssetClient},
     Address, BytesN, Env, String,
 };
 
