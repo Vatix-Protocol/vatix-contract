@@ -44,7 +44,7 @@ fn create_market_then_deposit_collateral() {
         &params.collateral_token,
     );
     assert_eq!(market_id, 1);
-    assert_event_emitted(&env, "market_created_event");
+    assert_event_emitted(&env, "market_created");
 
     let market = env.as_contract(&contract_id, || {
         storage::get_market(&env, market_id)
@@ -57,7 +57,7 @@ fn create_market_then_deposit_collateral() {
     let deposit = 25 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
-    assert_event_emitted(&env, "collateral_deposited_event");
+    assert_event_emitted(&env, "collateral_deposited");
 
     let position = env.as_contract(&contract_id, || {
         storage::get_position(&env, market_id, &user)
@@ -121,14 +121,14 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     let market_id =
         client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
     assert_eq!(market_id, 1);
-    assert_event_emitted(&env, "market_created_event");
+    assert_event_emitted(&env, "market_created");
 
     // 2. Deposit collateral: tokens move from the user into the contract.
     let user = Address::generate(&env);
     let deposit = 100 * STROOPS_PER_USDC;
     sac.mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
-    assert_event_emitted(&env, "collateral_deposited_event");
+    assert_event_emitted(&env, "collateral_deposited");
     assert_eq!(token_client.balance(&user), 0);
     assert_eq!(token_client.balance(&contract_id), deposit);
 
@@ -146,7 +146,7 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     let signature = helpers::sign_outcome(&env, &signing_key, market_id, outcome);
     let market_id_str = String::from_str(&env, "1");
     client.resolve_market(&market_id_str, &outcome, &signature);
-    assert_event_emitted(&env, "market_resolved_event");
+    assert_event_emitted(&env, "market_resolved");
     let resolved = env.as_contract(&contract_id, || {
         storage::get_market(&env, market_id)
             .unwrap()
@@ -159,7 +159,7 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     //    from the contract back to the user.
     let payout = client.settle_position(&user, &market_id);
     assert_eq!(payout, yes_shares);
-    assert_event_emitted(&env, "position_settled_event");
+    assert_event_emitted(&env, "position_settled");
     assert_eq!(token_client.balance(&user), payout);
     assert_eq!(token_client.balance(&contract_id), deposit - payout);
 

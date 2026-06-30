@@ -58,7 +58,7 @@ fn buying_shares_updates_position_and_locks_collateral() {
     let yes_shares = 100 * STROOPS_PER_USDC;
     let position = client.update_position(&user, &market_id, &yes_shares, &0i128, &5_000i128);
     // The last emitted event should be trade_executed
-    assert_event_emitted(&env, "trade_executed_event");
+    assert_event_emitted(&env, "trade_executed");
 
     assert_eq!(position.yes_shares, yes_shares);
     assert_eq!(position.no_shares, 0);
