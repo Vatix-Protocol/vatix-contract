@@ -1,4 +1,32 @@
 #![no_std]
+#![deny(clippy::all)]
+
+//! # Resolution Contract
+//!
+//! Provides a challenge-based resolution lifecycle for Vatix prediction markets.
+//! Proposers submit signed oracle outcomes; challengers can dispute them within
+//! a configurable window; after the window closes an unchallenged candidate can
+//! be finalized, which triggers `resolve_market` on the registered market
+//! contract.
+//!
+//! ## Lifecycle
+//!
+//! ```text
+//!  Propose (signed outcome + evidence URI)
+//!      │
+//!      ├── (window passes) ──► Finalize ──► market.resolve_market()
+//!      │
+//!      └── Challenge ──► status = Challenged (cannot finalize)
+//! ```
+//!
+//! ## Storage layout
+//!
+//! | Key                            | Type                  | Description                                   |
+//! |--------------------------------|-----------------------|-----------------------------------------------|
+//! | `Config`                       | `ResolutionConfig`    | Admin, factory, and market contract addresses |
+//! | `CandidateCounter`             | `u32`                 | Auto-increment counter for candidate IDs      |
+//! | `Candidate(u32)`               | `ResolutionCandidate` | Per-candidate resolution data                  |
+//! | `CandidateByMarket(u32)`       | `u32`                 | Maps market_id → candidate_id (latest)        |
 
 mod error;
 mod events;

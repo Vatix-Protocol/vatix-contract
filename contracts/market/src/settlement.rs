@@ -83,6 +83,18 @@ pub fn execute_settlement(
 
     position.is_settled = true;
 
+    // Emit PositionUpdated so indexers observe the share balance zeroing out
+    // on settlement (yes_shares and no_shares are consumed; locked_collateral
+    // drops to 0 because the position is fully settled).
+    crate::events::emit_position_updated(
+        env,
+        position.market_id,
+        &position.user,
+        position.yes_shares,
+        position.no_shares,
+        0,
+    );
+
     // Emit event
     let settled_at = env.ledger().timestamp();
     crate::events::emit_position_settled(
