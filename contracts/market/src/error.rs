@@ -171,6 +171,18 @@ pub enum ContractError {
     ///
     /// Call `ResolutionContract::finalize` first, then retry `resolve_market`.
     ResolutionNotFinalized = 80,
+
+    // ========== Pause / Initialization Errors (90-99) ==========
+    /// The contract has not been initialized yet.
+    ///
+    /// Admin operations are rejected until `initialize` is called.
+    NotInitialized = 90,
+
+    /// The contract is paused for emergency maintenance.
+    ///
+    /// All state-mutating operations are temporarily disabled.
+    ContractPaused = 91,
+
 }
 
 #[cfg(test)]
@@ -202,6 +214,9 @@ mod tests {
         assert_eq!(ContractError::NoPendingAdmin as u32, 43);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
         assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
+        assert_eq!(ContractError::NotInitialized as u32, 90);
+        assert_eq!(ContractError::ContractPaused as u32, 91);
+
     }
 
     #[test]
