@@ -725,6 +725,98 @@ mod test {
         client.update_position(&user, &market_id, &yes, &0i128, &6000i128);
     }
 
+    // ========== set_fee_rate_bps / get_fee_rate_bps tests ==========
+
+    #[test]
+    fn test_get_fee_rate_bps_default_is_50() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        assert_eq!(client.get_fee_rate_bps(), 50u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_admin_can_update() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &100u32);
+        assert_eq!(client.get_fee_rate_bps(), 100u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_zero_is_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &0u32);
+        assert_eq!(client.get_fee_rate_bps(), 0u32);
+    }
+
+    #[test]
+    fn test_set_fee_rate_bps_max_boundary_valid() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_000u32);
+        assert_eq!(client.get_fee_rate_bps(), 10_000u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #34)")]
+    fn test_set_fee_rate_bps_exceeds_max_rejected() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+        client.set_fee_rate_bps(&admin, &10_001u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #41)")]
+    fn test_set_fee_rate_bps_non_admin_rejected() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+        let non_admin = Address::generate(&env);
+        client.set_fee_rate_bps(&non_admin, &50u32);
+    }
+
+    // ========== token_balance tests ==========
+
+    #[test]
+    fn test_token_balance_returns_contract_balance() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        // Mint directly to the market contract to simulate held collateral.
+        sac.mint(&contract_id, &500i128);
+
+        assert_eq!(client.token_balance(&collateral_token), 500i128);
+    }
+
+    #[test]
+    fn test_token_balance_zero_when_no_funds() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+
+        assert_eq!(client.token_balance(&collateral_token), 0i128);
+    }
+
     // ========== Validation guard tests ==========
 
     #[test]
