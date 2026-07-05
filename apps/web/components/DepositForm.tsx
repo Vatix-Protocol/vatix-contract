@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
+import { TxResult } from "@/components/TxResult";
 
 interface DepositFormProps {
   /** Pre-select a market. When provided the market ID field is hidden. */

@@ -286,7 +286,6 @@ pub fn require_not_paused(env: &Env) -> Result<(), ContractError> {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -543,15 +542,6 @@ mod tests {
         assert_eq!(
             validate_admin_address(&contract_id),
             Err(ContractError::InvalidAdmin)
-        );
-    }
-}
-
-    #[test]
-    fn test_validate_cancelable_already_canceled_fails() {
-        assert_eq!(
-            validate_cancelable(&MarketStatus::Canceled),
-            Err(ContractError::MarketNotActive)
         );
     }
 

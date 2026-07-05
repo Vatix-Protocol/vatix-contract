@@ -70,10 +70,9 @@ export async function fetchContractMarkets(): Promise<GetMarketsResult> {
     if (!result || !result.val) {
       return { markets: [] };
     }
-    const data = await res.json();
-    // Accept both `{ markets: [...] }` and a bare array from the indexer.
-    const markets: RpcMarket[] = Array.isArray(data) ? data : (data.markets ?? []);
-    return { markets };
+    // getContractData returns on-chain XDR, not a JSON response.
+    // Return empty until a proper XDR decoder is wired up.
+    return { markets: [] };
   } catch {
     return { markets: [] };
   }

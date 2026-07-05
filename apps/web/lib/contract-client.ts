@@ -13,7 +13,6 @@ import {
   BASE_FEE,
   Account,
   xdr,
-  Address,
   nativeToScVal,
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "@stellar/freighter-api";
