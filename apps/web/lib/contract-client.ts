@@ -177,6 +177,11 @@ export async function invokeContract(
 /**
  * Read-only contract query (no transaction submission).
  *
+ * Simulation errors are parsed through {@link parseContractError} before
+ * being re-thrown, so callers always receive a short, user-facing message
+ * rather than a raw Soroban host trap string. This keeps UI error-handling
+ * consistent with the invoke path (see {@link invokeContract}).
+ *
  * @param contractId - The contract address
  * @param method - The contract method name
  * @param args - Array of XDR-encoded arguments for the method
@@ -229,7 +234,10 @@ export async function queryContract<T>(
     return resultValue as unknown as T;
   } catch (error) {
     console.error("Contract query error:", error);
-    throw error;
+    // Re-throw with a parsed, user-facing message so any UI error handler
+    // (toast, inline alert, etc.) can display it without further processing.
+    const { parseContractError } = await import("@/lib/errors");
+    throw new Error(parseContractError(error));
   }
 }
 

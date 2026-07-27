@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { getPosition, type PositionData } from "@/lib/contract-client";
+import { parseContractError } from "@/lib/errors";
+import { useToast } from "@/context/ToastContext";
 import { DepositForm } from "./DepositForm";
 import { WithdrawForm } from "./WithdrawForm";
 import { LoadingSkeleton } from "./LoadingSkeleton";
@@ -30,9 +32,15 @@ function formatShares(stroops: bigint): string {
  * The position is read directly from the market contract (`get_position`)
  * whenever the connected address or market changes, so the panel always
  * reflects on-chain state rather than cached/local data.
+ *
+ * Simulation failures (e.g. contract errors returned during the read-only
+ * query) are parsed through {@link parseContractError} and surfaced both as
+ * an inline alert and via the global toast so users see a recoverable,
+ * human-readable message rather than a raw SDK error string.
  */
 export function PositionPanel({ marketId }: PositionPanelProps) {
   const { address } = useWallet();
+  const { showToast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [position, setPosition] = useState<PositionData | null>(null);
@@ -51,12 +59,17 @@ export function PositionPanel({ marketId }: PositionPanelProps) {
       setPosition(result);
     } catch (err) {
       console.error("Failed to load position:", err);
-      setError(err instanceof Error ? err.message : "Failed to load position.");
+      // Parse the error into a short, user-facing message (handles Soroban
+      // host traps, simulation failures, and generic network errors) then
+      // surface it both inline and via the global toast banner.
+      const reason = parseContractError(err);
+      setError(reason);
+      showToast(reason, "error");
       setPosition(null);
     } finally {
       setIsLoading(false);
     }
-  }, [address, marketId]);
+  }, [address, marketId, showToast]);
 
   useEffect(() => {
     void refresh();
