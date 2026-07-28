@@ -3,19 +3,22 @@
 # verify-wasm-hash.sh - Verify WASM artifact consistency
 #
 # This script builds the contract and displays the SHA256 hash of the
-# resulting WASM file. Use it to verify that builds are reproducible
-# across different environments (local, CI, etc.).
+# resulting WASM file. When an expected hash is supplied, the script verifies
+# that the built artifact matches it and exits non-zero on mismatch.
 #
 # Usage:
-#   bash scripts/verify-wasm-hash.sh [contract-dir]
+#   bash scripts/verify-wasm-hash.sh [contract-dir] [expected-sha256]
 #
 # Examples:
-#   bash scripts/verify-wasm-hash.sh                    # defaults to contracts/market
+#   bash scripts/verify-wasm-hash.sh                              # defaults to contracts/market
 #   bash scripts/verify-wasm-hash.sh contracts/treasury
+#   bash scripts/verify-wasm-hash.sh contracts/market "$WASM_HASH"
+#   EXPECTED_WASM_HASH="$WASM_HASH" bash scripts/verify-wasm-hash.sh contracts/market
 #
 set -euo pipefail
 
 CONTRACT_DIR="${1:-contracts/market}"
+EXPECTED_HASH="${2:-${EXPECTED_WASM_HASH:-}}"
 
 log() { printf '[verify-wasm-hash] %s\n' "$*" >&2; }
 
@@ -48,12 +51,30 @@ log "SHA256 hash:"
 
 # Compute and display hash (works on both Linux and macOS)
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "${WASM_PATH}"
+  HASH_LINE="$(sha256sum "${WASM_PATH}")"
 elif command -v shasum >/dev/null 2>&1; then
-  shasum -a 256 "${WASM_PATH}"
+  HASH_LINE="$(shasum -a 256 "${WASM_PATH}")"
 else
   log "ERROR: Neither sha256sum nor shasum found on PATH"
   exit 1
+fi
+
+printf '%s\n' "${HASH_LINE}"
+
+ACTUAL_HASH="$(printf '%s\n' "${HASH_LINE}" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')"
+
+if [[ -n "${EXPECTED_HASH}" ]]; then
+  NORMALIZED_EXPECTED="$(printf '%s' "${EXPECTED_HASH}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${ACTUAL_HASH}" != "${NORMALIZED_EXPECTED}" ]]; then
+    log "ERROR: WASM hash mismatch."
+    log "Expected: ${NORMALIZED_EXPECTED}"
+    log "Actual:   ${ACTUAL_HASH}"
+    exit 1
+  fi
+
+  log "Hash matches expected value."
+else
+  log "No expected hash provided; skipping match verification."
 fi
 
 log ""

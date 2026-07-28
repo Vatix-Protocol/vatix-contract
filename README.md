@@ -180,10 +180,10 @@ target/wasm32v1-none/release/<contract-name>.wasm
 
 ```bash
 # Prerequisites: Rust toolchain, Soroban CLI
-cd contracts/market && cargo build
-cd ../treasury && cargo build
-cd ../outcome-token && cargo build
-cd ../resolution && cargo build
+cd contracts/market && stellar contract build
+cd ../treasury && stellar contract build
+cd ../outcome-token && stellar contract build
+cd ../resolution && stellar contract build
 ```
 
 ### Workspace compile check
@@ -274,14 +274,18 @@ To verify your local WASM matches what CI produces, compare hashes:
 cd contracts/market
 stellar contract build
 
-# Compute and verify hash
+# Compute and print the built hash
 bash ../../scripts/verify-wasm-hash.sh contracts/market
+
+# Or verify against an expected SHA-256 value
+bash ../../scripts/verify-wasm-hash.sh contracts/market "<expected-sha256>"
 
 # Or use the Makefile target
 make verify
 ```
 
-The script outputs the SHA256 hash of the WASM artifact. Compare this with:
+The script outputs the SHA256 hash of the WASM artifact. When an expected hash
+is supplied, it exits non-zero on mismatch and zero on match. Compare this with:
 - CI build artifacts (download from GitHub Actions)
 - Builds from other developers
 - Previously deployed contract hashes
@@ -318,6 +322,12 @@ stellar contract build
 
 # Or use the Makefile convenience target
 make build
+
+# Run the market contract tests from the repo root
+make -C contracts/market test
+
+# Run the formatting check against the committed rustfmt config
+cargo fmt --check --manifest-path contracts/market/Cargo.toml
 ```
 
 The Makefile, CI workflow (`.github/workflows/ci.yml`), and deployment scripts (`scripts/deploy-testnet.sh`) all use this same command to guarantee artifact consistency.

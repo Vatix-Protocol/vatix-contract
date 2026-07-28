@@ -73,5 +73,5 @@ Generated JSON is gitignored; re-run anytime for a fresh local export.
 
 ## Tooling config
 
-- **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
-- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides `build`, `test`, `fmt`, and `clean` targets. Each target currently includes an echo-guard comment explaining what the real implementation should do. Replace these guards with the actual commands once the build pipeline is finalized.
+- **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). CI runs `cd contracts/market && cargo fmt --check` against that config, so local formatting should use the same command.
+- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides real `build`, `test`, `fmt`, and `clean` targets. Run `make -C contracts/market test` to execute the market contract test suite via `cargo test`.

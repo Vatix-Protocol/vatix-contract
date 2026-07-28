@@ -15,7 +15,7 @@ default: build
 all: test
 
 # Run the full unit + integration test suite for the contract.
-test: build
+test:
 	cargo test
 
 # Compile the contract to its deployable WASM binary using the canonical command.

@@ -37,7 +37,8 @@
 
 use crate::error::ContractError;
 use crate::events::{
-    emit_collateral_withdrawn, emit_fee_calculated, emit_large_withdraw, emit_withdraw_edge_case,
+    emit_collateral_withdrawn, emit_fee_calculated, emit_fee_retained_no_treasury,
+    emit_large_withdraw, emit_withdraw_edge_case,
 };
 use crate::storage;
 use crate::types::{MarketStatus, Position};

@@ -25,6 +25,13 @@ fn fee_for(amount: i128) -> i128 {
     amount * FEE_BPS / BPS_DENOM
 }
 
+fn advance_past_withdraw_cooldown(env: &Env) {
+    let now = env.ledger().timestamp();
+    env.ledger().with_mut(|li| {
+        li.timestamp = now + 3_601;
+    });
+}
+
 /// Deploy market + treasury, wire them together, return their addresses and helpers.
 fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
@@ -86,6 +93,7 @@ fn withdraw_routes_half_percent_fee_to_treasury() {
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
 
     let withdraw_amount = 50 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -121,6 +129,7 @@ fn multiple_withdrawals_accumulate_fees() {
     let deposit = 500 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
 
     let w1 = 100 * STROOPS_PER_USDC;
     let w2 = 200 * STROOPS_PER_USDC;
@@ -163,6 +172,7 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     let deposit = 50 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
 
     // Calculate how much we can actually withdraw: available - fee
     // With 50 bps fee: withdraw = deposit / (1 + 0.005) ≈ deposit * 0.995
@@ -176,6 +186,114 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
         TokenClient::new(&env, &token).balance(&user),
         expected_user_balance,
         "no treasury → user receives amount minus fee (fee retained in contract)"
+    );
+}
+
+#[test]
+fn waived_user_skips_fee_and_normal_user_still_pays() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+
+    let market_id = open_market(&env, &market, &admin, &token);
+
+    let waived_user = Address::generate(&env);
+    let normal_user = Address::generate(&env);
+    let deposit = 100 * STROOPS_PER_USDC;
+    let withdraw_amount = 40 * STROOPS_PER_USDC;
+    let expected_fee = fee_for(withdraw_amount);
+
+    StellarAssetClient::new(&env, &token).mint(&waived_user, &deposit);
+    StellarAssetClient::new(&env, &token).mint(&normal_user, &deposit);
+
+    market.deposit_collateral(&waived_user, &market_id, &deposit);
+    market.deposit_collateral(&normal_user, &market_id, &deposit);
+    market.add_fee_waiver(&admin, &waived_user);
+    assert!(market.is_fee_waived(&waived_user));
+
+    advance_past_withdraw_cooldown(&env);
+
+    market.withdraw_unused_collateral(&waived_user, &market_id, &withdraw_amount);
+    market.withdraw_unused_collateral(&normal_user, &market_id, &withdraw_amount);
+
+    assert_eq!(
+        TokenClient::new(&env, &token).balance(&waived_user),
+        withdraw_amount,
+        "waived user receives the full withdrawal amount"
+    );
+    assert_eq!(
+        TokenClient::new(&env, &token).balance(&normal_user),
+        withdraw_amount,
+        "normal user also receives the full requested amount"
+    );
+    assert_eq!(
+        treasury.token_balance(&token),
+        expected_fee,
+        "only the non-waived withdrawal contributes a fee"
+    );
+
+    let waived_position =
+        market.get_position(&waived_user, &market_id).expect("waived position missing");
+    let normal_position =
+        market.get_position(&normal_user, &market_id).expect("normal position missing");
+
+    assert_eq!(
+        waived_position.total_deposited,
+        deposit - withdraw_amount,
+        "waived withdrawal should not deduct any fee from position collateral"
+    );
+    assert_eq!(
+        normal_position.total_deposited,
+        deposit - withdraw_amount - expected_fee,
+        "normal withdrawal still deducts the configured fee"
+    );
+}
+
+#[test]
+fn removing_fee_waiver_restores_fees() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+
+    let market_id = open_market(&env, &market, &admin, &token);
+
+    let user = Address::generate(&env);
+    let deposit = 200 * STROOPS_PER_USDC;
+    let withdraw_amount = 40 * STROOPS_PER_USDC;
+    let expected_fee = fee_for(withdraw_amount);
+
+    StellarAssetClient::new(&env, &token).mint(&user, &deposit);
+    market.deposit_collateral(&user, &market_id, &deposit);
+    market.add_fee_waiver(&admin, &user);
+    assert!(market.is_fee_waived(&user));
+
+    advance_past_withdraw_cooldown(&env);
+    market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
+
+    let after_waived = market
+        .get_position(&user, &market_id)
+        .expect("position should exist after waived withdrawal");
+    assert_eq!(treasury.token_balance(&token), 0);
+    assert_eq!(after_waived.total_deposited, deposit - withdraw_amount);
+
+    market.remove_fee_waiver(&admin, &user);
+    assert!(!market.is_fee_waived(&user));
+
+    advance_past_withdraw_cooldown(&env);
+    market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
+
+    let after_removed = market
+        .get_position(&user, &market_id)
+        .expect("position should exist after non-waived withdrawal");
+    assert_eq!(
+        treasury.token_balance(&token),
+        expected_fee,
+        "fee collection resumes after waiver removal"
+    );
+    assert_eq!(
+        after_removed.total_deposited,
+        deposit - (2 * withdraw_amount) - expected_fee,
+        "second withdrawal should deduct the fee once the waiver is removed"
     );
 }
 
@@ -193,6 +311,7 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
     let deposit = 200 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
 
     let withdraw_amount = 100 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -262,6 +381,7 @@ fn admin_can_set_fee_rate() {
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
     market.withdraw_unused_collateral(&user, &market_id, &deposit);
 
     assert_eq!(
@@ -314,6 +434,7 @@ fn full_withdraw_treasury_fee_flow() {
     let deposit = 200 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    advance_past_withdraw_cooldown(&env);
 
     // Withdraw half — fee is deducted and routed to treasury
     let w1 = 80 * STROOPS_PER_USDC;
@@ -355,6 +476,7 @@ fn partial_withdraw_treasury_fees() {
     let user = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&user, &(200 * STROOPS_PER_USDC));
     market.deposit_collateral(&user, &market_id, &(200 * STROOPS_PER_USDC));
+    advance_past_withdraw_cooldown(&env);
     market.withdraw_unused_collateral(&user, &market_id, &(100 * STROOPS_PER_USDC));
 
     let total_fee = fee_for(100 * STROOPS_PER_USDC); // 50 bps
@@ -417,6 +539,7 @@ fn admin_transfer_preserves_withdraw_capability() {
     let user = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&user, &(100 * STROOPS_PER_USDC));
     market.deposit_collateral(&user, &market_id, &(100 * STROOPS_PER_USDC));
+    advance_past_withdraw_cooldown(&env);
     market.withdraw_unused_collateral(&user, &market_id, &(50 * STROOPS_PER_USDC));
     let expected_fee = fee_for(50 * STROOPS_PER_USDC);
 
@@ -473,4 +596,3 @@ fn withdraw_invalid_amount_rejected() {
         "negative amount must be rejected"
     );
 }
-
