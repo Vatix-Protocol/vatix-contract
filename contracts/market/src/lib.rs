@@ -183,14 +183,34 @@ impl MarketContract {
         // 2. Require authorization from the admin
         admin.require_auth();
         
-        // 3. Check if already initialized
+        // 3. Guard against double-initialization using the stored admin as the
+        //    canonical "already initialized" sentinel. This is the same value
+        //    that require_initialized checks, so the rejection is consistent
+        //    with every other function's initialization guard.
         if storage::has_admin(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
         
-        // 4. Set admin and version
-        storage::set_admin(&env, &admin);
+        // 4. Write version BEFORE writing admin.
+        //
+        //    If the transaction is interrupted between the two writes (e.g. due
+        //    to an out-of-gas or host error), we want the contract to be left
+        //    in the least-dangerous incomplete state:
+        //
+        //    - Version set, admin NOT set: has_admin() == false, so a retry of
+        //      initialize() will succeed and complete the setup. The contract
+        //      is effectively unowned and all require_initialized guards still
+        //      fail, so no state-mutating function can be called.
+        //
+        //    - Admin set, version NOT set: has_admin() == true, so a retry of
+        //      initialize() returns AlreadyInitialized — the contract is
+        //      permanently locked out of initialization while storage accessors
+        //      that call assert_version() return UpgradeRequired. The contract
+        //      is bricked with no recovery path short of redeployment.
+        //
+        //    Writing version first avoids the bricked state entirely.
         storage::set_version(&env);
+        storage::set_admin(&env, &admin);
         
         // 5. Emit initialization event
         events::emit_contract_initialized(&env, &admin);
