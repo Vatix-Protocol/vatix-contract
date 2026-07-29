@@ -147,6 +147,13 @@ pub fn deposit_collateral(
     // Persist updated position
     storage::set_position(&env, market_id, &user, &position)?;
 
+    // Track first-time participants so the market can later be settled
+    // page-by-page via `settle_positions_page` (Issue #495) without
+    // requiring an off-chain index of every depositor. Idempotent — safe
+    // to call on every deposit; the helper only appends when the address
+    // is not already present.
+    storage::add_market_participant(&env, market_id, &user);
+
     // Record deposit timestamp for cooldown enforcement on withdrawals (issue #413).
     storage::set_last_deposit_time(&env, market_id, &user, env.ledger().timestamp());
 
