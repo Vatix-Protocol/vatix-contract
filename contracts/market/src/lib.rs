@@ -1048,6 +1048,13 @@ impl MarketContract {
     ///   time in [`Self::set_fee_rate`]) so a cap lowered by the admin while a
     ///   change is in flight cannot let a stale, now-excessive rate through.
     pub fn execute_fee_rate_change(env: Env) -> Result<i128, ContractError> {
+        // Guard: contract must be fully initialized before a pending fee-rate
+        // change can be applied. Without this check a caller could observe a
+        // PendingFeeRate entry that was somehow written before initialization
+        // completed and apply it, writing FeeRateBps storage before the admin
+        // is set and leaving the contract in an inconsistent state.
+        validation::require_initialized(&env)?;
+
         let pending = storage::get_pending_fee_rate_change(&env)
             .ok_or(ContractError::NoPendingFeeChange)?;
         if env.ledger().timestamp() < pending.effective_at {
