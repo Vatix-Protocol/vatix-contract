@@ -101,7 +101,16 @@ pub fn deposit_collateral(
         return Err(ContractError::MarketClosedToDeposits);
     }
 
-    if env.ledger().timestamp() > market.end_time {
+    // Reject deposits at or after end_time. A market expires the moment the
+    // ledger timestamp reaches end_time, so a deposit submitted in the same
+    // ledger second as expiry must be rejected (>= not just >).
+    //
+    // Using strict greater-than (>) would admit a deposit at exactly
+    // end_time, which is inside the expired window from the market's
+    // perspective — the same ledger second is simultaneously the last
+    // valid trading instant and the first expired one, so we treat it as
+    // expired and reject it.
+    if env.ledger().timestamp() >= market.end_time {
         return Err(ContractError::MarketExpired);
     }
 
