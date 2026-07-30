@@ -25,6 +25,8 @@
 //! | `AdminTransferProposed`  | `admin_transfer_proposed`           |
 //! | `AdminTransferAccepted`  | `admin_transfer_accepted`           |
 //! | `AdminTransferCanceled`  | `admin_transfer_canceled`           |
+//! | `PositionTokenMismatchDetected` | `position_token_mismatch_detected` |
+//! | `PositionTokensReconciled`      | `position_tokens_reconciled`       |
 //!
 //! # Event schema versioning (Issue #500)
 //!
@@ -71,7 +73,7 @@ pub fn emit_contract_initialized(env: &Env, admin: &Address) {
 /// Event emitted when the contract is paused or unpaused for emergency maintenance.
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct EmergencyPauseToggledEvent {
+pub struct EmergencyPauseToggled {
     #[topic]
     pub version: u32,
     #[topic]
@@ -82,10 +84,34 @@ pub struct EmergencyPauseToggledEvent {
 
 /// Emit event when the emergency pause flag is toggled.
 pub fn emit_emergency_pause_toggled(env: &Env, paused: bool) {
-    EmergencyPauseToggledEvent {
+    EmergencyPauseToggled {
         version: EVENT_VERSION,
         paused,
         timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+
+/// Event emitted when the coordinated emergency mode is changed (Issue #662).
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EmergencyModeChanged {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub new_mode: crate::types::EmergencyMode,
+    pub admin: Address,
+    pub changed_at: u64,
+}
+
+/// Emit event when the emergency mode changes.
+pub fn emit_emergency_mode_changed(env: &Env, new_mode: &crate::types::EmergencyMode, admin: &Address) {
+    EmergencyModeChanged {
+        version: EVENT_VERSION,
+        new_mode: new_mode.clone(),
+        admin: admin.clone(),
+        changed_at: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -283,7 +309,7 @@ pub fn emit_market_created(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketClosedToDepositsEvent {
+pub struct MarketClosedToDeposits {
     #[topic]
     pub version: u32,
     #[topic]
@@ -294,7 +320,7 @@ pub struct MarketClosedToDepositsEvent {
 
 /// Emit event when a market is closed to new deposits
 ///
-/// Publishes a [`MarketClosedToDepositsEvent`] to the Soroban event stream when
+/// Publishes a [`MarketClosedToDeposits`] to the Soroban event stream when
 /// an admin closes a market to prevent new collateral deposits. The event is indexed
 /// by `market_id` as a topic for efficient lookup by off-chain indexers.
 ///
@@ -314,7 +340,7 @@ pub fn emit_market_closed_to_deposits(
     admin: &Address,
     closed_at: u64,
 ) {
-    MarketClosedToDepositsEvent {
+    MarketClosedToDeposits {
         version: EVENT_VERSION,
         market_id,
         admin: admin.clone(),
@@ -433,6 +459,40 @@ pub fn emit_market_canceled(env: &Env, market_id: u32, canceler: &Address, cance
         market_id,
         canceler: canceler.clone(),
         canceled_at,
+    }
+    .publish(env);
+}
+
+/// Event emitted when an admin explicitly reopens a previously canceled market.
+///
+/// A `Canceled` → `Active` transition is only valid through this explicit
+/// admin-gated path. Any other route that would silently restore `Active`
+/// status is rejected by [`crate::validation::validate_reopenable`].
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketReopened {
+    #[topic]
+    pub version: u32,
+    #[topic]
+    pub market_id: u32,
+    pub admin: Address,
+    pub reopened_at: u64,
+}
+
+/// Emit a MarketReopened event when the admin explicitly restores a canceled
+/// market to Active status via the guarded `reopen_market` entry point.
+///
+/// # Arguments
+/// * `env` - Contract environment
+/// * `market_id` - Unique identifier of the reopened market
+/// * `admin` - Admin address that authorized the reopen
+/// * `reopened_at` - Unix timestamp (ledger time) of the reopen
+pub fn emit_market_reopened(env: &Env, market_id: u32, admin: &Address, reopened_at: u64) {
+    MarketReopened {
+        version: EVENT_VERSION,
+        market_id,
+        admin: admin.clone(),
+        reopened_at,
     }
     .publish(env);
 }
@@ -985,7 +1045,7 @@ pub fn emit_fee_rate_change_executed(env: &Env, new_rate_bps: i128, executed_at:
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct AdminRenounceProposedEvent {
+pub struct AdminRenounceProposed {
     #[topic]
     pub version: u32,
     #[topic]
@@ -994,7 +1054,7 @@ pub struct AdminRenounceProposedEvent {
 }
 
 pub fn emit_admin_renounce_proposed(env: &Env, admin: &Address) {
-    AdminRenounceProposedEvent {
+    AdminRenounceProposed {
         version: EVENT_VERSION,
         admin: admin.clone(),
         proposed_at: env.ledger().timestamp(),
@@ -1004,7 +1064,7 @@ pub fn emit_admin_renounce_proposed(env: &Env, admin: &Address) {
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct AdminRenouncedEvent {
+pub struct AdminRenounced {
     #[topic]
     pub version: u32,
     #[topic]
@@ -1013,7 +1073,7 @@ pub struct AdminRenouncedEvent {
 }
 
 pub fn emit_admin_renounced(env: &Env, admin: &Address) {
-    AdminRenouncedEvent {
+    AdminRenounced {
         version: EVENT_VERSION,
         former_admin: admin.clone(),
         renounced_at: env.ledger().timestamp(),
@@ -1086,6 +1146,119 @@ pub fn emit_fee_waiver_removed(env: &Env, account: &Address, admin: &Address) {
         removed_at: env.ledger().timestamp(),
     }
     .publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TreasuryProposed {
+    #[topic]
+    pub version: u32,
+    pub treasury: Address,
+    pub effective_at: u64,
+}
+
+pub fn emit_treasury_proposed(env: &Env, treasury: &Address, effective_at: u64) {
+    TreasuryProposed {
+        version: EVENT_VERSION,
+        treasury: treasury.clone(),
+        effective_at,
+    }.publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct OutcomeTokenProposed {
+    #[topic]
+    pub version: u32,
+    pub outcome_token: Address,
+    pub effective_at: u64,
+}
+
+pub fn emit_outcome_token_proposed(env: &Env, outcome_token: &Address, effective_at: u64) {
+    OutcomeTokenProposed {
+        version: EVENT_VERSION,
+        outcome_token: outcome_token.clone(),
+        effective_at,
+    }.publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct OutcomeTokenSet {
+    #[topic]
+    pub version: u32,
+    pub outcome_token: Address,
+    pub set_at: u64,
+}
+
+pub fn emit_outcome_token_set(env: &Env, outcome_token: &Address) {
+    OutcomeTokenSet {
+        version: EVENT_VERSION,
+        outcome_token: outcome_token.clone(),
+        set_at: env.ledger().timestamp(),
+    }.publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ResolutionProposed {
+    #[topic]
+    pub version: u32,
+    pub resolution: Address,
+    pub effective_at: u64,
+}
+
+pub fn emit_resolution_proposed(env: &Env, resolution: &Address, effective_at: u64) {
+    ResolutionProposed {
+        version: EVENT_VERSION,
+        resolution: resolution.clone(),
+        effective_at,
+    }.publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ResolutionSet {
+    #[topic]
+    pub version: u32,
+    pub resolution: Address,
+    pub set_at: u64,
+}
+
+pub fn emit_resolution_set(env: &Env, resolution: &Address) {
+    ResolutionSet {
+        version: EVENT_VERSION,
+        resolution: resolution.clone(),
+        set_at: env.ledger().timestamp(),
+    }.publish(env);
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketOracleProposed {
+    #[topic]
+    pub market_id: u32,
+    pub admin: Address,
+    pub old_oracle_pubkey: BytesN<32>,
+    pub new_oracle_pubkey: BytesN<32>,
+    pub effective_at: u64,
+}
+
+pub fn emit_market_oracle_proposed(
+    env: &Env,
+    market_id: u32,
+    admin: &Address,
+    old_oracle_pubkey: &BytesN<32>,
+    new_oracle_pubkey: &BytesN<32>,
+    effective_at: u64,
+) {
+    MarketOracleProposed {
+        market_id,
+        admin: admin.clone(),
+        old_oracle_pubkey: old_oracle_pubkey.clone(),
+        new_oracle_pubkey: new_oracle_pubkey.clone(),
+        effective_at,
+    }.publish(env);
 }
 
 #[cfg(test)]

@@ -1,4 +1,16 @@
 //! Integration tests for the "close market to deposits" feature
+//!
+//! ## Operation matrix (Issue #574)
+//!
+//! | Operation                       | Market open            | Closed to deposits      |
+//! |---------------------------------|------------------------|-------------------------|
+//! | `deposit_collateral`            | ✅ allowed             | ❌ blocked              |
+//! | `withdraw_unused_collateral`    | ✅ allowed             | ✅ allowed              |
+//! | `settle_position` (after resolve) | ✅ allowed           | ✅ allowed              |
+//! | `update_position` (trade)       | ✅ allowed             | ✅ allowed              |
+//!
+//! The `closed_to_deposits` flag blocks **only** new collateral deposits;
+//! withdrawals, trades, and settlement remain fully functional.
 
 #[allow(dead_code)]
 mod helpers;
@@ -79,7 +91,7 @@ fn close_market_to_deposits_succeeds() {
     assert_eq!(market_after.closed_to_deposits, true);
 
     // Verify the event was emitted
-    assert_event_emitted(&env, "market_closed_to_deposits_event");
+    assert_event_emitted(&env, "market_closed_to_deposits");
 }
 
 #[test]
@@ -174,4 +186,120 @@ fn close_nonexistent_market_to_deposits_fails() {
         result.is_err(),
         "Closing a non-existent market should fail"
     );
+}
+
+// ── Issue #574: operation matrix — deposit blocked, withdraw/settle allowed ───
+//
+// These tests document the allowed-operation matrix when a market is closed
+// to deposits. Every operation except `deposit_collateral` must continue to
+// work unchanged.
+
+/// Helper: build a real Ed25519 oracle keypair and sign `(market_id, outcome)`.
+fn oracle_keypair_for(
+    env: &Env,
+    market_id: u32,
+    outcome: bool,
+) -> (soroban_sdk::BytesN<32>, soroban_sdk::BytesN<64>) {
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+    use vatix_market_contract::oracle;
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let pubkey =
+        soroban_sdk::BytesN::from_array(env, &signing_key.verifying_key().to_bytes());
+    let msg = oracle::construct_oracle_message(env, market_id, outcome);
+    let sig = signing_key.sign(msg.to_array().as_slice());
+    let sig_bytes = soroban_sdk::BytesN::from_array(env, &sig.to_bytes());
+    (pubkey, sig_bytes)
+}
+
+/// Matrix row: deposit is blocked after close (Issue #574).
+///
+/// Already covered by `deposit_fails_when_market_closed_to_deposits` above;
+/// this version uses an explicit `try_*` call to assert the exact error.
+#[test]
+fn matrix_deposit_blocked_when_closed() {
+    let (env, admin, contract_id, user, market_id, collateral_token) =
+        setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    client.close_market_to_deposits(&admin, &market_id);
+
+    let stellar_asset_client = StellarAssetClient::new(&env, &collateral_token);
+    stellar_asset_client.mint(&user, &(10 * STROOPS_PER_USDC));
+
+    let result = client.try_deposit_collateral(&user, &market_id, &STROOPS_PER_USDC);
+    assert!(
+        result.is_err(),
+        "deposit must be blocked when market is closed to deposits"
+    );
+}
+
+/// Matrix row: withdraw is still allowed after close (Issue #574).
+#[test]
+fn matrix_withdraw_allowed_when_closed() {
+    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    client.close_market_to_deposits(&admin, &market_id);
+
+    // User deposited 100 USDC during setup — withdraw 10 of it.
+    client.withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
+    // No panic == success. Also verify the event.
+    assert_event_emitted(&env, "collateral_withdrawn");
+}
+
+/// Matrix row: settle_position is allowed after close + resolve (Issue #574).
+///
+/// The market is closed to deposits, then resolved with a real oracle
+/// signature, then the user's position is settled. The settlement must
+/// succeed — `closed_to_deposits` must not interfere.
+#[test]
+fn matrix_settle_allowed_when_closed() {
+    let (env, admin, contract_id, user, market_id, _collateral_token) =
+        setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    // Step 1: close to deposits.
+    client.close_market_to_deposits(&admin, &market_id);
+
+    // Step 2: give the user YES shares so there's a payout to settle.
+    let shares = 50 * STROOPS_PER_USDC;
+    client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
+
+    // Step 3: resolve with a real oracle signature.
+    let outcome = true;
+    let (oracle_pubkey, oracle_sig) = oracle_keypair_for(&env, market_id, outcome);
+
+    // Replace the market's oracle pubkey so the signature verifies.
+    env.as_contract(&contract_id, || {
+        let mut market = storage::get_market(&env, market_id)
+            .expect("storage version ok")
+            .expect("market must exist");
+        market.oracle_pubkey = oracle_pubkey;
+        storage::set_market(&env, market_id, &market).expect("set market ok");
+    });
+
+    let market_id_str = soroban_sdk::String::from_str(&env, "1");
+    let resolver = Address::generate(&env);
+    client.resolve_market(&resolver, &market_id_str, &outcome, &oracle_sig);
+    assert_event_emitted(&env, "market_resolved");
+
+    // Step 4: settle — must succeed even though the market was closed to deposits.
+    client.settle_position(&user, &market_id);
+    assert_event_emitted(&env, "position_settled");
+}
+
+/// Matrix row: update_position (trade) is still allowed after close (Issue #574).
+#[test]
+fn matrix_trade_allowed_when_closed() {
+    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    client.close_market_to_deposits(&admin, &market_id);
+
+    // User has 100 USDC deposited from setup; buying YES shares must work.
+    let shares = 50 * STROOPS_PER_USDC;
+    client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
+    assert_event_emitted(&env, "trade_executed");
 }

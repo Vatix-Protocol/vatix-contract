@@ -1,4 +1,5 @@
 import type { Market } from "@/lib/markets";
+import { StatusBadge } from "@/components/StatusBadge";
 
 interface MarketCardProps {
   market: Market;
@@ -26,6 +27,13 @@ export function MarketCard({ market, loading = false }: MarketCardProps) {
             <span className="block sm:inline">
               ends {market.endsAt}
             </span>
+            {market.closedToDeposits && (
+              <StatusBadge
+                status="Closed to deposits"
+                variant="warning"
+                className="ml-0 mt-1 block w-fit normal-case tracking-normal sm:ml-2 sm:mt-0 sm:inline-block"
+              />
+            )}
           </>
         )}
       </p>

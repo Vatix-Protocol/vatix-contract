@@ -63,7 +63,7 @@ pub fn emit_token_burned(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct TokenTransferredEvent {
+pub struct TokenTransferred {
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -81,7 +81,7 @@ pub fn emit_token_transferred(
     kind: TokenKind,
     amount: i128,
 ) {
-    TokenTransferredEvent {
+    TokenTransferred {
         market_id,
         from: from.clone(),
         to: to.clone(),

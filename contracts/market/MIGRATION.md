@@ -27,7 +27,7 @@ pub fn close_market_to_deposits(
 ### Event Addition
 
 ```rust
-MarketClosedToDepositsEvent {
+MarketClosedToDeposits {
     market_id: u32,
     admin: Address,
     closed_at: u64,

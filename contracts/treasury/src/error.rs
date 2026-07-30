@@ -51,6 +51,10 @@ pub enum TreasuryError {
     /// The treasury is paused; fee collection and withdrawals are suspended.
     ContractPaused = 50,
 
+    /// The operation is blocked by the current emergency mode (Issue #662).
+    /// Check [`crate::storage::get_emergency_mode`] for the active mode.
+    EmergencyModeActive = 51,
+
     // ── Arithmetic (60–69) ────────────────────────────────────────────────────
     /// Arithmetic operation overflowed.
     ArithmeticOverflow = 60,
@@ -71,7 +75,8 @@ mod tests {
         assert_eq!(TreasuryError::CallerNotMarket as u32, 40);
         assert_eq!(TreasuryError::Unauthorized as u32, 41);
         assert_eq!(TreasuryError::AlreadyInitialized as u32, 42);
-        assert_eq!(TreasuryError::ArithmeticOverflow as u32, 60);
         assert_eq!(TreasuryError::ContractPaused as u32, 50);
+        assert_eq!(TreasuryError::EmergencyModeActive as u32, 51);
+        assert_eq!(TreasuryError::ArithmeticOverflow as u32, 60);
     }
 }

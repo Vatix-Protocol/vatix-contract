@@ -30,7 +30,19 @@ pub enum ContractError {
     InsufficientCollateral = 15,
     /// A collateral amount is invalid (e.g. zero or negative).
     InvalidCollateral = 16,
+    /// `challenge`'s `bond_amount` is below `MIN_CHALLENGE_BOND_AMOUNT`.
+    InsufficientChallengeBond = 17,
+    /// `arbitrate_uphold_proposer` / `void_market` was called on a candidate
+    /// that is not `Challenged`, or has not yet exhausted
+    /// `MAX_APPEAL_ROUNDS`.
+    NotArbitrable = 18,
+    /// `arbitrate_uphold_proposer` / `void_market` was called before the
+    /// arbitration timelock elapsed.
+    ArbitrationTimelockNotElapsed = 19,
     Unauthorized = 40,
     NotAdmin = 41,
     AlreadyInitialized = 42,
+    /// The operation is blocked by the current emergency mode (Issue #662).
+    /// Check [`crate::storage::get_emergency_mode`] for the active mode.
+    EmergencyModeActive = 50,
 }

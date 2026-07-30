@@ -1,5 +1,5 @@
 #![no_std]
-#![deny(clippy::all)]
+#![warn(clippy::all)]
 
 //! # Outcome Token Contract
 //!

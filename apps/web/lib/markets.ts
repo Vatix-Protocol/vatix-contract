@@ -10,6 +10,7 @@ export interface Market {
   volume: string;
   status: MarketStatus;
   endsAt: string;
+  closedToDeposits: boolean;
 }
 
 /**
@@ -26,5 +27,6 @@ export async function getMarkets(): Promise<Market[]> {
     volume: m.volume,
     status: m.status as MarketStatus,
     endsAt: m.ends_at,
+    closedToDeposits: m.closed_to_deposits ?? false,
   }));
 }

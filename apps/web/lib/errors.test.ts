@@ -26,6 +26,11 @@ test("maps a withdraw failure (InsufficientCollateral, #10) to clear copy", () =
   assert.equal(parseContractError(err), MARKET_ERROR_MESSAGES[10]);
 });
 
+test("maps a batch-settle failure (BatchTooLarge, #14) to clear copy", () => {
+  const err = new Error("Error(Contract, #14)");
+  assert.equal(parseContractError(err), MARKET_ERROR_MESSAGES[14]);
+});
+
 test("maps an auth failure (NotAdmin, #41) to clear copy", () => {
   const err = new Error("Error(Contract, #41)");
   assert.equal(parseContractError(err), MARKET_ERROR_MESSAGES[41]);

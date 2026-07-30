@@ -9,6 +9,24 @@ pub enum MarketStatus {
     Canceled,
 }
 
+/// Coordinated emergency mode shared (or mirrored) across Market,
+/// Treasury, and Resolution contracts (Issue #662).
+///
+/// | Variant         | Effect                                                       |
+/// |-----------------|--------------------------------------------------------------|
+/// | `Normal`        | All operations allowed.                                      |
+/// | `TradingHalted` | Reject deposit/trade/propose; allow withdraw + settle/resolve.|
+/// | `SettleOnly`    | Only settle & withdraw; block resolve & propose.             |
+/// | `GlobalFreeze`  | Everything blocked except admin unpause/management.          |
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum EmergencyMode {
+    Normal,
+    TradingHalted,
+    SettleOnly,
+    GlobalFreeze,
+}
+
 /// Represents the oracle adapter type used for market resolution.
 ///
 /// This enum determines which oracle adapter (Ed25519, Reflector, or Pyth)
@@ -114,6 +132,32 @@ pub struct PendingFeeRateChange {
     /// Ledger timestamp at or after which `execute_fee_rate_change` may apply this change.
     pub effective_at: u64,
 }
+
+/// An address change awaiting its timelock delay before it can take effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingAddressChange {
+    pub new_address: Address,
+    pub effective_at: u64,
+}
+
+/// An adapter type change awaiting its timelock delay before it can take effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingAdapterTypeChange {
+    pub new_adapter: AdapterType,
+    pub effective_at: u64,
+}
+
+/// A 32-byte change (like oracle pubkey) awaiting its timelock delay before it can take effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingBytesNChange {
+    pub new_bytes: BytesN<32>,
+    pub effective_at: u64,
+}
+
+
 
 impl Position {
     /// Create an empty position for a user in a market.

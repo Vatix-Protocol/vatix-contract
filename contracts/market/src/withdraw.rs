@@ -6,6 +6,23 @@
 //! price. Withdraw reads that stored value and never recomputes a lock from a
 //! hardcoded price, so the two views can never diverge.
 //!
+//! ## Withdrawal cooldown (#413 / #565)
+//! To deter deposit–withdraw round-trips used to game oracle snapshots or
+//! liquidity metrics, a user must wait [`WITHDRAW_COOLDOWN_SECONDS`]
+//! (3 600 s / 1 hour) after their most-recent deposit before they can
+//! withdraw from the same market. The timestamp is persisted by
+//! `deposit_collateral` via [`storage::set_last_deposit_time`]. If no deposit
+//! has ever been recorded for a `(market_id, user)` pair, the cooldown is not
+//! applied — the guard only kicks in after the first deposit.
+//!
+//! ```text
+//! deposit_collateral   →  storage::set_last_deposit_time(market_id, user, now)
+//! withdraw_unused_collateral
+//!     elapsed = now - last_deposit_time
+//!     if elapsed < 3_600  →  Err(ContractError::WithdrawCooldownActive)
+//!     else                →  proceed with withdrawal
+//! ```
+//!
 //! ## Fee deduction (#377)
 //! When a fee rate is configured the user must have `amount + fee` of unlocked
 //! collateral available. The fee is routed to the treasury (if registered) and
@@ -37,7 +54,8 @@
 
 use crate::error::ContractError;
 use crate::events::{
-    emit_collateral_withdrawn, emit_fee_calculated, emit_large_withdraw, emit_withdraw_edge_case,
+    emit_collateral_withdrawn, emit_fee_calculated, emit_fee_retained_no_treasury,
+    emit_large_withdraw, emit_withdraw_edge_case,
 };
 use crate::storage;
 use crate::types::{MarketStatus, Position};
@@ -73,6 +91,17 @@ pub fn withdraw_unused_collateral(
     amount: i128,
 ) -> Result<(), ContractError> {
     user.require_auth();
+
+    // Emergency mode: withdrawals are blocked only in GlobalFreeze;
+    // allowed in Normal, TradingHalted, and SettleOnly.
+    validation::require_emergency_mode_allows(
+        &env,
+        &[
+            crate::types::EmergencyMode::Normal,
+            crate::types::EmergencyMode::TradingHalted,
+            crate::types::EmergencyMode::SettleOnly,
+        ],
+    )?;
 
     // 1. Validate amount is positive and within safe range.
     validation::validate_collateral_amount(amount)?;
@@ -130,7 +159,19 @@ pub fn withdraw_unused_collateral(
         return Err(ContractError::InsufficientCollateral);
     }
 
-    // 7. Route fee to treasury if one is registered.
+  // 7. Update state & persist position FIRST (CEI Pattern)
+    let total_deducted = amount
+        .checked_add(fee_amount)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    position.total_deposited = position
+        .total_deposited
+        .checked_sub(total_deducted)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+
+    storage::set_position(&env, market_id, &user, &position)?;
+
+    // 8. Route fee to treasury if one is registered (External Calls)
     let contract_address = env.current_contract_address();
     let token_client = TokenClient::new(&env, &market.collateral_token);
 
@@ -151,26 +192,14 @@ pub fn withdraw_unused_collateral(
                 args,
             );
         } else {
-            // Treasury-optional path: skip the transfer, do NOT revert the
-            // withdrawal. The fee stays in the contract's own collateral
-            // token balance (it is already subtracted from `total_deposited`
-            // below), and we emit an explicit event so this is never a
-            // silent drop. See the module docs for the full rationale.
             emit_fee_retained_no_treasury(&env, market_id, &user, fee_amount);
         }
     }
 
-    // 8. Deduct both withdrawal and fee from total_deposited.
-    let total_deducted = amount
-        .checked_add(fee_amount)
-        .ok_or(ContractError::ArithmeticOverflow)?;
-    position.total_deposited = position
-        .total_deposited
-        .checked_sub(total_deducted)
-        .ok_or(ContractError::ArithmeticOverflow)?;
+    // 9. Transfer the requested amount to the user
+    token_client.transfer(&contract_address, &user, &amount);
 
-    storage::set_position(&env, market_id, &user, &position)?;
-
+  
     // 9. Transfer the requested amount to the user.
     token_client.transfer(&contract_address, &user, &amount);
 
@@ -727,6 +756,134 @@ mod tests {
                 .iter()
                 .any(|e| e.topics.iter().any(|t| t.to_string().contains("large_withdraw"))),
             "LargeWithdraw audit event should be emitted at/above threshold"
+        );
+    }
+
+    // ── Withdrawal cooldown (issue #413 / #565) ─────────────────────────────
+
+    /// Early withdrawal is rejected when it falls within the cooldown window.
+    ///
+    /// The ledger timestamp is 0 by default in the test harness.
+    /// A `LastDepositTime` of 0 means 0 seconds have elapsed → still in
+    /// the 3 600-second window → `WithdrawCooldownActive`.
+    #[test]
+    fn test_withdraw_blocked_within_cooldown() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, market_id, &collateral_token);
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 1_000,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+            // Record a deposit at ledger time 0 (current timestamp in test env).
+            storage::set_last_deposit_time(
+                &env,
+                market_id,
+                &user,
+                env.ledger().timestamp(),
+            );
+        });
+        env.mock_all_auths();
+
+        // Attempt to withdraw immediately — 0 seconds have elapsed.
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 500)
+        });
+        assert_eq!(
+            result,
+            Err(ContractError::WithdrawCooldownActive),
+            "withdrawal inside cooldown window must return WithdrawCooldownActive"
+        );
+    }
+
+    /// Withdrawal succeeds once the cooldown window has fully elapsed.
+    ///
+    /// We simulate time advancing past `WITHDRAW_COOLDOWN_SECONDS` by
+    /// storing a `LastDepositTime` in the past so that
+    /// `env.ledger().timestamp() - last_deposit_time >= WITHDRAW_COOLDOWN_SECONDS`.
+    #[test]
+    fn test_withdraw_allowed_after_cooldown() {
+        use soroban_sdk::token::StellarAssetClient;
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, market_id, &token);
+        let withdraw_amount = 500i128;
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 1_000,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+            // Simulate the deposit happening WITHDRAW_COOLDOWN_SECONDS ago.
+            // ledger timestamp is 0; deposit time is set to a value that makes
+            // elapsed == WITHDRAW_COOLDOWN_SECONDS (exactly on the boundary,
+            // which passes the `elapsed < COOLDOWN` guard).
+            let past = env
+                .ledger()
+                .timestamp()
+                .saturating_sub(WITHDRAW_COOLDOWN_SECONDS);
+            storage::set_last_deposit_time(&env, market_id, &user, past);
+        });
+        env.mock_all_auths();
+        StellarAssetClient::new(&env, &token).mint(&contract_id, &1_000);
+
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, withdraw_amount)
+        });
+        assert!(
+            result.is_ok(),
+            "withdrawal after cooldown window must succeed: {result:?}"
+        );
+    }
+
+    /// A user who has never deposited (no `LastDepositTime` key) is not
+    /// subject to any cooldown — the cooldown only applies after a deposit.
+    #[test]
+    fn test_withdraw_no_deposit_record_bypasses_cooldown() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, market_id, &collateral_token);
+        // No LastDepositTime stored for this user.
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            // No position either — so we expect InsufficientCollateral, NOT
+            // WithdrawCooldownActive, confirming the cooldown is not triggered.
+        });
+        env.mock_all_auths();
+        let result = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 500)
+        });
+        assert_ne!(
+            result,
+            Err(ContractError::WithdrawCooldownActive),
+            "cooldown must not fire when no deposit has been recorded"
         );
     }
 }

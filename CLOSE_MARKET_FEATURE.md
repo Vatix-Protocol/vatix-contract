@@ -8,7 +8,7 @@ This document describes the implementation of the "close market to new deposits"
 ### What This Feature Does
 - **Admin Control**: Administrators can invoke `close_market_to_deposits()` to prevent new deposits
 - **Preserve Functionality**: Existing positions can still be traded, and collateral can still be withdrawn
-- **Event Tracking**: Emits `MarketClosedToDepositsEvent` when a market is closed
+- **Event Tracking**: Emits `MarketClosedToDeposits` when a market is closed
 - **Idempotent**: Closing an already-closed market is a no-op (succeeds silently)
 
 ### What This Feature Does NOT Do
@@ -52,7 +52,7 @@ Added a new event structure:
 ```rust
 #[contractevent]
 #[derive(Clone, Debug)]
-pub struct MarketClosedToDepositsEvent {
+pub struct MarketClosedToDeposits {
     #[topic]
     pub market_id: u32,
     pub admin: Address,
@@ -86,7 +86,7 @@ pub fn close_market_to_deposits(
 3. Loads the market from storage
 4. Sets `closed_to_deposits = true`
 5. Persists the updated market
-6. Emits `MarketClosedToDepositsEvent`
+6. Emits `MarketClosedToDeposits`
 
 **Authorization**: Only the contract admin can call this function.
 
@@ -160,7 +160,7 @@ pub fn close_market_to_deposits(
 
 ### Event Emitted
 ```rust
-MarketClosedToDepositsEvent {
+MarketClosedToDeposits {
     market_id: u32,      // Market that was closed
     admin: Address,      // Admin address that closed it
     closed_at: u64,      // Ledger timestamp when closed
@@ -228,13 +228,13 @@ Potential improvements not included in this implementation:
 ## Migration Guide for Off-Chain Services
 
 ### Event Indexing
-Subscribe to `MarketClosedToDepositsEvent` to track when markets are closed:
+Subscribe to `MarketClosedToDeposits` to track when markets are closed:
 ```typescript
 // Example: Listen for market closure events
 const events = await client.events({
   contract: marketContractId,
   type: 'contract-emitted',
-  name: 'MarketClosedToDepositsEvent',
+  name: 'MarketClosedToDeposits',
 });
 
 events.forEach(event => {

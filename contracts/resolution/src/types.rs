@@ -14,12 +14,44 @@ pub enum MarketStatus {
     Canceled,
 }
 
+/// Mirrored emergency mode coordinated with the Market contract (Issue #662).
+/// Kept as a local mirror for the same reason as [`MarketStatus`] — the
+/// resolution crate cannot depend on the market crate directly.
+///
+/// Defaults to `Normal` when never explicitly set. Only the admin may change
+/// this value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum EmergencyMode {
+    Normal,
+    TradingHalted,
+    SettleOnly,
+    GlobalFreeze,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum CandidateStatus {
     Proposed,
     Challenged,
     Finalized,
+    /// Terminal state reached via `void_market`: the dispute exhausted
+    /// `MAX_APPEAL_ROUNDS` and admin arbitration could not safely attest to
+    /// either side's outcome on-chain, so the underlying market was voided
+    /// (`MarketStatus::Canceled`) instead of resolved.
+    Voided,
+}
+
+/// A single challenger's locked bond against a candidate. Appended to the
+/// candidate's challenger list on every `challenge` call (including those
+/// superseded by a later `appeal`), so that every party who disputed the
+/// candidate across its whole lifecycle — not just the most recent one — is
+/// accounted for when the dispute finally reaches a terminal state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct ChallengeRecord {
+    pub challenger: Address,
+    pub bond: i128,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,4 +89,11 @@ pub struct ResolutionConfig {
     /// (Renamed from `default_challenge_window_seconds` — Soroban enforces a
     /// 30-character maximum on struct field names.)
     pub challenge_window_secs: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingAddressChange {
+    pub new_address: Address,
+    pub effective_at: u64,
 }

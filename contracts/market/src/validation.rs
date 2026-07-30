@@ -1,5 +1,5 @@
 use crate::error::ContractError;
-use crate::types::MarketStatus;
+use crate::types::{EmergencyMode, MarketStatus};
 use soroban_sdk::{Address, Env, String};
 
 /// Minimum collateral deposit in stroops (1 USDC = 10_000_000 stroops).
@@ -200,6 +200,35 @@ pub fn validate_cancelable(status: &MarketStatus) -> Result<(), ContractError> {
     }
 }
 
+/// Validates that a market may be explicitly reopened by the admin.
+///
+/// Only a [`MarketStatus::Canceled`] market may be reopened. A resolved market
+/// has a final outcome and can never go back to Active. Calling this on an
+/// already-Active market is rejected as a redundant no-op to surface caller bugs.
+///
+/// This guard is the single enforcement point for the `Canceled → Active`
+/// transition so that no other code path can accidentally reopen a market.
+///
+/// # Arguments
+/// * `status` - Current [`MarketStatus`] of the market being reopened
+///
+/// # Returns
+/// `Ok(())` when the market is [`MarketStatus::Canceled`] and can be reopened.
+///
+/// # Errors
+/// - [`ContractError::MarketAlreadyResolved`] – a resolved market is terminal;
+///   it can never return to Active status.
+/// - [`ContractError::MarketNotActive`] – the market is already Active, so
+///   the reopen is a no-op and is rejected to surface the redundant call
+///   (reuses `MarketNotActive` meaning "wrong status for this operation").
+pub fn validate_reopenable(status: &MarketStatus) -> Result<(), ContractError> {
+    match status {
+        MarketStatus::Canceled => Ok(()),
+        MarketStatus::Resolved => Err(ContractError::MarketAlreadyResolved),
+        MarketStatus::Active => Err(ContractError::MarketNotActive),
+    }
+}
+
 /// Parse a decimal market_id string to u32 (e.g. "1", "42").
 /// Returns InvalidQuantity if empty, non-digit, or overflow.
 pub fn parse_market_id(market_id: &String) -> Result<u32, ContractError> {
@@ -292,6 +321,29 @@ pub fn require_not_paused(env: &Env) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Guard: reject operations that are not permitted under the current emergency
+/// mode (Issue #662).
+///
+/// `allowed_modes` specifies the set of modes under which the guarded operation
+/// is permitted. If the current mode is not in this set, the call is rejected
+/// with [`ContractError::EmergencyModeActive`].
+///
+/// # Example
+/// ```ignore
+/// // Allow only in Normal or TradingHalted (e.g. settle/withdraw)
+/// require_emergency_mode_allows(env, &[EmergencyMode::Normal, EmergencyMode::TradingHalted])?;
+/// ```
+pub fn require_emergency_mode_allows(
+    env: &Env,
+    allowed_modes: &[EmergencyMode],
+) -> Result<(), ContractError> {
+    let current = crate::storage::get_emergency_mode(env);
+    if !allowed_modes.contains(&current) {
+        return Err(ContractError::EmergencyModeActive);
+    }
+    Ok(())
+}
+
 /// Validate that an admin address is a user account (not a contract address).
 ///
 /// Soroban contracts can hold an `Address` that is either a user account
@@ -309,9 +361,33 @@ pub fn validate_admin_address(admin: &Address) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Validate that `account` is eligible for the admin-managed fee waiver list (#584).
+///
+/// Two misuse cases are rejected:
+/// - `account` is a contract address (mirrors [`validate_admin_address`]) —
+///   the waiver list is meant for real depositors, not contracts.
+/// - `account` is the current `admin` — the admin already controls the fee
+///   rate via [`crate::MarketContract::set_fee_rate`], so allowing self-waiver
+///   would let it silently exempt itself from the fees it sets for everyone
+///   else.
+///
+/// # Errors
+/// - [`ContractError::InvalidFeeWaiverAccount`] – `account` is a contract
+///   address or equals `admin`.
+pub fn validate_fee_waiver_account(
+    account: &Address,
+    admin: &Address,
+) -> Result<(), ContractError> {
+    if account.executable().is_some() || account == admin {
+        return Err(ContractError::InvalidFeeWaiverAccount);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::{testutils::Address as _, Address, BytesN};
 
     #[test]
     fn test_valid_market_creation() {
@@ -570,6 +646,35 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_fee_waiver_account_user_ok() {
+        let env = soroban_sdk::Env::default();
+        let admin = Address::generate(&env);
+        let account = Address::generate(&env);
+        assert!(validate_fee_waiver_account(&account, &admin).is_ok());
+    }
+
+    #[test]
+    fn test_validate_fee_waiver_account_contract_fails() {
+        let env = soroban_sdk::Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+        assert_eq!(
+            validate_fee_waiver_account(&contract_id, &admin),
+            Err(ContractError::InvalidFeeWaiverAccount)
+        );
+    }
+
+    #[test]
+    fn test_validate_fee_waiver_account_self_waiver_fails() {
+        let env = soroban_sdk::Env::default();
+        let admin = Address::generate(&env);
+        assert_eq!(
+            validate_fee_waiver_account(&admin, &admin),
+            Err(ContractError::InvalidFeeWaiverAccount)
+        );
+    }
+
+    #[test]
     fn test_require_initialized_when_has_admin() {
         let env = soroban_sdk::Env::default();
         let contract_id = env.register(crate::MarketContract, ());
@@ -606,5 +711,47 @@ mod tests {
             crate::storage::set_paused(&env, true);
             assert_eq!(require_not_paused(&env), Err(ContractError::ContractPaused));
         });
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_none_passes() {
+        let uri: Option<String> = None;
+        assert!(validate_metadata_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_valid_passes() {
+        let env = soroban_sdk::Env::default();
+        let uri = Some(String::from_str(&env, "ipfs://QmXxx"));
+        assert!(validate_metadata_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_empty_fails() {
+        let env = soroban_sdk::Env::default();
+        let uri = Some(String::from_str(&env, ""));
+        assert_eq!(
+            validate_metadata_uri(&uri),
+            Err(ContractError::InvalidMetadataUri)
+        );
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_overlong_fails() {
+        let env = soroban_sdk::Env::default();
+        let long_str = "a".repeat(2049);
+        let uri = Some(String::from_str(&env, &long_str));
+        assert_eq!(
+            validate_metadata_uri(&uri),
+            Err(ContractError::InvalidMetadataUri)
+        );
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_exactly_max_length_passes() {
+        let env = soroban_sdk::Env::default();
+        let max_str = "a".repeat(2048);
+        let uri = Some(String::from_str(&env, &max_str));
+        assert!(validate_metadata_uri(&uri).is_ok());
     }
 }

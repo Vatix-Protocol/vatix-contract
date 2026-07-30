@@ -81,6 +81,12 @@ pub fn deposit_collateral(
     // Authorization
     user.require_auth();
 
+    // Emergency mode: deposits are blocked unless mode is Normal
+    crate::validation::require_emergency_mode_allows(
+        &env,
+        &[crate::types::EmergencyMode::Normal],
+    )?;
+
     // Reentrancy guard: held for the remainder of this call, released
     // automatically when it goes out of scope.
     let _guard = DepositReentrancyGuard::acquire(&env)?;
@@ -101,7 +107,15 @@ pub fn deposit_collateral(
         return Err(ContractError::MarketClosedToDeposits);
     }
 
-    if env.ledger().timestamp() > market.end_time {
+    // Reject deposits at or after end_time (Issue #549). A market expires the
+    // moment the ledger timestamp reaches end_time, so a deposit submitted in
+    // the same ledger second as expiry must be rejected (>= not just >).
+    //
+    // Using strict greater-than (>) would admit a deposit at exactly end_time,
+    // which is inside the expired window from the market's perspective — the
+    // same ledger second is simultaneously the last valid trading instant and
+    // the first expired one, so we treat it as expired and reject it.
+    if env.ledger().timestamp() >= market.end_time {
         return Err(ContractError::MarketExpired);
     }
 
@@ -146,6 +160,16 @@ pub fn deposit_collateral(
 
     // Persist updated position
     storage::set_position(&env, market_id, &user, &position)?;
+
+    // Track first-time depositors in the MarketParticipants list (Issue #546 / #495).
+    //
+    // `add_market_participant` is idempotent — it performs a linear search
+    // before appending, so repeated deposits by the same user produce no
+    // duplicate entries. Calling it here (in addition to the call in
+    // `update_position`) ensures that users who deposit collateral but never
+    // execute a trade are still present in the list and will be reached by
+    // the paginated `settle_positions_page` settlement path.
+    storage::add_market_participant(&env, market_id, &user);
 
     // Record deposit timestamp for cooldown enforcement on withdrawals (issue #413).
     storage::set_last_deposit_time(&env, market_id, &user, env.ledger().timestamp());
@@ -572,5 +596,149 @@ mod tests {
 
         // Final total must equal sum of all deposits
         assert_eq!(running, deposits.iter().sum::<i128>());
+    }
+
+    // --- #586: i128 boundary deposits — overflow must never panic ---
+
+    /// Depositing `i128::MAX` must be rejected by `validate_collateral_amount`
+    /// (the `validate_amount_reasonable` guard catches amounts above
+    /// `i128::MAX / 2`) before any arithmetic is attempted, so no overflow
+    /// or panic can occur.
+    #[test]
+    fn test_deposit_i128_max_rejected_no_panic() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+        env.mock_all_auths();
+
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, i128::MAX)
+        });
+        assert_eq!(
+            result,
+            Err(ContractError::InvalidQuantity),
+            "i128::MAX deposit must be rejected before any arithmetic"
+        );
+    }
+
+    /// Depositing `i128::MAX / 2 + 1` (one above the reasonable-amount cap)
+    /// must be rejected. Tests the exact boundary of `validate_amount_reasonable`.
+    #[test]
+    fn test_deposit_just_above_reasonable_cap_rejected() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+        env.mock_all_auths();
+
+        // i128::MAX / 2 + 1 is above the MAX_REASONABLE_AMOUNT cap.
+        let above_cap = i128::MAX / 2 + 1;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, above_cap)
+        });
+        assert_eq!(
+            result,
+            Err(ContractError::InvalidQuantity),
+            "amount just above the reasonable cap must be rejected"
+        );
+    }
+
+    /// Depositing exactly `i128::MAX / 2` (the boundary value itself) must
+    /// also be rejected: the cap is exclusive (`> MAX_REASONABLE_AMOUNT`
+    /// means the cap equals `i128::MAX / 2`, so amounts *equal* to the cap
+    /// are treated as reasonable). Confirm both directions around the boundary.
+    #[test]
+    fn test_deposit_at_reasonable_cap_boundary() {
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let collateral_token = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+        env.mock_all_auths();
+
+        // MAX / 2 is the cap — amounts strictly above it are rejected.
+        // This value passes the quantity check but the token transfer will
+        // fail (no real balance). The key is no panic from overflow.
+        let at_cap = i128::MAX / 2;
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, at_cap)
+        });
+        // We expect either success (token transfer would fail for other reasons)
+        // or a non-panic error, but never ArithmeticOverflow from checked_add.
+        assert_ne!(
+            result,
+            Err(ContractError::ArithmeticOverflow),
+            "boundary amount must not cause ArithmeticOverflow inside deposit"
+        );
+    }
+
+    /// Two near-maximum deposits that would together overflow `total_deposited`
+    /// must be caught by `checked_add` and returned as `ArithmeticOverflow`,
+    /// never as a panic.
+    #[test]
+    fn test_deposit_second_deposit_accumulation_overflow_caught() {
+        use soroban_sdk::token::StellarAssetClient;
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, market_id, &collateral_token);
+
+        // Seed the position with a very large total_deposited directly in
+        // storage (bypassing the amount validation that would reject it), then
+        // attempt to add a second deposit that would overflow the running sum.
+        let large = i128::MAX - 1_000i128;
+        let position = crate::types::Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: large,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+        env.mock_all_auths();
+        // Mint a small amount so the token transfer itself won't fail first.
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &2_000i128);
+
+        // A deposit of 2_000 would push total_deposited past i128::MAX → overflow.
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, 2_000i128)
+        });
+        assert_eq!(
+            result,
+            Err(ContractError::ArithmeticOverflow),
+            "overflow in total_deposited accumulation must return ArithmeticOverflow, not panic"
+        );
     }
 }

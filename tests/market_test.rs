@@ -356,3 +356,43 @@ fn duplicate_market_id_creation_is_rejected() {
     );
     assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
 }
+
+// --- #554: zero-quantity deposit is rejected at the public API boundary ---
+
+/// Asserts that `try_deposit_collateral` deterministically returns
+/// `InvalidQuantity` when called with amount = 0.
+/// This is a workspace-level integration test exercising the public contract
+/// client, complementing the unit test already in `deposit.rs`.
+#[test]
+fn deposit_zero_quantity_is_rejected() {
+    use vatix_market_contract::error::ContractError;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, contract_id) = helpers::register_contract(&env);
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+    let collateral_token = token.address();
+
+    let params = helpers::MarketParams {
+        question: soroban_sdk::String::from_str(&env, "Will BTC reach $100k?"),
+        end_time: env.ledger().timestamp() + 86_400,
+        oracle_pubkey: soroban_sdk::BytesN::from_array(&env, &[1u8; 32]),
+        collateral_token: collateral_token.clone(),
+    };
+
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &params.collateral_token,
+    );
+
+    // Zero-quantity deposit must be deterministically rejected with InvalidQuantity.
+    let result = client.try_deposit_collateral(&Address::generate(&env), &market_id, &0i128);
+    assert_eq!(result, Err(Ok(ContractError::InvalidQuantity)));
+}

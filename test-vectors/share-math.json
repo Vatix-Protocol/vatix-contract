@@ -1,0 +1,45 @@
+{
+  "description": "Regression corpus for positions::calculate_locked_collateral (share-collateral math, #334). Each case documents intent so a future change that reintroduces a rounding/saturation bug fails CI immediately. See contracts/market/src/positions.rs::calculate_locked_collateral and the loader test in contracts/market/src/tests_vectors.rs.",
+  "vectors": [
+    {
+      "id": "hedged-equal-shares-zero-locked",
+      "description": "Equal YES and NO shares are fully hedged and lock zero collateral regardless of price.",
+      "yes_shares": "100",
+      "no_shares": "100",
+      "market_price": 6000,
+      "expected": { "ok": "0" }
+    },
+    {
+      "id": "net-yes-scales-by-price",
+      "description": "Net YES position locks net_yes * price / 10000.",
+      "yes_shares": "100",
+      "no_shares": "0",
+      "market_price": 6000,
+      "expected": { "ok": "60" }
+    },
+    {
+      "id": "net-no-scales-by-inverse-price",
+      "description": "Net NO position locks net_no * (10000 - price) / 10000.",
+      "yes_shares": "0",
+      "no_shares": "100",
+      "market_price": 6000,
+      "expected": { "ok": "40" }
+    },
+    {
+      "id": "rounding-floors-down",
+      "description": "999 * 2500 / 10000 = 249.75, must floor to 249, never round up.",
+      "yes_shares": "999",
+      "no_shares": "0",
+      "market_price": 2500,
+      "expected": { "ok": "249" }
+    },
+    {
+      "id": "large-values-saturate-and-floor",
+      "description": "i128::MAX shares at a 100% price overflows the intermediate multiply; scale_by_bps must saturate to i128::MAX before dividing rather than wrapping or panicking.",
+      "yes_shares": "170141183460469231731687303715884105727",
+      "no_shares": "0",
+      "market_price": 10000,
+      "expected": { "ok": "17014118346046923173168730371588410" }
+    }
+  ]
+}

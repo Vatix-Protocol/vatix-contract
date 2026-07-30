@@ -178,3 +178,189 @@ fn same_trade_succeeds_before_cancel_and_fails_after() {
     );
     assert_eq!(after, Err(Ok(ContractError::MarketNotActive)));
 }
+
+// ── #588: reopen_market guard — Canceled → Active requires explicit admin call ──
+
+/// Attempting to call `reopen_market` on an Active market must be rejected.
+/// Active markets are not in a state that needs reopening; surfacing this as
+/// an error prevents accidental double-calls.
+#[test]
+fn reopen_active_market_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+
+    let mut params = MarketParams::default_valid(&env);
+    params.collateral_token = token.address();
+
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &params.collateral_token,
+        &None,
+    );
+
+    // Market is Active — reopen must be rejected.
+    let result = client.try_reopen_market(&admin, &market_id);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MarketNotActive)),
+        "reopen_market on an Active market must return MarketNotActive"
+    );
+}
+
+/// `reopen_market` on a non-existent market must return `MarketNotFound`.
+#[test]
+fn reopen_nonexistent_market_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+
+    let result = client.try_reopen_market(&admin, &999u32);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MarketNotFound)),
+        "reopen_market on a nonexistent market must return MarketNotFound"
+    );
+}
+
+/// A non-admin cannot call `reopen_market`.
+#[test]
+fn reopen_market_rejected_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+
+    let mut params = MarketParams::default_valid(&env);
+    params.collateral_token = token.address();
+
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &params.collateral_token,
+        &None,
+    );
+
+    client.cancel_market(&admin, &market_id);
+
+    let result = client.try_reopen_market(&non_admin, &market_id);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::NotAdmin)),
+        "reopen_market by a non-admin must return NotAdmin"
+    );
+}
+
+/// Full lifecycle: Active → Canceled → reopen (Active) → trading resumes.
+///
+/// This is the only sanctioned path for `Canceled → Active`. Verifies that
+/// trades succeed again after a successful `reopen_market` and that the
+/// `market_reopened` event is emitted.
+#[test]
+fn reopen_canceled_market_restores_active_and_trading() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::IntoVal;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+    let collateral_token = token.address();
+
+    let mut params = MarketParams::default_valid(&env);
+    params.collateral_token = collateral_token.clone();
+
+    let market_id = client.initialize_market(
+        &admin,
+        &params.question,
+        &params.end_time,
+        &params.oracle_pubkey,
+        &params.collateral_token,
+        &None,
+    );
+
+    let user = Address::generate(&env);
+    let deposit = 100 * STROOPS_PER_USDC;
+    StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
+    client.deposit_collateral(&user, &market_id, &deposit);
+
+    // Cancel the market.
+    client.cancel_market(&admin, &market_id);
+
+    // Trading is blocked while Canceled.
+    let blocked = client.try_update_position(
+        &user,
+        &market_id,
+        &(10 * STROOPS_PER_USDC),
+        &0i128,
+        &6_000i128,
+    );
+    assert_eq!(blocked, Err(Ok(ContractError::MarketNotActive)));
+
+    // Reopen via the explicit admin flow.
+    let reopen_result = client.try_reopen_market(&admin, &market_id);
+    assert!(reopen_result.is_ok(), "reopen_market must succeed on a Canceled market");
+
+    // Verify the market_reopened event was emitted.
+    let events = env.events().all();
+    let has_reopen_event = events.iter().any(|(_, topics, _)| {
+        let t0: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
+        t0 == soroban_sdk::Symbol::new(&env, "market_reopened")
+    });
+    assert!(has_reopen_event, "market_reopened event must be emitted on successful reopen");
+
+    // Trading is allowed again after reopen.
+    let after_reopen = client.try_update_position(
+        &user,
+        &market_id,
+        &(10 * STROOPS_PER_USDC),
+        &0i128,
+        &6_000i128,
+    );
+    assert!(after_reopen.is_ok(), "trading must resume on a reopened market");
+}

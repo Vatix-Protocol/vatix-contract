@@ -15,6 +15,18 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 | **Outcome Token** | `contracts/outcome-token` | ✅ Complete | Fungible SAC-compatible tokens representing YES/NO market outcomes |
 | **Resolution** | `contracts/resolution` | ✅ Complete | Standalone oracle-based outcome resolution with dispute window |
 
+### Outcome Token SAC metadata
+
+Each Outcome Token contract instance is initialized with SAC-compatible metadata, matching the `OutcomeTokenContract::initialize` / `set_metadata` implementation in `contracts/outcome-token/src/lib.rs`:
+
+| Field | Type | Source | Notes |
+|---|---|---|---|
+| `name` | `String` | Set at `initialize`, mutable via `set_metadata` (admin only) | Human-readable token name, e.g. `"Vatix YES Token"` |
+| `symbol` | `String` | Set at `initialize`, mutable via `set_metadata` (admin only) | Ticker symbol, e.g. `"vYES"` / `"vNO"` |
+| `decimals` | `u32` | Compile-time constant, not stored | Fixed at `7`, matching the Stellar Asset Contract (SAC) standard |
+
+`name`, `symbol`, and `decimals` are exposed via the `name()`, `symbol()`, and `decimals()` getters.
+
 ### Optional Market integrations
 
 The Market contract can optionally wire supporting modules via admin-configured contract addresses. Once registered:
@@ -39,6 +51,10 @@ See [`docs/cross-contract-call-graph.md`](docs/cross-contract-call-graph.md) for
 
 ## Documentation
 
+### Security
+
+Please review our [Security Policy](SECURITY.md) for information on reporting contract vulnerabilities.
+
 ### Storage Migrations
 
 The Market contract uses storage versioning to ensure data integrity across upgrades. See comprehensive documentation:
@@ -52,6 +68,20 @@ The Market contract uses storage versioning to ensure data integrity across upgr
   - Common pitfalls and solutions
   
 - **[Migration History](contracts/market/MIGRATION.md)** - Specific changes and data migration notes
+
+- **[Cross-Contract Upgrade Playbook](scripts/upgrade/UPGRADE_PLAYBOOK.md)** - Executable, multi-contract upgrade safety net covering Market, Treasury, Resolution, and Outcome Token together: deploy order, WASM hash pinning, the storage version compatibility matrix, a dual-read migration template for the next storage bump, a staging dry-run checklist, and rollback. Run `bash scripts/upgrade/check-upgrade.sh` for a scripted pass/fail dry-run; see the `upgrade-dry-run` CI job in `.github/workflows/ci.yml` for how it's enforced automatically.
+
+**Quick Reference:**
+- Current storage version: `3`
+- Always bump version for: field changes, type changes, semantic changes to stored data
+- Migration is required when deploying with a new storage version
+
+### Treasury Storage
+
+- **[Treasury Storage Layout](docs/treasury-storage.md)** - Complete `StorageKey` reference for the Treasury contract, including:
+  - Every key, its storage tier (instance vs persistent), value type, and description
+  - Storage version history
+  - Notes on the version guard and fee token registry
 
 **Quick Reference:**
 - Current storage version: `3`
@@ -88,7 +118,7 @@ pub fn close_market_to_deposits(env: Env, admin: Address, market_id: u32) -> Res
 
 **Event**:
 ```
-MarketClosedToDepositsEvent {
+MarketClosedToDeposits {
     market_id: u32,
     admin: Address,
     closed_at: u64,
@@ -147,6 +177,10 @@ pnpm dev          # http://localhost:3002
 pnpm build:web
 ```
 
+> **Freighter wallet integration:** See [`docs/freighter-integration-guide.md`](docs/freighter-integration-guide.md)
+> for setup instructions, transaction signing flow, ScVal helpers, and
+> troubleshooting — including [network mismatch errors](docs/freighter-integration-guide.md#network-mismatch-errors-issue-587).
+
 ## Getting Started
 
 ### Prerequisites
@@ -185,6 +219,67 @@ cd ../treasury && cargo build
 cd ../outcome-token && cargo build
 cd ../resolution && cargo build
 ```
+
+### Panic Strategy (Soroban Contract Builds)
+
+The workspace `[profile.release]` (`Cargo.toml`) sets `panic = "abort"`. WASM
+has no stack-unwinding support, so a panicking contract call must abort
+(trap the VM) rather than unwind — this is required for `wasm32v1-none`
+output and also keeps release binaries smaller.
+
+This only applies to `--release` builds — the same profile `stellar contract
+build` and the deploy scripts use. The `dev`/`test` profiles that `cargo
+test`/`cargo check` build with still unwind by default, which is why a few
+integration tests (e.g. `tests/close_market_test.rs`) can use
+`std::panic::catch_unwind` to assert a call panics; that pattern only works
+against the host-run test binary, not a deployed (release) WASM contract.
+
+Smoke-test that a contract's release build still aborts on panic (useful
+after touching a crate's `Cargo.toml` or the workspace profile):
+
+```bash
+cd contracts/market
+RUSTFLAGS="-C panic=abort" cargo build --release --target wasm32v1-none
+```
+
+`RUSTFLAGS` is redundant with the workspace profile setting here — it's just
+an explicit way to confirm the setting is actually taking effect for a
+specific crate/target combination.
+
+### Cargo Feature Flags
+
+The Market contract supports optional features via Cargo feature flags. These features control compilation of optional modules and dependencies.
+
+#### oracle-adapter Feature
+
+The `oracle-adapter` feature enables the oracle adapter module (`contracts/market/src/oracle_adapter.rs`), which provides:
+
+- `OracleAdapter` trait for abstracting over different oracle providers
+- `ReflectorAdapter` implementation for the Reflector on-chain oracle
+- `PythAdapter` stub for future Pyth Network integration
+- `AnyAdapter` enum for runtime dispatch between adapter types
+
+**Status:** Not enabled by default. The feature is gated because the mainnet switch for oracle adapters is not yet implemented (see issue #139).
+
+**Build with oracle-adapter:**
+```bash
+cd contracts/market
+cargo build --features oracle-adapter
+```
+
+**Build without oracle-adapter (default):**
+```bash
+cd contracts/market
+cargo build
+# or explicitly
+cargo build --no-default-features
+```
+
+**When to use:**
+- **With feature:** When developing or testing oracle adapter functionality, or when the mainnet switch is implemented
+- **Without feature:** For standard market contract deployment using the existing Ed25519 oracle verification path
+
+**Documentation:** See [`docs/adr-001-oracle-adapter.md`](docs/adr-001-oracle-adapter.md) for the complete design rationale, implementation details, and comparison of Reflector vs Pyth oracles.
 
 ### Workspace compile check
 

@@ -7,11 +7,12 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 /// `initialize()` writes this value so that future migrations can detect stale deployments.
 ///
 /// ## Version history
+/// - **v3:** Added `EmergencyMode` for coordinated emergency mode (#662).
 /// - **v2:** Completed the multi-market `AuthorizedMarkets` registry
 ///   (`add_market`/`remove_market`/`list_markets`/`is_authorized_market`) and
 ///   added the `Stakeholders` fee-distribution list (#485).
 /// - **v1:** Initial storage layout.
-pub const STORAGE_VERSION: u32 = 2;
+pub const STORAGE_VERSION: u32 = 3;
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ pub enum StorageKey {
     TokenBalance(Address),
     /// Monotonically increasing cumulative fees collected per token (never decreases).
     CumulativeFees(Address),
-    /// Global monotone counter: total of all fees ever collected across all tokens.
+    /// Global counter: total of all fees currently held across all tokens. Decreases on withdrawal.
     TotalCollected,
     /// When `true`, `collect_fee` and `withdraw_fees` are blocked until unpaused.
     Paused,
@@ -38,9 +39,19 @@ pub enum StorageKey {
     /// through `collect_fee` (#484). Lets callers enumerate which tokens hold
     /// a balance without needing prior knowledge of the token address.
     FeeTokens,
+    PendingMarketContract,
+    PendingAdmin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct PendingAddressChange {
+    pub new_address: Address,
+    pub effective_at: u64,
 }
 
 // ── Version ───────────────────────────────────────────────────────────────────
+
 
 pub fn set_version(env: &Env) {
     env.storage()
@@ -82,6 +93,18 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&StorageKey::Admin, admin);
 }
 
+pub fn get_pending_admin(env: &Env) -> Option<PendingAddressChange> {
+    env.storage().instance().get(&StorageKey::PendingAdmin)
+}
+
+pub fn set_pending_admin(env: &Env, pending: &PendingAddressChange) {
+    env.storage().instance().set(&StorageKey::PendingAdmin, pending);
+}
+
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().instance().remove(&StorageKey::PendingAdmin);
+}
+
 // ── Authorized markets registry ───────────────────────────────────────────────
 //
 // Note: fixed alongside #484 (multi-token fee collection) since this file was
@@ -114,6 +137,18 @@ pub fn get_authorized_market(env: &Env) -> Result<Address, TreasuryError> {
 
 pub fn is_authorized_market(env: &Env, market: &Address) -> bool {
     get_authorized_markets(env).contains(market)
+}
+
+pub fn get_pending_market_contract(env: &Env) -> Option<PendingAddressChange> {
+    env.storage().instance().get(&StorageKey::PendingMarketContract)
+}
+
+pub fn set_pending_market_contract(env: &Env, pending: &PendingAddressChange) {
+    env.storage().instance().set(&StorageKey::PendingMarketContract, pending);
+}
+
+pub fn clear_pending_market_contract(env: &Env) {
+    env.storage().instance().remove(&StorageKey::PendingMarketContract);
 }
 
 // ── Token balance (current, decreasable on withdrawal) ────────────────────────
@@ -221,6 +256,36 @@ pub fn set_stakeholders(env: &Env, stakeholders: &Vec<(Address, u32)>) {
     env.storage()
         .instance()
         .set(&StorageKey::Stakeholders, stakeholders);
+}
+
+// ── Emergency Mode (Issue #662) ─────────────────────────────────────────────
+
+/// Mirrored emergency mode coordinated with the Market contract. Defaults to
+/// `Normal` when never explicitly set. Only the admin may change this value.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EmergencyMode {
+    Normal,
+    TradingHalted,
+    SettleOnly,
+    GlobalFreeze,
+}
+
+/// Return the current mirrored emergency mode. Defaults to `Normal` when unset.
+pub fn get_emergency_mode(env: &Env) -> EmergencyMode {
+    env.storage()
+        .instance()
+        .get(&StorageKey::EmergencyMode)
+        .unwrap_or(EmergencyMode::Normal)
+}
+
+/// Set the mirrored emergency mode. Only the admin may call this (enforced in
+/// `lib.rs`). Operators should keep this value in sync with the Market and
+/// Resolution contracts for coordinated behaviour.
+pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::EmergencyMode, mode);
 }
 
 #[cfg(test)]

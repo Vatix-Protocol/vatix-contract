@@ -36,7 +36,7 @@ if market.closed_to_deposits {
 
 ### 4. Event (events.rs)
 ```rust
-pub struct MarketClosedToDepositsEvent {
+pub struct MarketClosedToDeposits {
     pub market_id: u32,
     pub admin: Address,
     pub closed_at: u64,
@@ -109,7 +109,7 @@ pub fn close_market_to_deposits(env: Env, admin: Address, market_id: u32) -> Res
 
 ### Event Emitted
 ```rust
-MarketClosedToDepositsEvent {
+MarketClosedToDeposits {
     market_id: u32,
     admin: Address,
     closed_at: u64,
@@ -144,7 +144,7 @@ MarketClosedToDepositsEvent {
 All changes verified via:
 - ✅ Code inspection - All files reviewed and structured correctly
 - ✅ Type analysis - Market struct properly updated
-- ✅ Event analysis - MarketClosedToDepositsEvent properly defined
+- ✅ Event analysis - MarketClosedToDeposits properly defined
 - ✅ Error analysis - MarketClosedToDeposits error code added
 - ✅ Test count - 13 tests covering positive and negative paths
 - ✅ Documentation - 3 files created/updated with complete details

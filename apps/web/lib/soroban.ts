@@ -43,6 +43,7 @@ export interface RpcMarket {
   volume: string;
   status: string;
   ends_at: string;
+  closed_to_deposits?: boolean;
 }
 
 interface GetMarketsResult {

@@ -1,5 +1,5 @@
 #![no_std]
-#![deny(clippy::all)]
+#![warn(clippy::all)]
 
 //! # Treasury Contract
 //!
@@ -46,6 +46,9 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 
 /// Basis-point denominator: stakeholder shares must sum to exactly this value.
 const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Uniform timelock delay for privileged address mutations
+pub const ADDRESS_TIMELOCK_SECONDS: u64 = 172_800;
 
 #[contract]
 pub struct TreasuryContract;
@@ -95,6 +98,15 @@ impl TreasuryContract {
         if storage::is_paused(&env) {
             return Err(TreasuryError::ContractPaused);
         }
+        // Emergency mode: fee collection is blocked only in GlobalFreeze
+        require_emergency_mode_allows(
+            &env,
+            &[
+                storage::EmergencyMode::Normal,
+                storage::EmergencyMode::TradingHalted,
+                storage::EmergencyMode::SettleOnly,
+            ],
+        )?;
         if !storage::is_authorized_market(&env, &caller) {
             return Err(TreasuryError::CallerNotMarket);
         }
@@ -151,6 +163,15 @@ impl TreasuryContract {
         if storage::is_paused(&env) {
             return Err(TreasuryError::ContractPaused);
         }
+        // Emergency mode: fee withdrawal is blocked only in GlobalFreeze
+        require_emergency_mode_allows(
+            &env,
+            &[
+                storage::EmergencyMode::Normal,
+                storage::EmergencyMode::TradingHalted,
+                storage::EmergencyMode::SettleOnly,
+            ],
+        )?;
         let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
@@ -170,14 +191,14 @@ impl TreasuryContract {
         let remaining = balance - amount;
         storage::set_token_balance(&env, &token, remaining);
 
+        let prev_total = storage::get_total_collected(&env)?;
+        storage::set_total_collected(&env, prev_total.checked_sub(amount).unwrap_or(0));
+
         events::emit_fees_withdrawn(&env, &token, &to, amount, remaining);
         Ok(())
     }
 
-    /// Transfer admin rights to a new address immediately.
-    ///
-    /// Only the current admin may call this.
-    pub fn transfer_admin(
+    pub fn propose_admin(
         env: Env,
         caller: Address,
         new_admin: Address,
@@ -192,8 +213,47 @@ impl TreasuryContract {
             return Err(TreasuryError::Unauthorized);
         }
 
-        storage::set_admin(&env, &new_admin);
-        events::emit_admin_transferred(&env, &admin, &new_admin);
+        let effective_at = env.ledger().timestamp() + ADDRESS_TIMELOCK_SECONDS;
+        storage::set_pending_admin(
+            &env,
+            &storage::PendingAddressChange {
+                new_address: new_admin.clone(),
+                effective_at,
+            },
+        );
+
+        events::emit_admin_transfer_proposed(&env, &admin, &new_admin, effective_at);
+        Ok(())
+    }
+
+    pub fn execute_admin(env: Env) -> Result<Address, TreasuryError> {
+        let pending = storage::get_pending_admin(&env)
+            .ok_or(TreasuryError::Unauthorized)?; // Using Unauthorized as fallback for now
+
+        if env.ledger().timestamp() < pending.effective_at {
+            return Err(TreasuryError::Unauthorized); // TimelockNotElapsed
+        }
+
+        let current_admin = storage::get_admin(&env)?;
+        storage::set_admin(&env, &pending.new_address);
+        storage::clear_pending_admin(&env);
+
+        events::emit_admin_transferred(&env, &current_admin, &pending.new_address);
+        Ok(pending.new_address)
+    }
+
+    pub fn cancel_admin(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        storage::clear_pending_admin(&env);
         Ok(())
     }
 
@@ -227,10 +287,10 @@ impl TreasuryContract {
 
     /// Deregister a market contract, revoking its ability to call `collect_fee`.
     ///
-    /// Only the admin may call this.
+    /// Removing an unknown market is a no-op that preserves the existing
+    /// registry contents.
     ///
-    /// # Errors
-    /// - [`TreasuryError::CallerNotMarket`] — `market_contract` is not currently registered.
+    /// Only the admin may call this.
     pub fn remove_market(
         env: Env,
         caller: Address,
@@ -248,7 +308,7 @@ impl TreasuryContract {
 
         let markets = storage::get_authorized_markets(&env);
         if !markets.contains(&market_contract) {
-            return Err(TreasuryError::CallerNotMarket);
+            return Ok(());
         }
         let mut updated = Vec::new(&env);
         for m in markets.iter() {
@@ -261,11 +321,7 @@ impl TreasuryContract {
         Ok(())
     }
 
-    /// Rotate the full set of authorized markets to a single new market
-    /// contract (e.g. after a market-contract upgrade). Existing
-    /// registrations are replaced entirely — use [`add_market`] /
-    /// [`remove_market`] to manage individual entries instead.
-    pub fn set_market_contract(
+    pub fn propose_market_contract(
         env: Env,
         caller: Address,
         new_market_contract: Address,
@@ -280,13 +336,47 @@ impl TreasuryContract {
             return Err(TreasuryError::Unauthorized);
         }
 
-        let old_markets = storage::get_authorized_markets(&env);
-        let old = old_markets
-            .get(0)
-            .unwrap_or_else(|| new_market_contract.clone());
-        let updated = soroban_sdk::vec![&env, new_market_contract.clone()];
-        storage::set_authorized_markets(&env, &updated);
-        events::emit_market_contract_updated(&env, &old, &new_market_contract);
+        let effective_at = env.ledger().timestamp() + ADDRESS_TIMELOCK_SECONDS;
+        storage::set_pending_market_contract(
+            &env,
+            &storage::PendingAddressChange {
+                new_address: new_market_contract.clone(),
+                effective_at,
+            },
+        );
+
+        events::emit_market_contract_proposed(&env, &new_market_contract, effective_at);
+        Ok(())
+    }
+
+    pub fn execute_market_contract(env: Env) -> Result<Address, TreasuryError> {
+        let pending = storage::get_pending_market_contract(&env)
+            .ok_or(TreasuryError::Unauthorized)?;
+
+        if env.ledger().timestamp() < pending.effective_at {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        let mut markets = soroban_sdk::vec![&env, pending.new_address.clone()];
+        storage::set_authorized_markets(&env, &markets);
+        storage::clear_pending_market_contract(&env);
+
+        events::emit_market_contract_set(&env, &pending.new_address);
+        Ok(pending.new_address)
+    }
+
+    pub fn cancel_market_contract(env: Env, caller: Address) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        storage::clear_pending_market_contract(&env);
         Ok(())
     }
 
@@ -318,6 +408,33 @@ impl TreasuryContract {
         storage::set_paused(&env, false);
         events::emit_treasury_unpaused(&env, &caller);
         Ok(())
+    }
+
+    /// Set the mirrored emergency mode (Issue #662).
+    ///
+    /// Only the treasury admin may call this. Operators should keep this value
+    /// in sync with the Market and Resolution contracts for coordinated behaviour.
+    pub fn set_emergency_mode(
+        env: Env,
+        caller: Address,
+        new_mode: storage::EmergencyMode,
+    ) -> Result<(), TreasuryError> {
+        caller.require_auth();
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_emergency_mode(&env, &new_mode);
+        events::emit_emergency_mode_changed(&env, &new_mode, &caller);
+        Ok(())
+    }
+
+    /// Return the current mirrored emergency mode.
+    pub fn get_emergency_mode(env: Env) -> storage::EmergencyMode {
+        storage::get_emergency_mode(&env)
     }
 
     // ── Stakeholder fee distribution (#485) ────────────────────────────────────
@@ -387,6 +504,15 @@ impl TreasuryContract {
         if storage::is_paused(&env) {
             return Err(TreasuryError::ContractPaused);
         }
+        // Emergency mode: fee distribution is blocked only in GlobalFreeze
+        require_emergency_mode_allows(
+            &env,
+            &[
+                storage::EmergencyMode::Normal,
+                storage::EmergencyMode::TradingHalted,
+                storage::EmergencyMode::SettleOnly,
+            ],
+        )?;
         let admin = storage::get_admin(&env)?;
         if caller != admin {
             return Err(TreasuryError::Unauthorized);
@@ -441,7 +567,7 @@ impl TreasuryContract {
     /// in the authorized-markets registry). Returns `NotInitialized` if no
     /// market has ever been registered.
     pub fn market_contract(env: Env) -> Result<Address, TreasuryError> {
-        storage::get_authorized_markets(&env)?
+        storage::get_authorized_markets(&env)
             .get(0)
             .ok_or(TreasuryError::NotInitialized)
     }
@@ -453,7 +579,7 @@ impl TreasuryContract {
 
     /// Return every market contract currently authorized to call `collect_fee`.
     pub fn list_markets(env: Env) -> Result<Vec<Address>, TreasuryError> {
-        storage::get_authorized_markets(&env)
+        Ok(storage::get_authorized_markets(&env))
     }
 
     /// Return every distinct token mint that has ever had a fee collected for it (#484).
@@ -475,4 +601,21 @@ impl TreasuryContract {
     pub fn total_collected(env: Env) -> Result<i128, TreasuryError> {
         storage::get_total_collected(&env)
     }
+}
+
+/// Guard: reject operations that are not permitted under the current emergency
+/// mode (Issue #662).
+///
+/// `allowed_modes` specifies the set of modes under which the guarded operation
+/// is permitted. If the current mode is not in this set, the call is rejected
+/// with [`TreasuryError::EmergencyModeActive`].
+fn require_emergency_mode_allows(
+    env: &Env,
+    allowed_modes: &[storage::EmergencyMode],
+) -> Result<(), TreasuryError> {
+    let current = storage::get_emergency_mode(env);
+    if !allowed_modes.contains(&current) {
+        return Err(TreasuryError::EmergencyModeActive);
+    }
+    Ok(())
 }

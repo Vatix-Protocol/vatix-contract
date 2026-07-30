@@ -24,6 +24,7 @@ export const MARKET_ERROR_MESSAGES: Record<number, string> = {
   11: "This position has already been settled.",
   12: "You don't have a position in this market.",
   13: "That share amount isn't valid.",
+  14: "Too many positions in that batch. Try a smaller batch.",
 
   // Oracle errors (20-29)
   20: "Oracle signature verification failed.",

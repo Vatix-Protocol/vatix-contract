@@ -25,8 +25,15 @@ User
  │
  ├─ update_position(market_id, yes_delta, no_delta, price)
  │      Market
+ │       ├─[if outcome_token_contract set]──► OutcomeToken::balance(market_id, user, Yes|No)
+ │       │        [reconciliation guard — rejects with PositionTokenMismatch on divergence]
  │       └─[if outcome_token_contract set]──► OutcomeToken::mint(market_id, user, kind, amount)
  │                                            OutcomeToken::burn(market_id, user, kind, amount)
+ │
+ ├─ settle_position / batch_settle_positions / settle_positions_page(market_id)
+ │      Market
+ │       └─[if outcome_token_contract set]──► OutcomeToken::balance(market_id, user, Yes|No)
+ │                [reconciliation guard — rejects/skips user on divergence]
  │
  ├─ withdraw_unused_collateral(market_id, amount)
  │      Market
@@ -36,6 +43,12 @@ User
  │
  ├─ resolve_market(market_id, outcome, signature)
  │      Market (no cross-contract calls; oracle sig verified in-contract)
+ │
+ ├─ Admin: reconcile_position_tokens(market_id, user)
+ │      Market
+ │       └──► OutcomeToken::mint(market_id, user, kind, amount)
+ │            OutcomeToken::burn(market_id, user, kind, amount)
+ │            [mints/burns tokens to match Position; admin-gated repair path]
  │
  └─ Resolution lifecycle (off-chain orchestrator drives these)
         │
@@ -124,6 +137,32 @@ Resolution::finalize(finalizer, candidate_id)
   → Market::resolve_market(market_id, outcome, signature)
 ```
 
+### 5. Market ↔ OutcomeToken (dual-ledger reconciliation)
+
+| Property | Value |
+|---|---|
+| Caller | `MarketContract::update_position`, `settle_position` (+ batch/page variants), `get_position_token_parity`, `reconcile_position_tokens` |
+| Callee | `OutcomeTokenContract::balance` (read), plus `mint`/`burn` from `reconcile_position_tokens` |
+| Trigger | Every trade and settlement attempt (guard check); admin-initiated repair |
+| Purpose | `Position` (Market storage) and `OutcomeToken` balances are two ledgers that are supposed to always agree — a historical bug, partial upgrade, or manual admin mint/burn issued directly on the outcome-token contract can make them diverge. The guard reads both ledgers and refuses to proceed on mismatch instead of silently re-syncing |
+| Auth required | Guard reads (`balance`) need no auth. `reconcile_position_tokens` requires the Market contract's stored admin |
+| Failure behaviour | `update_position`/`settle_position` reject with `ContractError::PositionTokenMismatch` (after emitting `PositionTokenMismatchDetected`) when the two ledgers disagree for that user/market. `batch_settle_positions`/`settle_positions_page` skip the affected user rather than aborting the whole batch |
+| Repair | `MarketContract::reconcile_position_tokens(admin, market_id, user)` mints/burns `OutcomeToken` balances to match `Position` (Position is the source of truth — see `contracts/market/src/reconciliation.rs`), emitting `PositionTokensReconciled` |
+| Registration | Reuses the existing `set_outcome_token_contract` wiring — no separate registration step |
+
+```
+update_position(user, market_id, yes_delta, no_delta, price)
+  → OutcomeToken::balance(market_id, user, Yes|No)   [parity check, both sides]
+  → reject with PositionTokenMismatch if divergent, else proceed as in edge 1
+
+settle_position(user, market_id) / batch_settle_positions / settle_positions_page
+  → OutcomeToken::balance(market_id, user, Yes|No)   [parity check]
+  → reject (single) or skip (batch/page) with PositionTokenMismatch if divergent
+
+reconcile_position_tokens(admin, market_id, user)     [admin-gated]
+  → OutcomeToken::mint / OutcomeToken::burn            [bring balances back to Position]
+```
+
 ---
 
 ## Authorization Summary
@@ -134,6 +173,8 @@ Resolution::finalize(finalizer, candidate_id)
 | `Treasury::collect_fee` | Market contract address (`caller == authorized_market_contract`) |
 | `Market::verify_signature` | No auth (public read) |
 | `Market::resolve_market` (via Resolution) | Resolution contract address as `resolver` |
+| `Market::reconcile_position_tokens` | Market contract's stored admin |
+| `Market::get_position_token_parity` | No auth (public read) |
 
 ---
 

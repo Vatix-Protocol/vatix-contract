@@ -26,6 +26,11 @@ Guide for adding a new contract crate or working on an existing one
   a fixture file).
 - Public contract functions return `Result<T, ContractError>` — add new
   error variants to `error.rs` rather than panicking.
+- Release builds compile with `panic = "abort"` (workspace `[profile.release]`
+  in the root `Cargo.toml`) since WASM has no stack-unwinding support — see
+  [README.md § Panic Strategy](README.md#panic-strategy-soroban-contract-builds)
+  for the smoke-test command and why `cargo test`'s `catch_unwind`-based
+  assertions don't carry over to a deployed contract.
 - Emit a `#[contractevent]` (see `events.rs` in any contract) for state
   changes that off-chain indexers care about, following the existing
   `EVENT_VERSION` topic-versioning pattern.

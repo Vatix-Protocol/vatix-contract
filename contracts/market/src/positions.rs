@@ -496,6 +496,28 @@ mod tests {
         assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
         assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
     }
+
+    #[test]
+    fn test_update_position_conserves_share_total_when_switching_sides() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = sample_user(&env, 12);
+        let market_id = 12;
+
+        let initial = env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
+        });
+
+        let switched = env.as_contract(&contract_id, || {
+            update_position(&env, market_id, &user, -100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000).unwrap()
+        });
+
+        assert_eq!(initial.yes_shares + initial.no_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(switched.yes_shares + switched.no_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(switched.yes_shares, 0);
+        assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
+    }
 }
 
 #[cfg(test)]

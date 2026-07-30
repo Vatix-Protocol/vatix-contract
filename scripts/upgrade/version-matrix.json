@@ -1,0 +1,52 @@
+{
+  "description": "Cross-contract storage/interface version compatibility matrix for the Vatix protocol upgrade playbook (issue #664). scripts/upgrade/check-upgrade.sh checks the 'storageVersion' fields below against the compiled STORAGE_VERSION constants in contracts/{market,treasury}/src/storage.rs and fails on drift. resolution and outcome-token do not have a STORAGE_VERSION constant yet, so their entries are versioningScheme 'wasmHashOnly' and are pinned instead via scripts/upgrade/expected-hashes.json. See scripts/upgrade/UPGRADE_PLAYBOOK.md for the full playbook.",
+  "contracts": {
+    "market": {
+      "versioningScheme": "storageVersion",
+      "storageVersion": 4,
+      "sourceOfTruth": "contracts/market/src/storage.rs",
+      "docs": "contracts/market/STORAGE_MIGRATION_GUIDE.md"
+    },
+    "treasury": {
+      "versioningScheme": "storageVersion",
+      "storageVersion": 2,
+      "sourceOfTruth": "contracts/treasury/src/storage.rs",
+      "docs": null
+    },
+    "resolution": {
+      "versioningScheme": "wasmHashOnly",
+      "storageVersion": null,
+      "sourceOfTruth": "contracts/resolution/src/storage.rs",
+      "note": "No StorageKey::StorageVersion / STORAGE_VERSION constant exists yet. Pinned via wasmHash in scripts/upgrade/expected-hashes.json until storage versioning is added to this contract (tracked as a playbook follow-up, not part of #664)."
+    },
+    "outcomeToken": {
+      "versioningScheme": "wasmHashOnly",
+      "storageVersion": null,
+      "sourceOfTruth": "contracts/outcome-token/src/storage.rs",
+      "note": "No StorageKey::StorageVersion / STORAGE_VERSION constant exists yet. Pinned via wasmHash in scripts/upgrade/expected-hashes.json until storage versioning is added to this contract (tracked as a playbook follow-up, not part of #664)."
+    }
+  },
+  "compatibility": [
+    {
+      "marketStorageVersion": 4,
+      "treasuryStorageVersion": 2,
+      "resolutionInterface": "v1-challenge-window",
+      "outcomeTokenInterface": "v1-mint-burn",
+      "notes": "Current target combination. Market v4 adds the per-adapter AdapterEnabled flag (#488); Treasury v2 adds the multi-market AuthorizedMarkets registry and Stakeholders distribution (#485). Resolution's propose/challenge/finalize lifecycle and Outcome Token's mint/burn interface have not changed shape since their initial release, so they remain 'v1' against every market/treasury pairing below."
+    },
+    {
+      "marketStorageVersion": 3,
+      "treasuryStorageVersion": 2,
+      "resolutionInterface": "v1-challenge-window",
+      "outcomeTokenInterface": "v1-mint-burn",
+      "notes": "Market v3 lacks the AdapterEnabled flag (#488) but is otherwise wire-compatible with treasury v2, resolution v1, and outcome-token v1 — the oracle adapter feature is opt-in and gated behind a Cargo feature flag, so its absence does not break cross-contract calls."
+    },
+    {
+      "marketStorageVersion": 3,
+      "treasuryStorageVersion": 1,
+      "resolutionInterface": "v1-challenge-window",
+      "outcomeTokenInterface": "v1-mint-burn",
+      "notes": "Pre-#485 treasury: fee collection via collect_fee works, but distribute_fees is unavailable (no Stakeholders storage key)."
+    }
+  ]
+}

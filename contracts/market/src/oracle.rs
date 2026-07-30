@@ -875,4 +875,93 @@ mod adapter_fallback_tests {
             assert_eq!(result, Err(ContractError::UnauthorizedOracle));
         });
     }
+
+    // --- #555: Pyth adapter path coverage ---
+
+    /// When a Pyth adapter is disabled (the default — no storage entry), the
+    /// fallback path is identical to the Reflector case: verify_market_outcome
+    /// falls through to Ed25519 verification against `oracle_pubkey`.
+    #[test]
+    fn pyth_disabled_falls_back_to_ed25519() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market_id = 1u32;
+        let outcome = false;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let message = construct_oracle_message(&env, market_id, outcome);
+        let signature = signing_key.sign(message.to_array().as_slice());
+        let pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+        let sig = BytesN::from_array(&env, &signature.to_bytes());
+
+        // Build a Pyth-typed market using the same oracle_pubkey.
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Pyth disabled fallback test"),
+            end_time: 9_999_999,
+            oracle_pubkey: pubkey,
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token: Address::generate(&env),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Pyth,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Pyth adapter is not enabled — fall back to direct Ed25519 verification.
+            let result =
+                verify_market_outcome(&env, market_id, &market, AdapterType::Pyth, outcome, &sig);
+            assert_eq!(result, Ok(()));
+        });
+    }
+
+    /// When a Pyth adapter is explicitly enabled, verify_market_outcome returns
+    /// `UnauthorizedOracle` because the full on-chain Pyth adapter is not yet
+    /// wired (tracked in #139). This is the "clear error for misconfig" path.
+    #[test]
+    fn pyth_enabled_returns_unauthorized_oracle() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = Market {
+            id: 2,
+            question: String::from_str(&env, "Pyth enabled misconfig test"),
+            end_time: 9_999_999,
+            oracle_pubkey: BytesN::from_array(&env, &[1u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token: Address::generate(&env),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Pyth,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_adapter_enabled(&env, &AdapterType::Pyth, true);
+            let result = verify_market_outcome(
+                &env,
+                2,
+                &market,
+                AdapterType::Pyth,
+                true,
+                &BytesN::from_array(&env, &[0u8; 64]),
+            );
+            // Adapter enabled but not fully wired → UnauthorizedOracle (clear misconfig error).
+            assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+        });
+    }
 }

@@ -9,9 +9,12 @@ Every event below is defined with `#[contractevent]` and published via
 `.publish(env)` in the corresponding `emit_*` function. The **Event/Topic**
 column is the first (auto-generated) topic in the on-chain event — Soroban's
 `#[contractevent]` macro derives it by converting the struct name to
-`snake_case` **verbatim** (no suffix stripping), so a struct literally named
-e.g. `MarketClosedToDepositsEvent` produces the topic
-`market_closed_to_deposits_event`, not `market_closed_to_deposits`.
+`snake_case` **verbatim** (no suffix stripping), so an event struct's exact
+name directly determines its on-chain topic. Every event struct follows the
+`{Noun}{Verb}` PascalCase pattern without a redundant `Event` suffix (Issue
+#389, audited for consistency across all four contracts in Issue #581), so
+e.g. `MarketClosedToDeposits` produces the indexer-friendly topic
+`market_closed_to_deposits`, never `market_closed_to_deposits_event`.
 
 In the **Fields** column, fields marked `(topic)` are additional indexed
 topics (in declaration order, after the auto-generated event-name topic);
@@ -25,12 +28,12 @@ events additionally carry a `version: u32 (topic)` field
 | Event/Topic | Fields (name: type) | Emitted When |
 |---|---|---|
 | `contract_initialized` | `version: u32 (topic)`, `admin: Address (topic)`, `initialized_at: u64` | Contract is initialized with an admin (`initialize`) |
-| `emergency_pause_toggled_event` | `version: u32 (topic)`, `paused: bool (topic)`, `timestamp: u64` | The emergency pause flag is toggled on/off |
+| `emergency_pause_toggled` | `version: u32 (topic)`, `paused: bool (topic)`, `timestamp: u64` | The emergency pause flag is toggled on/off |
 | `market_created` | `version: u32 (topic)`, `market_id: u32 (topic)`, `creator: Address`, `question: String`, `end_time: u64`, `metadata_uri: Option<String>` | A new prediction market is created |
 | `collateral_deposited` | `version: u32 (topic)`, `user: Address (topic)`, `market_id: u32 (topic)`, `amount: i128`, `new_total: i128` | A user deposits collateral into a market |
 | `collateral_withdrawn` | `version: u32 (topic)`, `user: Address (topic)`, `market_id: u32 (topic)`, `amount: i128`, `new_total: i128` | A user withdraws collateral from a market |
 | `withdraw_edge_case` | `version: u32 (topic)`, `user: Address (topic)`, `market_id: u32 (topic)`, `amount: i128` | A user attempts to withdraw with zero collateral deposited (edge case for monitoring) |
-| `market_closed_to_deposits_event` | `version: u32 (topic)`, `market_id: u32 (topic)`, `admin: Address`, `closed_at: u64` | An admin closes a market to new collateral deposits |
+| `market_closed_to_deposits` | `version: u32 (topic)`, `market_id: u32 (topic)`, `admin: Address`, `closed_at: u64` | An admin closes a market to new collateral deposits |
 | `market_resolved` | `version: u32 (topic)`, `market_id: u32 (topic)`, `oracle_pubkey: BytesN<32>`, `resolver: Address`, `outcome: bool`, `resolved_at: u64` | A market is resolved with an oracle-signed outcome |
 | `market_canceled` | `version: u32 (topic)`, `market_id: u32 (topic)`, `canceler: Address`, `canceled_at: u64` | An admin cancels a market before resolution |
 | `position_limit_exceeded` | `version: u32 (topic)`, `market_id: u32 (topic)`, `user: Address (topic)`, `side_yes: bool` | A trade/position change is rejected because a share balance would go negative |
@@ -47,11 +50,13 @@ events additionally carry a `version: u32 (topic)` field
 | `treasury_set` | `version: u32 (topic)`, `treasury: Address (topic)`, `set_at: u64` | The Treasury contract address is registered on the market |
 | `fee_rate_change_proposed` | `version: u32 (topic)`, `new_rate_bps: i128`, `effective_at: u64` | An admin proposes a new withdrawal fee rate, effective at a future timestamp |
 | `fee_rate_change_executed` | `version: u32 (topic)`, `new_rate_bps: i128`, `executed_at: u64` | A previously-proposed fee rate change takes effect |
-| `admin_renounce_proposed_event` | `version: u32 (topic)`, `admin: Address (topic)`, `proposed_at: u64` | The admin proposes renouncing the admin role |
-| `admin_renounced_event` | `version: u32 (topic)`, `former_admin: Address (topic)`, `renounced_at: u64` | The admin renounce is finalized (admin role given up) |
+| `admin_renounce_proposed` | `version: u32 (topic)`, `admin: Address (topic)`, `proposed_at: u64` | The admin proposes renouncing the admin role |
+| `admin_renounced` | `version: u32 (topic)`, `former_admin: Address (topic)`, `renounced_at: u64` | The admin renounce is finalized (admin role given up) |
 | `oracle_adapter_configured` | `adapter_type: AdapterType (topic)`, `enabled: bool`, `configured_at: u64` | The admin enables/disables the Reflector or Pyth oracle adapter |
 | `fee_waiver_added` | `account: Address (topic)`, `admin: Address`, `added_at: u64` | The admin adds an address to the withdrawal fee waiver list |
 | `fee_waiver_removed` | `account: Address (topic)`, `admin: Address`, `removed_at: u64` | The admin removes an address from the fee waiver list |
+| `position_token_mismatch_detected` | `version: u32 (topic)`, `market_id: u32 (topic)`, `user: Address (topic)`, `yes_shares: i128`, `no_shares: i128`, `yes_token_balance: i128`, `no_token_balance: i128` | The reconciliation guard finds a user's `Position` shares and `OutcomeToken` balances have diverged (raised before `update_position`/`settle_position` reject) |
+| `position_tokens_reconciled` | `version: u32 (topic)`, `market_id: u32 (topic)`, `user: Address (topic)`, `admin: Address`, `yes_delta_applied: i128`, `no_delta_applied: i128`, `reconciled_at: u64` | An admin repairs a Position/OutcomeToken divergence via `reconcile_position_tokens` (deltas are the signed mint/burn applied to the OutcomeToken balance) |
 
 ## Treasury (`contracts/treasury/src/events.rs`)
 
@@ -66,8 +71,8 @@ events additionally carry a `version: u32 (topic)` field
 | `market_removed` | `market_contract: Address (topic)` | A market contract is removed from the Treasury's registry |
 | `stakeholders_updated` | `stakeholder_count: u32`, `updated_at: u64` | The fee-distribution stakeholder list is updated |
 | `fees_distributed` | `token: Address (topic)`, `distributed_amount: i128`, `remaining_token_balance: i128`, `stakeholder_count: u32`, `distributed_at: u64` | Fees for `token` are distributed across all configured stakeholders (once per `distribute_fees` call) |
-| `treasury_paused_event` | `admin: Address (topic)`, `paused_at: u64` | The Treasury is paused for emergency maintenance |
-| `treasury_unpaused_event` | `admin: Address (topic)`, `unpaused_at: u64` | The Treasury is unpaused |
+| `treasury_paused` | `admin: Address (topic)`, `paused_at: u64` | The Treasury is paused for emergency maintenance |
+| `treasury_unpaused` | `admin: Address (topic)`, `unpaused_at: u64` | The Treasury is unpaused |
 
 ## Resolution (`contracts/resolution/src/events.rs`)
 
@@ -85,7 +90,7 @@ events additionally carry a `version: u32 (topic)` field
 |---|---|---|
 | `token_minted` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens (YES/NO) are minted to a user |
 | `token_burned` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens are burned from a user |
-| `token_transferred_event` | `market_id: u32 (topic)`, `from: Address (topic)`, `to: Address`, `kind: TokenKind`, `amount: i128` | Outcome tokens are transferred between two users |
+| `token_transferred` | `market_id: u32 (topic)`, `from: Address (topic)`, `to: Address`, `kind: TokenKind`, `amount: i128` | Outcome tokens are transferred between two users |
 
 ## Notes for indexers
 

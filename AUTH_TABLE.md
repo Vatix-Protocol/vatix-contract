@@ -23,11 +23,11 @@ Every row below follows the same two-step pattern unless noted otherwise:
 | `initialize_market`             | ✅ | ✅ | |
 | `cancel_market`                 | ✅ | ✅ | |
 | `set_adapter_enabled`           | ✅ | ✅ | |
-| `update_market_oracle`          | ✅ | ✅ | |
+| `update_market_oracle` (propose/execute/cancel) | ✅ | ✅ | Updated to use propose/execute/cancel timelock. |
 | `set_threshold_signers`         | ✅ | ✅ | |
-| `set_treasury_contract`         | ✅ | ✅ | |
-| `set_outcome_token_contract`    | ✅ | ✅ | |
-| `set_resolution_contract`       | ✅ | ✅ | **Was missing entirely** — storage helpers and tests existed but no contract entrypoint called them; added by this pass. |
+| `set_treasury_contract` (propose/execute/cancel) | ✅ | ✅ | Updated to use propose/execute/cancel timelock. |
+| `set_outcome_token_contract` (propose/execute/cancel) | ✅ | ✅ | Updated to use propose/execute/cancel timelock. |
+| `set_resolution_contract` (propose/execute/cancel) | ✅ | ✅ | Added and updated to use propose/execute/cancel timelock. |
 | `add_fee_waiver`                | ✅ | ✅ | |
 | `remove_fee_waiver`             | ✅ | ✅ | |
 | `set_fee_rate`                  | ✅ | ✅ | Enforces the fee cap at propose time. |
@@ -42,10 +42,10 @@ Every row below follows the same two-step pattern unless noted otherwise:
 |------------------------|:---:|:---:|
 | `initialize`           | ✅ | n/a (bootstraps admin) |
 | `withdraw_fees`        | ✅ | ✅ |
-| `transfer_admin`       | ✅ | ✅ |
+| `transfer_admin` (propose/execute/cancel) | ✅ | ✅ | Updated to use propose/execute/cancel timelock. |
 | `add_market`           | ✅ | ✅ |
 | `remove_market`        | ✅ | ✅ |
-| `set_market_contract`  | ✅ | ✅ |
+| `set_market_contract` (propose/execute/cancel) | ✅ | ✅ | Updated to use propose/execute/cancel timelock. |
 | `pause`                | ✅ | ✅ |
 | `unpause`              | ✅ | ✅ |
 | `set_stakeholders`     | ✅ | ✅ |
@@ -61,8 +61,8 @@ identity — it is a market-contract-facing entrypoint, not an admin mutator.
 |---------------------------------|:---:|:---:|
 | `initialize`                   | ✅ | n/a (bootstraps admin) |
 | `set_default_challenge_window`  | ✅ | ✅ (`require_admin`) |
-| `set_factory`                   | ✅ | ✅ (`require_admin`) |
-| `set_market_contract`           | ✅ | ✅ (`require_admin`) |
+| `set_factory` (propose/execute/cancel) | ✅ | ✅ (`require_admin`) | Updated to use propose/execute/cancel timelock. |
+| `set_market_contract` (propose/execute/cancel) | ✅ | ✅ (`require_admin`) | Updated to use propose/execute/cancel timelock. |
 | `slash_collateral`              | ✅ | ✅ (`require_admin`) |
 
 `propose`, `challenge`, `appeal`, `finalize`, and `deposit_collateral` all

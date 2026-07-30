@@ -1,5 +1,5 @@
 use crate::error::ContractError;
-use crate::types::{Market, PendingFeeRateChange, Position};
+use crate::types::{EmergencyMode, Market, PendingFeeRateChange, Position};
 use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
 /// Bump this constant whenever the storage layout changes in a breaking way.
@@ -31,9 +31,10 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// 5. Initialize: `stellar contract invoke ... -- initialize --admin <addr>`
 /// 6. Verify old deployment returns `UpgradeRequired` error
 ///
-/// ## Current version: 4
+/// ## Current version: 5
 ///
 /// ### Version history:
+/// - **v5:** Added `EmergencyMode` storage for coordinated emergency mode (#662)
 /// - **v4:** Added per-adapter-type `AdapterEnabled` flag for the Reflector/Pyth
 ///   Ed25519 fallback path (#488)
 /// - **v3:** Added Treasury, Outcome Token, Resolution Contract, Threshold Signers
@@ -41,7 +42,7 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 /// - **v1:** Initial storage layout
 ///
 /// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
-pub const STORAGE_VERSION: u32 = 4;
+pub const STORAGE_VERSION: u32 = 5;
 
 #[contracttype]
 pub enum StorageKey {
@@ -100,9 +101,14 @@ pub enum StorageKey {
     /// Ordered list of all market IDs ever created (append-only).
     /// Used by off-chain indexers to enumerate all markets.
     MarketIds,
+    PendingTreasury,
+    PendingOutcomeToken,
+    PendingResolution,
+    PendingMarketOracle(u32),
 }
 
 // --- Version helpers ---
+
 
 pub fn set_version(env: &Env) {
     env.storage()
@@ -252,6 +258,18 @@ pub fn has_treasury(env: &Env) -> bool {
     env.storage().persistent().has(&StorageKey::Treasury)
 }
 
+pub fn get_pending_treasury(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage().persistent().get(&StorageKey::PendingTreasury)
+}
+
+pub fn set_pending_treasury(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage().persistent().set(&StorageKey::PendingTreasury, pending);
+}
+
+pub fn clear_pending_treasury(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingTreasury);
+}
+
 // --- Outcome Token Storage ---
 
 pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
@@ -260,6 +278,18 @@ pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
 
 pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
     env.storage().persistent().set(&StorageKey::OutcomeTokenContract, contract);
+}
+
+pub fn get_pending_outcome_token_contract(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage().persistent().get(&StorageKey::PendingOutcomeToken)
+}
+
+pub fn set_pending_outcome_token_contract(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage().persistent().set(&StorageKey::PendingOutcomeToken, pending);
+}
+
+pub fn clear_pending_outcome_token_contract(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingOutcomeToken);
 }
 
 // --- Threshold Signers Storage ---
@@ -360,7 +390,38 @@ pub fn set_paused(env: &Env, paused: bool) {
     env.storage().persistent().set(&StorageKey::Paused, &paused);
 }
 
+// --- Emergency Mode (Issue #662) ---
+
+/// Return the current coordinated emergency mode. Defaults to `Normal` when
+/// unset (freshly initialized contract has never had the mode changed).
+pub fn get_emergency_mode(env: &Env) -> EmergencyMode {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::EmergencyMode)
+        .unwrap_or(EmergencyMode::Normal)
+}
+
+/// Set the coordinated emergency mode. Only the admin may call this (enforced
+/// in `lib.rs`).
+pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::EmergencyMode, mode);
+}
+
 // --- Oracle Adapter Enabled Flag (#488) ---
+
+pub fn get_pending_market_oracle(env: &Env, market_id: u32) -> Option<crate::types::PendingBytesNChange> {
+    env.storage().persistent().get(&StorageKey::PendingMarketOracle(market_id))
+}
+
+pub fn set_pending_market_oracle(env: &Env, market_id: u32, pending: &crate::types::PendingBytesNChange) {
+    env.storage().persistent().set(&StorageKey::PendingMarketOracle(market_id), pending);
+}
+
+pub fn clear_pending_market_oracle(env: &Env, market_id: u32) {
+    env.storage().persistent().remove(&StorageKey::PendingMarketOracle(market_id));
+}
 
 /// Whether the given adapter type is live for resolution.
 ///
@@ -410,6 +471,18 @@ pub fn set_resolution_contract(env: &Env, contract: &Address) {
     env.storage()
         .persistent()
         .set(&StorageKey::ResolutionContract, contract);
+}
+
+pub fn get_pending_resolution_contract(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage().persistent().get(&StorageKey::PendingResolution)
+}
+
+pub fn set_pending_resolution_contract(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage().persistent().set(&StorageKey::PendingResolution, pending);
+}
+
+pub fn clear_pending_resolution_contract(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingResolution);
 }
 
 // --- Fee Waiver Storage (Issue #483) ---

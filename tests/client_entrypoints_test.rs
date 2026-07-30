@@ -10,7 +10,7 @@ use soroban_sdk::{
     token::{Client as TokenClient, StellarAssetClient},
     Address, BytesN, Env, String,
 };
-use vatix_market_contract::{storage, MarketContract, MarketContractClient};
+use vatix_market_contract::{error::ContractError, storage, MarketContract, MarketContractClient};
 use vatix_resolution_contract::{ResolutionContract, ResolutionContractClient};
 use vatix_treasury_contract::{TreasuryContract, TreasuryContractClient};
 
@@ -365,6 +365,37 @@ fn market_set_and_get_threshold_signers() {
 
     assert_eq!(client.get_threshold_quorum(), 1u32);
     assert_eq!(client.get_threshold_signers().get(0).unwrap(), signer);
+}
+
+#[test]
+fn market_set_threshold_signers_rejects_quorum_above_signer_count() {
+    let (env, admin, contract_id, _token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let signer = BytesN::from_array(&env, &[1u8; 32]);
+    let signers = soroban_sdk::vec![&env, signer];
+
+    assert_eq!(
+        client.try_set_threshold_signers(&admin, &signers, &2u32),
+        Err(Ok(ContractError::InvalidThresholdQuorum))
+    );
+
+    // Storage is untouched after a rejected call.
+    assert_eq!(client.get_threshold_quorum(), 0u32);
+    assert_eq!(client.get_threshold_signers().len(), 0);
+}
+
+#[test]
+fn market_set_threshold_signers_allows_zero_quorum_regardless_of_signer_count() {
+    let (env, admin, contract_id, _token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    client
+        .set_threshold_signers(&admin, &soroban_sdk::Vec::new(&env), &0u32)
+        .unwrap();
+
+    assert_eq!(client.get_threshold_quorum(), 0u32);
+    assert_eq!(client.get_threshold_signers().len(), 0);
 }
 
 // ── Market: get_market / get_outcome_count ────────────────────────────────────

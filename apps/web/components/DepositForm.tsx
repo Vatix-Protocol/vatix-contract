@@ -112,10 +112,23 @@ export function DepositForm({ marketId: marketIdProp }: DepositFormProps) {
           </p>
         )}
         {txHash && <TxResult hash={txHash} label="Deposit" />}
+        {/* Helper text: inform the user they must connect a wallet before
+            depositing. Shown only when no wallet is connected and no other
+            error is already displayed (Issue #575). */}
+        {!address && !error && (
+          <p
+            id="deposit-wallet-hint"
+            role="status"
+            className="text-sm text-amber-600 dark:text-amber-400"
+          >
+            Connect your Freighter wallet to deposit.
+          </p>
+        )}
         <button
           type="submit"
           disabled={isLoading || !amount || !address}
           aria-label={isLoading ? "Processing deposit" : "Deposit funds"}
+          aria-describedby={!address ? "deposit-wallet-hint" : undefined}
           className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-600 dark:hover:bg-indigo-500"
         >
           {isLoading ? "Processing..." : "Deposit"}

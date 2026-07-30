@@ -22,6 +22,7 @@ transaction.
 10. [Generating TypeScript bindings](#generating-typescript-bindings)
 11. [CI integration](#ci-integration)
 12. [Common errors and fixes](#common-errors-and-fixes)
+13. [Network Mismatch Errors](#network-mismatch-errors-issue-587)
 
 ---
 
@@ -425,6 +426,106 @@ Freighter. Validate with `StrKey.isValidEd25519PublicKey(address)` from
 the network Freighter is connected to.  
 **Fix:** Ensure both are set to the same value. Testnet:
 `Test SDF Network ; September 2015`.
+
+See the dedicated section below for the full troubleshooting guide.
+
+---
+
+## Network Mismatch Errors (Issue #587)
+
+Freighter enforces that the network passphrase used to build a transaction
+matches the network the extension is currently connected to. When they differ
+the signing popup is skipped and `signTransaction` returns an error. This is
+one of the most common integration failures when switching between testnet and
+mainnet or when a contributor's `.env.local` is misconfigured.
+
+### How a mismatch happens
+
+```
+App builds transaction with passphrase: "Test SDF Network ; September 2015"
+                        ↓
+Freighter is connected to: "Public Global Stellar Network ; September 2015"
+                        ↓
+Freighter rejects: "Transaction is not for the connected network"
+```
+
+The passphrase is baked into the transaction XDR before it reaches Freighter,
+so the mismatch is caught at signing time — not during simulation.
+
+### Recognised network passphrases
+
+| Network | Passphrase |
+|---|---|
+| Testnet | `Test SDF Network ; September 2015` |
+| Mainnet | `Public Global Stellar Network ; September 2015` |
+| Futurenet | `Test SDF Future Network ; October 2022` |
+| Local standalone | `Standalone Network ; February 2017` |
+
+### Diagnosing the error
+
+When `invokeContract` throws with a message like:
+
+```
+Freighter signing failed: Transaction is not for the connected network
+```
+
+or the Freighter popup shows **"Wrong network"**, work through this checklist:
+
+1. **Check `.env.local`** — open `apps/web/.env.local` and confirm
+   `NEXT_PUBLIC_NETWORK_PASSPHRASE` is set to the passphrase of the network
+   you intend to use.
+
+2. **Check Freighter's active network** — click the Freighter extension icon
+   and look at the network name displayed in the top-right corner of the
+   popup. It must match the passphrase in step 1.
+   - To switch networks in Freighter: open the extension → click the network
+     name → select the target network from the dropdown.
+
+3. **Check `soroban.ts`** — open `apps/web/lib/soroban.ts` and verify the
+   `NETWORK_PASSPHRASE` constant (or the value read from
+   `process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE`) matches both `.env.local`
+   and Freighter.
+
+4. **Hard-reload the page** — Next.js hot-reload may cache a stale env value.
+   Stop the dev server, re-run `pnpm dev`, and reload the browser tab.
+
+5. **Check `signTransaction` call** — the call in `contract-client.ts` must
+   pass `networkPassphrase` explicitly:
+
+   ```typescript
+   const signed = await signTransaction(preparedTx.toXDR(), {
+     networkPassphrase: NETWORK_PASSPHRASE, // must equal the tx passphrase
+     address: sourceAddress,
+   });
+   ```
+
+   If `networkPassphrase` is omitted or `undefined`, Freighter defaults to
+   mainnet and will reject any testnet transaction.
+
+### Quick fix for the most common case
+
+```bash
+# 1. Confirm which network your testnet contract is deployed on:
+cat deployments/testnet.json | grep networkPassphrase
+
+# 2. Copy the passphrase into .env.local:
+echo 'NEXT_PUBLIC_NETWORK_PASSPHRASE=Test SDF Network ; September 2015' \
+  >> apps/web/.env.local
+
+# 3. Restart the dev server:
+pnpm dev
+```
+
+Then in Freighter, switch to **Testnet** using the network dropdown.
+
+### Preventing mismatches in CI / deployment
+
+- The `NEXT_PUBLIC_NETWORK_PASSPHRASE` in `apps/web/.env.local.example`
+  defaults to the testnet value. Never change it to mainnet in that file.
+- Mainnet deployments must set `NEXT_PUBLIC_NETWORK_PASSPHRASE` as a
+  CI/CD secret (e.g. a GitHub Actions environment secret), never in source.
+- The passphrase in `deployments/testnet.json` (field `networkPassphrase`)
+  is the canonical reference; keep it consistent with `.env.local.example`.
 
 ---
 

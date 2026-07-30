@@ -312,24 +312,8 @@ fn cumulative_stays_high_after_withdrawal() {
 }
 
 // ── storage version guard (#307 / #308) ──────────────────────────────────────
-
-#[test]
-fn initialize_writes_storage_version() {
-    let s = setup();
-    s.env.as_contract(&s.treasury_id, || {
-        assert_eq!(storage::get_version(&s.env), Some(storage::STORAGE_VERSION));
-    });
-}
-
-#[test]
-fn storage_version_absent_before_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let id = env.register(TreasuryContract, ());
-    env.as_contract(&id, || {
-        assert_eq!(storage::get_version(&env), None);
-    });
-}
+// initialize_writes_storage_version / storage_version_absent_before_initialize
+// are defined earlier in this file — see above.
 
 #[test]
 fn reads_return_upgrade_required_on_stale_version() {
@@ -372,6 +356,46 @@ fn add_market_is_idempotent() {
     assert_eq!(s.client.list_markets().len(), 1);
 }
 
+/// Issue #585: `list_markets` is the read path over the `AuthorizedMarkets`
+/// registry — exercise it through a full add/remove/re-add sequence and
+/// assert both contents *and* order at each step, not just the length.
+#[test]
+fn list_markets_reflects_order_and_contents_after_add_remove() {
+    let s = setup();
+    let market2 = Address::generate(&s.env);
+    let market3 = Address::generate(&s.env);
+
+    // Freshly initialized: only the market registered by `initialize`.
+    let markets = s.client.list_markets();
+    assert_eq!(markets.len(), 1);
+    assert_eq!(markets.get(0).unwrap(), s.market);
+
+    // Appends preserve insertion order.
+    s.client.add_market(&s.admin, &market2);
+    s.client.add_market(&s.admin, &market3);
+    let markets = s.client.list_markets();
+    assert_eq!(markets.len(), 3);
+    assert_eq!(markets.get(0).unwrap(), s.market);
+    assert_eq!(markets.get(1).unwrap(), market2);
+    assert_eq!(markets.get(2).unwrap(), market3);
+
+    // Removing a middle entry preserves the relative order of the rest.
+    s.client.remove_market(&s.admin, &market2);
+    let markets = s.client.list_markets();
+    assert_eq!(markets.len(), 2);
+    assert_eq!(markets.get(0).unwrap(), s.market);
+    assert_eq!(markets.get(1).unwrap(), market3);
+    assert!(!markets.contains(&market2));
+
+    // Re-adding appends at the end rather than restoring the original slot.
+    s.client.add_market(&s.admin, &market2);
+    let markets = s.client.list_markets();
+    assert_eq!(markets.len(), 3);
+    assert_eq!(markets.get(0).unwrap(), s.market);
+    assert_eq!(markets.get(1).unwrap(), market3);
+    assert_eq!(markets.get(2).unwrap(), market2);
+}
+
 #[test]
 fn add_market_rejects_non_admin() {
     let s = setup();
@@ -397,15 +421,16 @@ fn remove_market_deregisters_market() {
 }
 
 #[test]
-fn remove_market_errors_if_not_registered() {
+fn remove_market_is_idempotent_for_unknown_market() {
     let s = setup();
     let unknown = Address::generate(&s.env);
-    let err = s
-        .client
-        .try_remove_market(&s.admin, &unknown)
-        .unwrap_err()
-        .unwrap();
-    assert_eq!(err, TreasuryError::CallerNotMarket);
+
+    assert_eq!(s.client.try_remove_market(&s.admin, &unknown), Ok(Ok(())));
+
+    let markets = s.client.list_markets();
+    assert_eq!(markets.len(), 1);
+    assert!(markets.contains(&s.market));
+    assert!(s.client.is_authorized_market(&s.market));
 }
 
 #[test]
@@ -603,6 +628,86 @@ fn unpause_rejects_non_admin() {
     assert_eq!(err, TreasuryError::Unauthorized);
 }
 
+// ── #593: collect_fee pause gate ─────────────────────────────────────────────
+
+/// `collect_fee` must be blocked while the treasury is paused and must return
+/// `ContractPaused` (#50) — not succeed, not panic, not return a different error.
+#[test]
+fn collect_fee_paused_returns_contract_paused() {
+    let s = setup();
+    s.client.pause(&s.admin);
+
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &42u32, &1_000i128)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(
+        err,
+        TreasuryError::ContractPaused,
+        "collect_fee must return ContractPaused while treasury is paused"
+    );
+}
+
+/// The pause gate is checked before the authorised-market check, so even a
+/// caller that is NOT a registered market gets `ContractPaused` rather than
+/// `CallerNotMarket` while the treasury is paused.
+#[test]
+fn collect_fee_paused_before_market_auth_check() {
+    let s = setup();
+    s.client.pause(&s.admin);
+
+    let rogue = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_collect_fee(&rogue, &s.token, &1u32, &500i128)
+        .unwrap_err()
+        .unwrap();
+
+    // The pause gate fires before the market-registry check.
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+/// Balances must remain unchanged after a rejected `collect_fee` during pause.
+/// No state must be mutated when the call returns `ContractPaused`.
+#[test]
+fn collect_fee_paused_leaves_balances_unchanged() {
+    let s = setup();
+    // Collect some fees before pausing so we have a non-zero baseline.
+    s.client.collect_fee(&s.market, &s.token, &1u32, &200_000i128);
+    let balance_before = s.client.token_balance(&s.token);
+    let cumulative_before = s.client.get_cumulative_fees(&s.token);
+    let total_before = s.client.total_collected();
+
+    s.client.pause(&s.admin);
+
+    // Attempt a second collection while paused — must be rejected.
+    let _ = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &2u32, &100_000i128);
+
+    // All counters must be unchanged.
+    assert_eq!(s.client.token_balance(&s.token), balance_before);
+    assert_eq!(s.client.get_cumulative_fees(&s.token), cumulative_before);
+    assert_eq!(s.client.total_collected(), total_before);
+}
+
+/// After unpausing, `collect_fee` should succeed and update all counters as
+/// normal — proving the gate does not leave permanent side effects.
+#[test]
+fn collect_fee_resumes_after_unpause() {
+    let s = setup();
+    s.client.pause(&s.admin);
+    s.client.unpause(&s.admin);
+
+    s.client.collect_fee(&s.market, &s.token, &7u32, &50_000i128);
+
+    assert_eq!(s.client.token_balance(&s.token), 50_000);
+    assert_eq!(s.client.get_cumulative_fees(&s.token), 50_000);
+    assert_eq!(s.client.total_collected(), 50_000);
+}
+
 // ── stakeholder fee distribution (#485) ───────────────────────────────────────
 
 #[test]
@@ -727,3 +832,137 @@ fn distribute_fees_blocked_while_paused() {
         .unwrap();
     assert_eq!(err, TreasuryError::ContractPaused);
 }
+
+// ── Issue #553: withdraw_fees auth + event ─────────────────────────────────────
+
+/// `withdraw_fees` must emit a `FeesWithdrawn` event with the correct fields:
+/// - topics: event name, token address, recipient address
+/// - data: amount withdrawn, remaining token balance after withdrawal
+#[test]
+fn withdraw_fees_emits_fees_withdrawn_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Map, Symbol, TryIntoVal, Val};
+
+    let s = setup();
+    let collected = 1_000_000i128;
+    let withdrawn = 400_000i128;
+    let expected_remaining = collected - withdrawn;
+
+    fund_treasury(&s, collected);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &collected);
+
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &withdrawn);
+
+    let events = s.env.events().all();
+    // The last event must be FeesWithdrawn.
+    let ev = events.last().unwrap();
+
+    // ── topics ────────────────────────────────────────────────────────────────
+    // Soroban contractevent layout: [contract_address, event_name, ...#topic fields]
+    let topics = &ev.1;
+    let event_name: Symbol = topics.get(0).unwrap().into_val(&s.env);
+    assert_eq!(
+        event_name,
+        Symbol::new(&s.env, "fees_withdrawn"),
+        "event name topic must be 'fees_withdrawn'"
+    );
+    let token_topic: Address = topics.get(1).unwrap().into_val(&s.env);
+    assert_eq!(token_topic, s.token, "second topic must be the token address");
+    let to_topic: Address = topics.get(2).unwrap().into_val(&s.env);
+    assert_eq!(to_topic, recipient, "third topic must be the recipient address");
+
+    // ── data fields ───────────────────────────────────────────────────────────
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
+
+    let amount_val: i128 = data
+        .get(Symbol::new(&s.env, "amount"))
+        .unwrap()
+        .into_val(&s.env);
+    assert_eq!(amount_val, withdrawn, "event 'amount' must equal the withdrawn amount");
+
+    let remaining_val: i128 = data
+        .get(Symbol::new(&s.env, "remaining_token_balance"))
+        .unwrap()
+        .into_val(&s.env);
+    assert_eq!(
+        remaining_val, expected_remaining,
+        "event 'remaining_token_balance' must equal balance after withdrawal"
+    );
+}
+
+/// `withdraw_fees` must call `require_auth` on the caller address before
+/// proceeding — calling it without the Soroban auth context must panic, not
+/// return `Unauthorized`. This verifies the auth gate sits at the entry point
+/// (before any business logic) rather than being implemented as a manual
+/// address comparison only.
+#[test]
+#[should_panic]
+fn withdraw_fees_panics_without_auth() {
+    // No mock_all_auths() — the env has no auth context at all.
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let treasury_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Bootstrap the treasury with auth mocked just for initialize.
+    env.mock_all_auths();
+    client.initialize(&admin, &market);
+    // Clear all mock authorizations — no auth context for subsequent calls.
+    env.set_auths(&[]);
+
+    let recipient = Address::generate(&env);
+    // require_auth() is unsatisfied → must panic
+    client.withdraw_fees(&admin, &token, &recipient, &1i128);
+}
+
+/// `withdraw_fees` called by a non-admin returns `TreasuryError::Unauthorized`.
+/// This is distinct from the auth check above: the non-admin caller *does*
+/// authorize themselves (mock auth), but the contract checks `caller == admin`
+/// and rejects. Ensures both layers of access control work together.
+#[test]
+fn withdraw_fees_non_admin_returns_unauthorized() {
+    let s = setup();
+    fund_treasury(&s, 100_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+
+    let imposter = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&imposter, &s.token, &recipient, &50_000i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        err,
+        TreasuryError::Unauthorized,
+        "a caller who is not the admin must receive Unauthorized even with valid auth"
+    );
+    // Verify no funds moved.
+    assert_eq!(s.client.token_balance(&s.token), 100_000);
+}
+
+#[test]
+fn total_collected_invariant_after_collect_and_withdraw() {
+    let s = setup();
+    assert_eq!(s.client.total_collected(), 0);
+
+    fund_treasury(&s, 100_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    assert_eq!(s.client.total_collected(), 100_000);
+
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &40_000i128);
+    assert_eq!(s.client.total_collected(), 60_000);
+
+    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &60_000i128);
+    assert_eq!(s.client.total_collected(), 0);
+}
+
