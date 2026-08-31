@@ -1,0 +1,54 @@
+{
+  "description": "Regression corpus for validation::calculate_fee (withdraw fee path). Each case documents intent so a future change that reintroduces a rounding/overflow/edge bug fails CI immediately. See contracts/market/src/validation.rs::calculate_fee and the loader test in contracts/market/src/tests_vectors.rs.",
+  "vectors": [
+    {
+      "id": "zero-fee-rate",
+      "description": "0 bps fee rate on a normal deposit yields no fee at all.",
+      "amount": "1000000",
+      "fee_rate_bps": 0,
+      "expected": { "ok": "0" }
+    },
+    {
+      "id": "rounding-floors-down",
+      "description": "999 * 25 / 10000 = 2.4975, must floor to 2, never round up.",
+      "amount": "999",
+      "fee_rate_bps": 25,
+      "expected": { "ok": "2" }
+    },
+    {
+      "id": "sub-unit-rounds-to-zero",
+      "description": "Small amount at low bps rounds down to a zero fee rather than erroring.",
+      "amount": "3",
+      "fee_rate_bps": 1,
+      "expected": { "ok": "0" }
+    },
+    {
+      "id": "max-fee-rate-full-amount",
+      "description": "10000 bps (100%) is the maximum allowed rate; the entire amount becomes the fee.",
+      "amount": "500",
+      "fee_rate_bps": 10000,
+      "expected": { "ok": "500" }
+    },
+    {
+      "id": "amount-overflow",
+      "description": "i128::MAX * 2 bps overflows checked_mul and must error, never wrap or panic.",
+      "amount": "170141183460469231731687303715884105727",
+      "fee_rate_bps": 2,
+      "expected": { "error": "ArithmeticOverflow" }
+    },
+    {
+      "id": "negative-amount-rejected",
+      "description": "Historical bug shape: a negative withdrawal amount must be rejected up front, not silently produce a negative fee.",
+      "amount": "-100",
+      "fee_rate_bps": 500,
+      "expected": { "error": "InvalidQuantity" }
+    },
+    {
+      "id": "fee-rate-out-of-range",
+      "description": "fee_rate_bps above 10000 (100%) must be rejected as an invalid price/rate.",
+      "amount": "100",
+      "fee_rate_bps": 10001,
+      "expected": { "error": "InvalidPrice" }
+    }
+  ]
+}

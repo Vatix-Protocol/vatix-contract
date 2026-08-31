@@ -4,9 +4,12 @@
   "scripts": {
     "dev": "pnpm --filter web dev",
     "build:web": "pnpm --filter web build",
+    "build:bindings": "tsx scripts/generate-bindings.ts",
+    "env:sync": "tsx scripts/sync-frontend-env.ts",
     "lint:web": "pnpm --filter web lint",
     "issues:generate": "tsx scripts/generate-issues.ts",
-    "issues:publish": "tsx scripts/generate-issues.ts --publish"
+    "issues:publish": "tsx scripts/generate-issues.ts --publish",
+    "testnet:smoke": "bash scripts/testnet-smoke.sh"
   },
   "devDependencies": {
     "tsx": "^4.19.0",
