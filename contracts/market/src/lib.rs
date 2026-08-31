@@ -221,4 +221,55 @@ impl MarketContract {
 
         Ok(())
     }
+
+    /// Enable oracle adapter mode and disable Ed25519 fallback.
+    ///
+    /// This function permanently locks the contract into adapter-only mode.
+    /// Once called, Ed25519 signature verification is ALWAYS rejected for
+    /// market resolution. This enforces fail-closed behavior during cross-contract upgrades.
+    ///
+    /// **CRITICAL**: This must be called AFTER the resolution contract has registered
+    /// all supported oracle adapters. See scripts/upgrade/UPGRADE_PLAYBOOK.md for the
+    /// required upgrade sequence:
+    ///   1. outcome-token contract (initializes)
+    ///   2. treasury contract (initializes)
+    ///   3. resolution contract (initializes adapters)
+    ///   4. market contract (THIS - calls enable_oracle_adapters)
+    ///
+    /// # Arguments
+    /// * `env` - Soroban contract environment
+    /// * `authorized_caller` - Admin address that authorizes this upgrade step
+    ///
+    /// # Returns
+    /// Unit (success)
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `authorized_caller` is not the admin
+    ///
+    /// # Events
+    /// Emits `OracleAdaptersEnabled` event to signal the mode change.
+    ///
+    /// # Side Effects
+    /// Once called, all future calls to `resolve_market()` will reject Ed25519
+    /// signatures with `UnauthorizedOracle` error. Markets must then be resolved
+    /// through oracle adapter contracts only.
+    pub fn enable_oracle_adapters(
+        env: Env,
+        authorized_caller: Address,
+    ) -> Result<(), ContractError> {
+        // 1. Verify caller is admin
+        authorized_caller.require_auth();
+        let admin = storage::get_admin(&env);
+        if authorized_caller != admin {
+            return Err(ContractError::NotAdmin);
+        }
+
+        // 2. Enable oracle adapters (fail-closed lock)
+        storage::enable_oracle_adapters(&env);
+
+        // 3. Emit event to signal mode change
+        events::emit_oracle_adapters_enabled(&env);
+
+        Ok(())
+    }
 }

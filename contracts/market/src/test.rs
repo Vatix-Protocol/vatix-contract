@@ -521,4 +521,196 @@ mod test {
         let user = Address::generate(&env);
         client.deposit_collateral(&user, &1, &1000i128);
     }
+
+    // ========== enable_oracle_adapters tests ==========
+
+    #[test]
+    fn test_enable_oracle_adapters_success() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Enable oracle adapters
+        let result = client.enable_oracle_adapters(&admin);
+        assert!(result.is_ok());
+
+        // Verify flag is set
+        env.as_contract(&contract_id, || {
+            assert!(storage::has_oracle_adapters(&env));
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #40)")]
+    fn test_enable_oracle_adapters_non_admin_fails() {
+        let (env, _admin, client, _contract_id) = create_test_contract();
+
+        let non_admin = Address::generate(&env);
+        client.enable_oracle_adapters(&non_admin);
+    }
+
+    #[test]
+    fn test_enable_oracle_adapters_idempotent() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Enable adapters multiple times
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+
+        // Flag should still be set
+        env.as_contract(&contract_id, || {
+            assert!(storage::has_oracle_adapters(&env));
+        });
+    }
+
+    #[test]
+    fn test_enable_oracle_adapters_emits_event() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Clear any previous events
+        env.events().all();
+
+        // Enable adapters
+        client.enable_oracle_adapters(&admin).unwrap();
+
+        // Verify event was emitted
+        let events = env.events().all();
+        assert!(events.len() > 0, "OracleAdaptersEnabled event should be emitted");
+    }
+
+    #[test]
+    fn test_enable_oracle_adapters_rejects_ed25519() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Create a market first
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Enable oracle adapters
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+
+        // Now try to resolve the market with a valid-looking signature
+        // It should fail because Ed25519 is disabled
+        let market_id = 1u32;
+        let outcome = true;
+        let (_, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+
+        // Attempt to resolve should fail (Ed25519 rejected)
+        let market_id_str = String::from_str(&env, "1");
+        let result = env.as_contract(&contract_id, || {
+            crate::oracle::verify_oracle_signature(
+                &env,
+                market_id,
+                outcome,
+                &signature,
+                &oracle_pubkey,
+            )
+        });
+
+        assert_eq!(result, Err(crate::error::ContractError::UnauthorizedOracle));
+    }
+
+    #[test]
+    fn test_upgrade_order_safety_ed25519_works_before_adapters_enabled() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Create a market
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let collateral_token = Address::generate(&env);
+
+        // Generate test keypair and signature
+        let market_id = 1u32;
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Before enabling adapters, Ed25519 should work
+        let market_before = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_before.status, MarketStatus::Active);
+
+        // Verify that we can resolve via Ed25519 before adapters are enabled
+        let market_id_str = String::from_str(&env, "1");
+        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
+
+        let market_after = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_after.status, MarketStatus::Resolved);
+        assert_eq!(market_after.result, Some(outcome));
+    }
+
+    #[test]
+    fn test_upgrade_order_safety_complete_sequence() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Step 1: Create market with Ed25519 oracle
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let collateral_token = Address::generate(&env);
+
+        let market_id = 1u32;
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+        );
+
+        // Step 2: Verify Ed25519 works before upgrade
+        let market_id_str = String::from_str(&env, "1");
+        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
+
+        // Step 3: Verify market is resolved
+        let market = get_market_from_storage(&env, &contract_id, 1u32);
+        assert_eq!(market.status, MarketStatus::Resolved);
+
+        // Step 4: Create a new market after resolution to test adapter mode
+        let question2 = String::from_str(&env, "Test market 2");
+        let market_id = 2u32;
+        let outcome2 = false;
+        let (oracle_pubkey2, signature2) =
+            generate_test_keypair_and_sign(&env, market_id, outcome2);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question2,
+            &end_time,
+            &oracle_pubkey2,
+            &collateral_token,
+        );
+
+        // Step 5: Enable oracle adapters (simulating resolution contract upgrade)
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+
+        // Step 6: Verify that Ed25519 is now rejected for the new market
+        let market_id_str = String::from_str(&env, "2");
+        let result = client.resolve_market(&market_id_str, &outcome2, &signature2);
+
+        // Should fail because adapters are now enabled
+        assert!(result.is_err());
+
+        // Verify contract state shows adapters are enabled
+        env.as_contract(&contract_id, || {
+            assert!(storage::has_oracle_adapters(&env));
+        });
+    }
 }

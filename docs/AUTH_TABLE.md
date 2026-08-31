@@ -10,6 +10,7 @@ This document defines the authorization model for all entry points in the Vatix 
 | `deposit_collateral` | Deposit collateral | **Market participant** | `caller.require_auth()` | User authorizes their own deposit; market must be active |
 | `withdraw_unused_collateral` | Withdraw unused funds | **Position owner** | `caller.require_auth()` | User withdraws their own available balance; position must exist |
 | `resolve_market` | Submit oracle signature | **Any caller** (signature authenticated) | Ed25519 signature on message | Only valid oracle pubkey + valid signature accepted; caller identity irrelevant |
+| `enable_oracle_adapters` | Lock oracle mode | **Admin only** | `caller.require_auth()` + admin check | Permanently disables Ed25519; called by resolution contract during upgrade; emits `OracleAdaptersEnabledEvent` |
 | `query_market` | Read market state | **Public** | None (read-only) | Returns market details, no write authority needed |
 | `query_position` | Read user position | **Position owner** | Address check (permission-less read) | Position data readable by any caller for any address |
 
@@ -69,9 +70,41 @@ When oracle adapters are enabled, Ed25519 verification is **rejected**. This ens
 - Forces resolution through new oracle adapter contracts
 - Prevents silent fallback during incomplete upgrades
 
-See [UPGRADE_PLAYBOOK.md](../upgrade/UPGRADE_PLAYBOOK.md).
+See [UPGRADE_PLAYBOOK.md](../scripts/upgrade/UPGRADE_PLAYBOOK.md).
 
-### Layer 4: No Auth for Queries
+### Layer 4: Oracle Adapter Mode Lock (Admin Control)
+
+The `enable_oracle_adapters()` function permanently locks the contract into adapter-only mode.
+
+```rust
+pub fn enable_oracle_adapters(env: Env, authorized_caller: Address) {
+    authorized_caller.require_auth();  // Caller must sign
+    let admin = storage::get_admin(&env);
+    if authorized_caller != admin {
+        return Err(ContractError::NotAdmin);
+    }
+    storage::enable_oracle_adapters(&env);  // PERMANENT lock
+}
+```
+
+**When to call**:
+- After resolution contract has registered all oracle adapters
+- As part of the cross-contract upgrade sequence (see UPGRADE_PLAYBOOK.md)
+- Only admin can authorize this step
+
+**Security guarantee**:
+- Once called, Ed25519 verification is **permanently rejected**
+- Idempotent: calling multiple times has same effect as calling once
+- Irreversible: cannot be undone without redeploying contract
+
+**Upgrade sequence (CRITICAL)**:
+1. outcome-token contract initializes
+2. treasury contract initializes
+3. resolution contract initializes adapters
+4. market contract calls `enable_oracle_adapters()` ← YOU ARE HERE
+5. All future market resolutions use new oracle adapters only
+
+### Layer 5: No Auth for Queries
 Market and position queries are permission-less. Any caller can read any market or position.
 
 ```rust
@@ -96,7 +129,7 @@ All state-changing operations emit events for indexing:
 | `DepositEvent` | `deposit_collateral` | `user`, `market_id`, `amount`, `timestamp` |
 | `WithdrawEvent` | `withdraw_unused_collateral` | `user`, `market_id`, `amount`, `timestamp` |
 | `ResolutionEvent` | `resolve_market` | `market_id`, `outcome`, `timestamp` |
-| `OracleAdaptersEnabled` | (internal) | Emitted when adapters are locked in |
+| `OracleAdaptersEnabledEvent` | `enable_oracle_adapters` | `enabled_at` (timestamp) |
 
 Event indexers use these to reconstruct user activity and market state.
 
@@ -113,7 +146,8 @@ When other Vatix contracts call the market contract, they should:
    - No auth needed
 
 3. **Resolution Contract** (adapter coordination):
-   - Calls `enable_oracle_adapters()` (admin-gated; must be called by authorized account)
+   - Queries market state to verify adapters are enabled
+   - May call `enable_oracle_adapters()` via admin authority during upgrade
    - Future adapter resolution calls will verify signatures
 
 ## Security Considerations
