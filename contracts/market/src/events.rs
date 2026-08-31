@@ -432,6 +432,23 @@ pub fn emit_market_resolved(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+feat/cross-contract-upgrade-safety-803
+pub struct OracleAdaptersEnabledEvent {
+    pub enabled_at: u64,
+}
+
+/// Emit an event when oracle adapters are enabled.
+///
+/// This signals that the contract has transitioned from Ed25519-only to
+/// oracle adapter mode. Once emitted, Ed25519 signatures will no longer
+/// be accepted for market resolution.
+///
+/// # Arguments
+/// * env - Contract environment
+pub fn emit_oracle_adapters_enabled(env: &Env) {
+    let enabled_at = env.ledger().timestamp();
+    OracleAdaptersEnabledEvent { enabled_at }.publish(env);
+
 pub struct MarketCanceled {
     #[topic]
     pub version: u32,
@@ -539,13 +556,18 @@ pub fn emit_market_reopened(env: &Env, market_id: u32, admin: &Address, reopened
         reopened_at,
     }
     .publish(env);
+dev
 }
 
 #[contractevent]
 #[derive(Clone, Debug)]
+feat/cross-contract-upgrade-safety-803
+pub struct PositionLimitExceededEvent {
+
 pub struct PositionLimitExceeded {
     #[topic]
     pub version: u32,
+dev
     #[topic]
     pub market_id: u32,
     #[topic]
