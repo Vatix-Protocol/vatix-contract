@@ -222,6 +222,35 @@ In summary: storage-version drift between source and `version-matrix.json`
 fails CI. A pinned WASM hash that doesn't match the freshly built artifact
 fails CI. Removing a version guard from any of the four contracts fails CI.
 
+### WASM hash pinning workflow (issue #761)
+
+`scripts/verify-wasm-hash.sh` is wired into the `upgrade-dry-run` CI job as
+the **"Print WASM hashes (verify-wasm-hash.sh)"** step that runs after
+`check-upgrade.sh`.  It prints the SHA-256 of every built artifact to the CI
+log so hashes are always available for inspection without a local build.
+
+The CI job runs with `ALLOW_UNPINNED_HASHES=1` (issue #762), which means
+`check-upgrade.sh` Phase B treats an empty `expectedSha256` in
+[`expected-hashes.json`](expected-hashes.json) as a warning during normal
+development.  Hashes are pinned **manually** only when you are about to cut a
+release:
+
+1. Decide on the exact commit to ship and check it out.
+2. Check the `upgrade-dry-run` CI log for that commit, find the
+   "Print WASM hashes" step, and copy each 64-character hex value.  
+   Or run locally: `bash scripts/verify-wasm-hash.sh <contract-dir>`.
+3. Paste each hash into `scripts/upgrade/expected-hashes.json` under the
+   matching contract's `"expectedSha256"` field and commit the change.
+4. From that point, `check-upgrade.sh` (Phase B — even with
+   `ALLOW_UNPINNED_HASHES` unset) will fail if any artifact drifts from the
+   pinned value — catching toolchain changes, wrong-branch builds, or
+   uncommitted local edits before they reach a deploy.
+5. After the deploy succeeds, clear the hashes back to `""` to re-enable
+   normal development.  Repeat before the next staged rollout.
+
+The step is intentionally `if: always()` so hash values appear in the CI
+log even when earlier steps fail.
+
 ## Rollback
 
 Vatix contracts use a **fresh-deployment** upgrade model (see

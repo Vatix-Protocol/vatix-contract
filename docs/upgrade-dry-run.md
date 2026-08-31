@@ -140,8 +140,14 @@ export CONTRACT_DIR="contracts/market"   # default
 bash scripts/upgrade-dry-run.sh
 ```
 
-The script exits non-zero if any simulation step fails, making it suitable
-as a pre-deploy CI gate.
+**Fail-closed behavior (issue #762):** Both `TESTNET_SECRET_KEY` and
+`OLD_CONTRACT_ID` are required.  The script exits non-zero immediately if
+either is missing — it will **not** silently skip steps and return a
+false-green exit code.  This ensures the upgrade and version-lockout
+simulation steps are never bypassed by accident in a CI gate.
+
+The script also exits non-zero if any simulation step fails, making it
+suitable as a pre-deploy CI gate.
 
 ---
 

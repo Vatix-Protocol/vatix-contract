@@ -315,7 +315,15 @@ jobs:
       # pinned hash mismatch; warns without failing when a hash simply isn't
       # pinned yet, matching the deployments/testnet.json placeholder
       # convention. See scripts/upgrade/UPGRADE_PLAYBOOK.md.
+      #
+      # ALLOW_UNPINNED_HASHES=1 tells check-upgrade.sh to treat an empty
+      # expectedSha256 in expected-hashes.json as a warning rather than a
+      # failure (issue #762).  Hashes are not pinned in CI because they
+      # change with every source edit; they are pinned manually before a
+      # staged rollout via 'bash scripts/verify-wasm-hash.sh' (issue #761).
       - name: Cross-contract upgrade dry-run
+        env:
+          ALLOW_UNPINNED_HASHES: "1"
         run: bash scripts/upgrade/check-upgrade.sh
 
   # ── Issue #798: testnet.json schema validation ──────────────────────────────

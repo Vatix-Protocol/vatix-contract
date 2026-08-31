@@ -72,8 +72,14 @@ pub mod oracle;
 pub mod oracle_adapter;
 // `positions` is called from `update_position` and `settle_position` inside the
 // `#[contractimpl]` block; the macro expansion hides the call-sites from Clippy's
-// dead-code analysis, so the allow is required to keep CI green.
-#[allow(dead_code)]
+// dead-code analysis, so the cfg_attr allow is required to keep CI green in
+// non-test (release/check) builds.  In test builds the allow is deliberately
+// omitted so that any truly dead item inside this module surfaces as a warning.
+//
+// AUDIT NOTE (#764): this cfg_attr is the intentional, documented suppression
+// for contractimpl macro-hidden call-sites only.  A bare #[allow(dead_code)]
+// here (without cfg_attr) would be caught by the canary test in storage.rs.
+#[cfg_attr(not(test), allow(dead_code))]
 // used via contractimpl macro expansion (positions::update_position, positions::calculate_locked_collateral)
 mod positions;
 // `reconciliation` is called from `get_position_token_parity` and
@@ -81,7 +87,10 @@ mod positions;
 mod reconciliation;
 // `settlement` is called from `settle_position` and `batch_settle_positions` inside
 // the `#[contractimpl]` block; same macro-expansion visibility issue as `positions`.
-#[allow(dead_code)]
+//
+// AUDIT NOTE (#764): cfg_attr(not(test)) intentionally limits suppression to
+// non-test builds so test compilation still sees potential dead items.
+#[cfg_attr(not(test), allow(dead_code))]
 // used via contractimpl macro expansion (settlement::settle_position, settlement::batch_settle)
 pub mod settlement;
 mod withdraw;
@@ -89,7 +98,10 @@ mod withdraw;
 // `storage` is re-exported as `pub mod` for workspace integration tests and is
 // called throughout the `#[contractimpl]` methods; individual helpers that are
 // only exercised through tests are flagged by Clippy without this allow.
-#[allow(dead_code)] // pub-exported for integration tests; helpers used in contractimpl methods
+//
+// AUDIT NOTE (#764): cfg_attr(not(test)) keeps the suppression scoped to
+// non-test builds where the pub re-export hides usages from Clippy.
+#[cfg_attr(not(test), allow(dead_code))] // pub-exported for integration tests; helpers used in contractimpl methods
 pub mod storage;
 mod test;
 #[cfg(test)]
@@ -99,8 +111,12 @@ pub mod types;
 mod withdraw_fuzz;
 // `validation` helpers are called from `deposit`, `withdraw`, `positions`, and
 // `oracle` sub-modules; Clippy cannot trace cross-module usages through the
-// `#![no_std]` + macro context and reports the module as dead without this allow.
-#[allow(dead_code)]
+// `#![no_std]` + macro context.
+//
+// AUDIT NOTE (#764): cfg_attr(not(test)) intentionally limits suppression to
+// non-test builds; any item that is truly only used in tests will surface
+// as dead_code in test builds and should be moved under #[cfg(test)] instead.
+#[cfg_attr(not(test), allow(dead_code))]
 // called by deposit::deposit_collateral, withdraw::withdraw_unused_collateral, oracle::verify_market_outcome
 mod validation;
 

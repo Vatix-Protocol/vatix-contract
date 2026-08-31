@@ -1,5 +1,13 @@
 {
-  "description": "Pinned SHA-256 hashes of the canonical release WASM (target/wasm32v1-none/release/*.wasm, built via 'stellar contract build') for each of the four Vatix contracts. An empty 'expectedSha256' means 'not yet pinned' — scripts/upgrade/check-upgrade.sh treats that as a warning, not a failure, mirroring the placeholder convention in deployments/testnet.json. Once a build is chosen for a staged rollout, fill in the real hash (e.g. via 'bash scripts/verify-wasm-hash.sh <contract-dir>') and commit the change so check-upgrade.sh can catch unintended drift before deploying.",
+  "description": "Pinned SHA-256 hashes of the canonical release WASM (target/wasm32v1-none/release/*.wasm, built via 'stellar contract build') for each of the four Vatix contracts. An empty 'expectedSha256' means 'not yet pinned' — scripts/upgrade/check-upgrade.sh treats that as a warning, not a failure (when ALLOW_UNPINNED_HASHES=1 is set, as it is in the CI upgrade-dry-run job). Once a build is chosen for a staged rollout, fill in the real hash and commit this file. To obtain the correct hash value: run 'bash scripts/verify-wasm-hash.sh <contract-dir>' locally (or check the 'Print WASM hashes (verify-wasm-hash.sh)' step in the upgrade-dry-run CI job log), then paste the 64-character hex value below. From that point, check-upgrade.sh Phase B will fail if the built artifact no longer matches the pinned hash — catching unintended toolchain changes, uncommitted local edits, or wrong-branch builds before a deploy. See scripts/upgrade/UPGRADE_PLAYBOOK.md §'WASM hash pinning' for the full workflow.",
+  "pinningWorkflow": {
+    "step1": "Choose the exact commit you intend to deploy and check it out.",
+    "step2": "Run 'bash scripts/verify-wasm-hash.sh contracts/market' (and the other three contracts) to build and print each SHA-256 hash.",
+    "step3": "Paste each hash into the 'expectedSha256' field below and commit this file alongside the chosen contract source.",
+    "step4": "From now on, 'bash scripts/upgrade/check-upgrade.sh' (Phase B) fails if any artifact hash drifts from the pinned value.",
+    "step5": "After a successful deploy, clear the hashes back to '' to allow normal development to continue, then repeat this workflow before the next staged rollout.",
+    "note": "The CI 'upgrade-dry-run' job runs with ALLOW_UNPINNED_HASHES=1 so empty hashes are warnings not failures during normal development. The 'Print WASM hashes' step in that job logs the current hash values for inspection."
+  },
   "contracts": {
     "market": {
       "manifestPath": "contracts/market/Cargo.toml",
