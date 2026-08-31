@@ -2,6 +2,13 @@ use crate::error::ContractError;
 use crate::types::{EmergencyMode, Market, PendingFeeRateChange, Position};
 use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
+fix/802-planned-functionality-vs-complete
+// --- Storage Keys ---
+// IMPORTANT: Storage versioning is critical for upgrade safety. When adding new
+// keys, increment the version and ensure migrations are handled. See UPGRADE_PLAYBOOK.md.
+// This contract supports oracle adapters (post-MVP). When adapters are enabled,
+// Ed25519 fallback is DISABLED to enforce fail-closed security model.
+
 /// Bump this constant whenever the storage layout changes in a breaking way.
 /// `initialize()` writes this value; every storage accessor asserts it.
 ///
@@ -47,6 +54,7 @@ use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 ///
 /// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
 pub const STORAGE_VERSION: u32 = 6;
+dev
 
 #[contracttype]
 pub enum StorageKey {
@@ -56,6 +64,11 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
+ fix/802-planned-functionality-vs-complete
+    // Oracle adapter support - tracks if any adapters are registered
+    // When non-empty, Ed25519 fallback is disabled (fail-closed)
+    OracleAdapters,
+
     /// Address of the deployed treasury contract that protocol fees are routed
     /// to. Optional — fees are only forwarded when this is populated and the
     /// computed fee_amount is greater than zero.
@@ -133,6 +146,7 @@ pub enum StorageKey {
     /// can be checked in O(1) instead of iterating every market the user
     /// has ever traded in.
     TotalLockedCollateral(Address),
+dev
 }
 
 pub fn get_pending_threshold_signers(
