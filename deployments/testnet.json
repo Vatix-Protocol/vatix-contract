@@ -1,0 +1,23 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "contracts": {
+    "market": {
+      "contractId": "",
+      "wasmHash": ""
+    },
+    "treasury": {
+      "contractId": "",
+      "wasmHash": ""
+    },
+    "resolution": {
+      "contractId": "",
+      "wasmHash": ""
+    },
+    "outcomeToken": {
+      "contractId": "",
+      "wasmHash": ""
+    }
+  }
+}

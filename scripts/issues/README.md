@@ -27,6 +27,28 @@ The script is intentionally kept as an echo guard until testnet credentials are
 available as repository secrets. See the CI step `Invoke example (echo guard)` in
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) for where it runs.
 
+## Cross-contract upgrade playbook (`scripts/upgrade/`)
+
+Tooling for upgrading all four contracts (Market, Treasury, Resolution,
+Outcome Token) together safely — see
+[`scripts/upgrade/UPGRADE_PLAYBOOK.md`](../upgrade/UPGRADE_PLAYBOOK.md) for
+the full playbook.
+
+- [`upgrade/check-upgrade.sh`](../upgrade/check-upgrade.sh) — scripted dry-run:
+  storage-version drift check, WASM hash verification, and `UpgradeRequired`
+  regression tests. Runs in CI as the `upgrade-dry-run` job.
+- [`upgrade/rollback.sh`](../upgrade/rollback.sh) — recovers a previous
+  `deployments/testnet.json` registry from git history to re-point traffic
+  at a prior deployment.
+- [`upgrade/version-matrix.json`](../upgrade/version-matrix.json) — the
+  machine-checked storage version compatibility matrix across contracts.
+- [`upgrade/expected-hashes.json`](../upgrade/expected-hashes.json) — pinned
+  WASM hashes per contract (placeholders until a rollout build is chosen).
+- [`upgrade/STAGING_DRY_RUN_CHECKLIST.md`](../upgrade/STAGING_DRY_RUN_CHECKLIST.md) —
+  manual testnet rehearsal checklist.
+- [`upgrade/DUAL_READ_MIGRATION_TEMPLATE.md`](../upgrade/DUAL_READ_MIGRATION_TEMPLATE.md) —
+  copy-paste template for a dual-read storage migration on the next version bump.
+
 ---
 
 # Contributor issue generator

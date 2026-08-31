@@ -1,0 +1,25 @@
+{
+  "description": "Pinned SHA-256 hashes of the canonical release WASM (target/wasm32v1-none/release/*.wasm, built via 'stellar contract build') for each of the four Vatix contracts. An empty 'expectedSha256' means 'not yet pinned' — scripts/upgrade/check-upgrade.sh treats that as a warning, not a failure, mirroring the placeholder convention in deployments/testnet.json. Once a build is chosen for a staged rollout, fill in the real hash (e.g. via 'bash scripts/verify-wasm-hash.sh <contract-dir>') and commit the change so check-upgrade.sh can catch unintended drift before deploying.",
+  "contracts": {
+    "market": {
+      "manifestPath": "contracts/market/Cargo.toml",
+      "wasmFile": "vatix_market_contract.wasm",
+      "expectedSha256": ""
+    },
+    "treasury": {
+      "manifestPath": "contracts/treasury/Cargo.toml",
+      "wasmFile": "vatix_treasury_contract.wasm",
+      "expectedSha256": ""
+    },
+    "resolution": {
+      "manifestPath": "contracts/resolution/Cargo.toml",
+      "wasmFile": "vatix_resolution_contract.wasm",
+      "expectedSha256": ""
+    },
+    "outcomeToken": {
+      "manifestPath": "contracts/outcome-token/Cargo.toml",
+      "wasmFile": "vatix_outcome_token_contract.wasm",
+      "expectedSha256": ""
+    }
+  }
+}
