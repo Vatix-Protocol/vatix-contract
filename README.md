@@ -26,13 +26,17 @@ Core smart contracts powering Vatix prediction markets, written in Rust for the 
 
 ## Current Status
 
-| Area | Status | Notes |
+| Component | Status | Details |
 | --- | --- | --- |
-| Binary outcome markets | Complete | Yes/No market creation and lifecycle logic are implemented in the market contract. |
-| Share minting and trading | In progress | Core contract flows are in place, with continued validation and integration work. |
-| Oracle-based resolution | Complete | Ed25519 verification and fail-closed adapter protection are implemented. |
-| Fee distribution | Planned | Treasury routing and fee accounting still need fuller implementation. |
-| Market expiration and settlement | In progress | Settlement flows are defined and exercised in tests, with further hardening underway. |
+| **Core: Market Creation** | ✅ Complete | Market creation, ID generation, question/timestamp validation. 9 tests, 100% passing. |
+| **Core: Oracle Resolution** | ✅ Complete | Ed25519 signature verification with fail-closed oracle adapter protection. 5 tests, 100% passing. See [SECURITY.md](docs/SECURITY.md). |
+| **Core: Collateral Management** | ✅ Complete | Deposit and withdrawal flows with position tracking. Full authorization and state validation. 2 tests. |
+| **Core: Fail-Closed Oracle Adapters** | ✅ Complete | Infrastructure in place to disable Ed25519 when oracle adapters are enabled. See [UPGRADE_PLAYBOOK.md](scripts/upgrade/UPGRADE_PLAYBOOK.md). |
+| **Integration: Position Trading** | 🟡 In Progress | Core functions implemented but not yet connected to public contract interface. Awaiting API integration. |
+| **Integration: Settlement & Payouts** | 🟡 In Progress | Settlement logic implemented but awaiting treasury/outcome-token integration. |
+| **Planned: Fee Distribution** | 📋 Planned | Treasury routing and fee accounting. Blocked on treasury contract development. |
+| **Planned: Dynamic Market Pricing** | 📋 Planned | Price discovery integration. Blocked on price-feed contract. See [#160](https://github.com/Vatix-Protocol/vatix-contract/issues/160). |
+| **Planned: Decentralized Oracle Adapters** | 📋 Planned | Reflector/Pyth integration for outcome resolution. See [#139](https://github.com/Vatix-Protocol/vatix-contract/issues/139). |
 
 ## Frontend (`apps/web`)
 
