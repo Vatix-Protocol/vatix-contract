@@ -2,7 +2,6 @@ use crate::error::ContractError;
 use crate::types::{EmergencyMode, Market, PendingFeeRateChange, Position};
 use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
-fix/802-planned-functionality-vs-complete
 // --- Storage Keys ---
 // IMPORTANT: Storage versioning is critical for upgrade safety. When adding new
 // keys, increment the version and ensure migrations are handled. See UPGRADE_PLAYBOOK.md.
@@ -54,7 +53,6 @@ fix/802-planned-functionality-vs-complete
 ///
 /// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
 pub const STORAGE_VERSION: u32 = 6;
-dev
 
 #[contracttype]
 pub enum StorageKey {
@@ -64,7 +62,6 @@ pub enum StorageKey {
     Admin,
     PendingAdmin,
     MarketCounter,
- fix/802-planned-functionality-vs-complete
     // Oracle adapter support - tracks if any adapters are registered
     // When non-empty, Ed25519 fallback is disabled (fail-closed)
     OracleAdapters,
@@ -146,7 +143,10 @@ pub enum StorageKey {
     /// can be checked in O(1) instead of iterating every market the user
     /// has ever traded in.
     TotalLockedCollateral(Address),
-dev
+    /// Mirrored emergency mode (Issue #662).
+    EmergencyMode,
+    /// Reflector/Pyth adapter config for a market (keyed by market_id).
+    MarketAdapterConfig(u32),
 }
 
 pub fn get_pending_threshold_signers(
@@ -658,8 +658,6 @@ pub fn set_adapter_enabled(env: &Env, adapter_type: &crate::types::AdapterType, 
 /// Returns `None` when the admin has not configured an adapter for this
 /// market yet — callers should fall back to Ed25519 verification rather than
 /// treating this as an error (see `oracle::verify_market_outcome`).
-/// Only available when the `oracle-adapter` feature is compiled in (#778).
-#[cfg(feature = "oracle-adapter")]
 pub fn get_market_adapter_config(
     env: &Env,
     market_id: u32,
@@ -671,8 +669,6 @@ pub fn get_market_adapter_config(
 
 /// Set (or replace) the Reflector/Pyth adapter config for `market_id`
 /// (admin-gated in `lib.rs`).
-/// Only available when the `oracle-adapter` feature is compiled in (#778).
-#[cfg(feature = "oracle-adapter")]
 pub fn set_market_adapter_config(
     env: &Env,
     market_id: u32,

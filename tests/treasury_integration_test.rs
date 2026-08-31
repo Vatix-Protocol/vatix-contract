@@ -10,7 +10,7 @@ mod helpers;
 use helpers::MarketParams;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, IntoVal, Map, Symbol, TryIntoVal, Val,
 };
@@ -31,7 +31,7 @@ fn fee_for(amount: i128) -> i128 {
 /// with a fee also emits `fee_calculated_event` (market) and
 /// `collateral_withdrawn_event` (market) around it.
 fn find_fee_collected_event(env: &Env) -> Option<(std::vec::Vec<Val>, Val)> {
-    let target = Symbol::new(env, "fee_collected_event");
+    let target = Symbol::new(env, "fee_collected");
     let all: std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> = env.events().all().iter().collect();
     for (_contract, topics, data) in all.into_iter().rev() {
         let topics: std::vec::Vec<Val> = topics.iter().collect();
@@ -95,12 +95,14 @@ fn mock_sac_fee_flows_to_treasury() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
     let deposit = 500 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &mock_sac).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 200 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -152,12 +154,14 @@ fn mock_sac_multiple_withdrawals_accumulate() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
     let deposit = 1000 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &mock_sac).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let w1 = 100 * STROOPS_PER_USDC;
     let w2 = 300 * STROOPS_PER_USDC;
@@ -200,12 +204,14 @@ fn admin_withdraws_mock_sac_fees() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
     let deposit = 200 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &mock_sac).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 100 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -251,12 +257,14 @@ fn zero_fee_rate_no_sac_fee_deducted() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &mock_sac).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 80 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -310,12 +318,14 @@ fn withdraw_emits_fee_collected_event_with_market_id_and_amount() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
     let deposit = 500 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &mock_sac).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 200 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);

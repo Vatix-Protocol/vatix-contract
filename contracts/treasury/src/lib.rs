@@ -213,8 +213,9 @@ impl TreasuryContract {
         let remaining = balance - amount;
         storage::set_token_balance(&env, &token, remaining);
 
-        let prev_total = storage::get_total_collected(&env)?;
-        storage::set_total_collected(&env, prev_total.checked_sub(amount).unwrap_or(0));
+        // `total_collected` is a monotone cumulative counter — it records how
+        // much has ever been received, and is never decremented on withdrawal.
+        // Only `token_balance` (the live custodied balance) decreases here.
 
         let treasury = env.current_contract_address();
         token::Client::new(&env, &token).transfer(&treasury, &to, &amount);
@@ -279,6 +280,33 @@ impl TreasuryContract {
         }
 
         storage::clear_pending_admin(&env);
+        Ok(())
+    }
+
+    /// Immediately transfer admin to `new_admin` (no timelock).
+    ///
+    /// For the timelocked path, use [`Self::propose_admin`] +
+    /// [`Self::execute_admin`]. This direct transfer is provided for
+    /// operational convenience (e.g. integration tests and emergency rotation).
+    ///
+    /// # Errors
+    /// - [`TreasuryError::Unauthorized`] – `caller` is not the current admin.
+    pub fn transfer_admin(
+        env: Env,
+        caller: Address,
+        new_admin: Address,
+    ) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+        storage::set_admin(&env, &new_admin);
+        events::emit_admin_transferred(&env, &caller, &new_admin);
         Ok(())
     }
 

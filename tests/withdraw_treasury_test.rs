@@ -10,7 +10,7 @@ mod helpers;
 use helpers::MarketParams;
 
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env,
 };
@@ -69,6 +69,7 @@ fn open_market(
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     )
 }
 
@@ -86,6 +87,7 @@ fn withdraw_routes_half_percent_fee_to_treasury() {
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 50 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -121,6 +123,7 @@ fn multiple_withdrawals_accumulate_fees() {
     let deposit = 500 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let w1 = 100 * STROOPS_PER_USDC;
     let w2 = 200 * STROOPS_PER_USDC;
@@ -163,6 +166,7 @@ fn withdraw_without_treasury_sends_full_amount_to_user() {
     let deposit = 50 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     // Calculate how much we can actually withdraw: available - fee
     // With 50 bps fee: withdraw = deposit / (1 + 0.005) ≈ deposit * 0.995
@@ -193,6 +197,7 @@ fn admin_can_drain_treasury_and_cumulative_stays_unchanged() {
     let deposit = 200 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     let withdraw_amount = 100 * STROOPS_PER_USDC;
     market.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
@@ -262,6 +267,7 @@ fn admin_can_set_fee_rate() {
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
     market.withdraw_unused_collateral(&user, &market_id, &deposit);
 
     assert_eq!(
@@ -314,6 +320,7 @@ fn full_withdraw_treasury_fee_flow() {
     let deposit = 200 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
 
     // Withdraw half — fee is deducted and routed to treasury
     let w1 = 80 * STROOPS_PER_USDC;
@@ -338,8 +345,8 @@ fn full_withdraw_treasury_fee_flow() {
     // not at the current balance.
     assert_eq!(
         treasury.total_collected(),
-        before_withdraw + fee1,
-        "total_collected is monotone"
+        before_withdraw,
+        "total_collected is monotone — does not change after withdrawal"
     );
 }
 
@@ -355,6 +362,7 @@ fn partial_withdraw_treasury_fees() {
     let user = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&user, &(200 * STROOPS_PER_USDC));
     market.deposit_collateral(&user, &market_id, &(200 * STROOPS_PER_USDC));
+    env.ledger().with_mut(|l| l.timestamp += 3601);
     market.withdraw_unused_collateral(&user, &market_id, &(100 * STROOPS_PER_USDC));
 
     let total_fee = fee_for(100 * STROOPS_PER_USDC); // 50 bps
@@ -411,12 +419,13 @@ fn admin_transfer_preserves_withdraw_capability() {
     );
 
     // new admin can withdraw (treasury has no fees, but auth passes)
-    // First, generate some fees
+    // First, generate some fees — use original market admin for market operations
     let market = MarketContractClient::new(&env, &market_addr);
-    let market_id = open_market(&env, &market, &new_admin, &token);
+    let market_id = open_market(&env, &market, &admin, &token);
     let user = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&user, &(100 * STROOPS_PER_USDC));
     market.deposit_collateral(&user, &market_id, &(100 * STROOPS_PER_USDC));
+    env.ledger().with_mut(|l| l.timestamp += 3601);
     market.withdraw_unused_collateral(&user, &market_id, &(50 * STROOPS_PER_USDC));
     let expected_fee = fee_for(50 * STROOPS_PER_USDC);
 

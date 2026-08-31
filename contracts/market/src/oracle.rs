@@ -198,7 +198,6 @@ fn verify_ed25519_safe(pubkey: &BytesN<32>, message: &BytesN<32>, signature: &By
 ///
 /// # Errors
 /// - [`ContractError::UnauthorizedOracle`] if `oracle_pubkey` is the zero key.
-fix/802-planned-functionality-vs-complete
 /// - [`ContractError::UnauthorizedOracle`] if adapters are enabled (fail-closed).
 /// - Panics if the Ed25519 signature is invalid (SDK limitation).
 ///
@@ -213,7 +212,6 @@ fix/802-planned-functionality-vs-complete
 /// Uses Ed25519 signature verification, performed in pure Rust (see
 /// [`verify_ed25519_safe`]) rather than the host's `ed25519_verify`, so that
 /// an invalid signature returns a typed error instead of trapping the host.
-dev
 pub fn verify_oracle_signature(
     env: &Env,
     market_id: u32,
@@ -1606,3 +1604,4 @@ mod adapter_fallback_tests {
             assert_eq!(result, Err(ContractError::UnauthorizedOracle));
         });
     }
+}

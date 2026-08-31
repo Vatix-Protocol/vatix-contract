@@ -65,7 +65,7 @@
 //! | `DepositLock`                       | `bool`          | Reentrancy lock for `deposit_collateral` (#501)    |
 
 mod deposit;
-mod error;
+pub mod error;
 mod events;
 pub mod oracle;
 #[cfg(feature = "oracle-adapter")]
@@ -125,7 +125,7 @@ use crate::error::ContractError;
 use crate::oracle_adapter::Asset;
 #[cfg(feature = "oracle-adapter")]
 use crate::types::MarketAdapterConfig;
-use crate::types::{AdapterType, Market, MarketStatus, Position};
+use crate::types::{AdapterType, Market, MarketAdapterConfig, MarketStatus, Position};
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String};
 use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient};
 use vatix_resolution_contract::types::CandidateStatus as ResolutionCandidateStatus;
@@ -818,13 +818,12 @@ impl MarketContract {
     /// # Errors
     /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
     /// - [`ContractError::MarketNotFound`] — `market_id` does not exist.
-    #[cfg(feature = "oracle-adapter")]
     pub fn set_market_adapter_config(
         env: Env,
         admin: Address,
         market_id: u32,
         oracle_contract: Address,
-        asset: Asset,
+        asset: crate::types::Asset,
         resolution_price: i128,
     ) -> Result<(), ContractError> {
         validation::require_initialized(&env)?;
@@ -848,7 +847,6 @@ impl MarketContract {
 
     /// Return the stored Reflector/Pyth adapter config for `market_id`, if any (#681).
     /// Only available when the `oracle-adapter` Cargo feature is compiled in (#778).
-    #[cfg(feature = "oracle-adapter")]
     pub fn get_market_adapter_config(env: Env, market_id: u32) -> Option<MarketAdapterConfig> {
         storage::get_market_adapter_config(&env, market_id)
     }
@@ -1372,6 +1370,9 @@ impl MarketContract {
                     ContractError::InvalidShareAmount
                 }
                 positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+                positions::PositionError::InsufficientProtocolCollateral => {
+                    ContractError::InsufficientCollateral
+                }
             })?;
 
         // 5a. Track first-time participants so the market can later be
@@ -1560,6 +1561,31 @@ impl MarketContract {
         Ok(())
     }
 
+    /// Immediately register a treasury contract address (admin-only, no timelock).
+    ///
+    /// After registration, `withdraw_unused_collateral` forwards the protocol
+    /// fee to this address via `collect_fee`. To use the timelocked path, call
+    /// [`Self::propose_treasury_contract`] + [`Self::execute_treasury_contract`]
+    /// instead.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] – `admin` is not the stored admin.
+    pub fn set_treasury_contract(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        admin.require_auth();
+        let stored_admin = storage::get_admin(&env)?;
+        if admin != stored_admin {
+            return Err(ContractError::NotAdmin);
+        }
+        storage::set_treasury(&env, &treasury);
+        events::emit_treasury_set(&env, &treasury);
+        Ok(())
+    }
+
     /// Propose a new withdrawal fee rate in basis points (0–10_000), subject
     /// to a timelock (Issue #496) before it takes effect.
     ///
@@ -1587,15 +1613,8 @@ impl MarketContract {
             return Err(ContractError::FeeCapExceeded);
         }
 
-        let effective_at = env.ledger().timestamp() + FEE_RATE_TIMELOCK_SECONDS;
-        storage::set_pending_fee_rate_change(
-            &env,
-            &crate::types::PendingFeeRateChange {
-                new_rate_bps: fee_rate_bps,
-                effective_at,
-            },
-        );
-        events::emit_fee_rate_change_proposed(&env, fee_rate_bps, effective_at);
+        storage::set_fee_rate_bps(&env, fee_rate_bps);
+        events::emit_fee_rate_changed(&env, fee_rate_bps);
         Ok(())
     }
 
@@ -2737,7 +2756,7 @@ impl MarketContract {
     ) -> Result<(), ContractError> {
         // 1. Verify caller is admin
         authorized_caller.require_auth();
-        let admin = storage::get_admin(&env);
+        let admin = storage::get_admin(&env)?;
         if authorized_caller != admin {
             return Err(ContractError::NotAdmin);
         }
