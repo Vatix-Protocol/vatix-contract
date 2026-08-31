@@ -48,6 +48,11 @@ pub enum TreasuryError {
     /// Caller is not the treasury admin.
     Unauthorized = 41,
 
+    /// `initialize` was called with a contract address as admin.
+    /// Admin must be a user account (Ed25519 key), not a deployed contract.
+    /// Mirrors `vatix_market_contract::ContractError::InvalidAdmin`.
+    InvalidAdmin = 43,
+
     /// `initialize` has already been called.
     AlreadyInitialized = 42,
 

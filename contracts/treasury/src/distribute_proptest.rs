@@ -114,7 +114,7 @@ proptest! {
         // No over-distribution: the sum of everything paid out plus what's
         // left in the treasury must equal the original balance exactly.
         prop_assert_eq!(paid_a + paid_b + paid_c + remaining, balance,
-            "distribution did not conserve balance: {paid_a}+{paid_b}+{paid_c}+{remaining} != {balance}");
+            "distribution did not conserve balance: {}+{}+{}+{} != {}", paid_a, paid_b, paid_c, remaining, balance);
 
         // No under-distribution beyond documented floor-division dust: the
         // remainder can never exceed the number of stakeholders minus one

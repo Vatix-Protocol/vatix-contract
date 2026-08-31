@@ -2,9 +2,10 @@
 
 ## Deployment
 
-- [`deploy.sh`](../deploy.sh) — echo guard; documents what a real mainnet deploy should do (build → deploy via Soroban CLI → log contract ID). The guard comment at the top of the file notes every step the real implementation must carry out. The corresponding CI step (`Deploy (dry-run guard)`) runs this script on every push to verify it is reachable and executable.
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID). The CI step (`Deploy testnet (guard)`) runs this script on every push so the deployment path is always exercised in CI.
-- [`invoke-example.sh`](../invoke-example.sh) — echo guard; demonstrates the `stellar contract invoke` pattern for smoke-testing a deployed contract function. The CI step (`Invoke example (echo guard)`) runs this script on every push. The echo guard comment inside the script notes what the real implementation must do once a contract ID is available.
+- [`deploy.sh`](../deploy.sh) — builds, deploys, and smoke-invokes contracts via Stellar CLI on the target network (#760).
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — builds and deploys all four contracts (Market, Treasury, Outcome Token, Resolution) in playbook order to Stellar testnet (#759).
+- [`invoke-example.sh`](../invoke-example.sh) — demonstrates the `stellar contract invoke` pattern for smoke-testing a deployed contract function.
+
 
 ### invoke-example.sh usage
 

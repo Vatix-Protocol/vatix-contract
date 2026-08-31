@@ -1,3 +1,4 @@
+// Issue #765: Required no_std attribute for Soroban WASM contract execution
 #![no_std]
 #![warn(clippy::all)]
 
@@ -75,6 +76,12 @@ impl TreasuryContract {
         admin: Address,
         market_contract: Address,
     ) -> Result<(), TreasuryError> {
+        // Reject contract addresses as admin before anything else.
+        // A contract admin can be called without a real key owner's consent
+        // and would allow privilege escalation.
+        if admin.executable().is_some() {
+            return Err(TreasuryError::InvalidAdmin);
+        }
         admin.require_auth();
         if storage::has_admin(&env) {
             return Err(TreasuryError::AlreadyInitialized);
@@ -406,6 +413,31 @@ impl TreasuryContract {
         }
 
         storage::clear_pending_market_contract(&env);
+        Ok(())
+    }
+
+    /// Update or register the authorized market contract address directly (admin only).
+    pub fn set_market_contract(
+        env: Env,
+        caller: Address,
+        market_contract: Address,
+    ) -> Result<(), TreasuryError> {
+        caller.require_auth();
+
+        if !storage::has_admin(&env) {
+            return Err(TreasuryError::NotInitialized);
+        }
+        let admin = storage::get_admin(&env)?;
+        if caller != admin {
+            return Err(TreasuryError::Unauthorized);
+        }
+
+        let mut markets = storage::get_authorized_markets(&env);
+        if !markets.contains(&market_contract) {
+            markets.push_back(market_contract.clone());
+            storage::set_authorized_markets(&env, &markets);
+        }
+        events::emit_market_contract_set(&env, &market_contract);
         Ok(())
     }
 

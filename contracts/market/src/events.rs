@@ -17,6 +17,7 @@
 //! | `MarketResolved`         | `market_resolved`                   |
 //! | `MarketCanceled`         | `market_canceled`                   |
 //! | `MarketVoided`           | `market_voided`                     |
+//! | `MarketReopened`         | `market_reopened`                   |
 //! | `PositionSettled`        | `position_settled`                  |
 //! | `PositionUpdated`        | `position_updated`                  |
 //! | `PositionLimitExceeded`  | `position_limit_exceeded`           |

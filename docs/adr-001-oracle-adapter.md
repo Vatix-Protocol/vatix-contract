@@ -169,7 +169,15 @@ gating for high-stakes markets.
 - Should `oracle_pubkey` be kept as an optional fallback for markets that
   pre-date the adapter, or deprecated entirely?
 - How should `resolution_price` be expressed for non-USD quote currencies?
-- Who is responsible for calling `update_price_feeds` if Pyth is later added?
+- ~~Who is responsible for calling `update_price_feeds` if Pyth is later
+  added?~~ **Answered (#717)**: `PythAdapter::verify_outcome` itself calls
+  `update_price_feeds` with the caller-supplied VAA before reading the price
+  back via `get_price` — no separate off-chain keeper step is needed. What
+  remains open is *not* the VAA submission (implemented and regression-tested
+  in `oracle_adapter.rs`), but wiring `PythAdapter` into the live
+  `verify_market_outcome` dispatch, which currently fails closed for Pyth
+  because `resolve_market`'s `proof: BytesN<64>` ABI has no room for a
+  variable-length VAA — see `oracle_adapter.rs`'s module doc.
 
 ---
 
@@ -192,3 +200,93 @@ To harden threshold oracle resolution against compromised admin keys, signer set
 4. **Byzantine Equivocation Detection**:
    - Verification checks each signer's signature against both `target_outcome` and `opposite_outcome`.
    - If any signer submits signatures for conflicting outcomes (equivocation), or if duplicate signer identities are present in the pack, resolution immediately fails closed with `ContractError::InvalidSignature`.
+
+---
+
+## #778 — Fail-Closed Contract for the `oracle-adapter` Feature
+
+**Status:** Implemented (2026-08-31)
+
+### Problem
+
+The `oracle-adapter` Cargo feature was never in `[features] default`, but:
+
+1. `contracts/market/src/oracle.rs` used `crate::oracle_adapter::*` types
+   unconditionally, meaning the crate only compiled with the feature enabled.
+2. When the Reflector adapter was *enabled* at runtime but the feature was
+   off at build time, the dispatch silently fell back to Ed25519 — allowing a
+   weaker proof to resolve a market whose admin had explicitly configured
+   Reflector.
+
+### Fix
+
+Two complementary changes restore the intended fail-closed contract:
+
+**Compile-time (`#[cfg]` gates):**
+
+- `MarketAdapterConfig` in `types.rs` is gated with `#[cfg(feature = "oracle-adapter")]` — the struct contains `oracle_adapter::Asset`, which doesn't exist without the feature.
+- `storage::{get,set}_market_adapter_config`, `lib::{set,get}_market_adapter_config`, and the `oracle.rs` dispatch branches that call into `oracle_adapter` are all wrapped with `#[cfg(feature = "oracle-adapter")]` (enabled path) and `#[cfg(not(feature = "oracle-adapter"))]` (fail-closed path).
+- The crate now compiles and runs correctly *without* the feature.
+
+**Runtime (fail-closed for enabled-but-feature-off):**
+
+- `verify_via_reflector`: when the Reflector adapter is *enabled* but the
+  feature is *off*, returns `Err(ContractError::UnauthorizedOracle)` instead
+  of silently falling back to Ed25519.  Same for the V2 dispatch.
+- Pyth was already fail-closed in both scenarios.
+
+**Tests:**
+
+- `oracle_adapter_is_not_in_default_features` — a `#[test]` in `oracle.rs`
+  that asserts `cfg!(feature = "oracle-adapter")` is `false` under `cargo test`
+  (no explicit flag).  Fails CI the moment someone adds the feature to `default`.
+- `reflector_enabled_without_feature_fails_closed` — a `#[cfg(not(feature = "oracle-adapter"))]` test that verifies `UnauthorizedOracle` is returned when Reflector is enabled at runtime but the feature is not compiled in.
+
+**CI:**
+
+The `oracle-adapter-not-default` CI job in `.github/workflows/ci.yml` runs:
+1. `cargo build -p vatix-market-contract` — confirms compilation without the feature.
+2. `cargo test -p vatix-market-contract oracle_adapter_is_not_in_default_features` — asserts the feature is not default.
+
+### Invariant
+
+The `oracle-adapter` feature must never appear in `[features] default` in
+`contracts/market/Cargo.toml` until issue #139 (mainnet oracle switch) is
+fully implemented, reviewed, and audited. CI will fail if this invariant
+is violated.
+
+---
+
+## #778 — Fail-Closed Contract for the `oracle-adapter` Feature
+
+**Status:** Implemented (2026-08-31)
+
+### Problem
+
+The `oracle-adapter` Cargo feature was never in `[features] default`, but two gaps existed:
+
+1. `oracle.rs` referenced `crate::oracle_adapter::*` types unconditionally, so the crate only compiled when the feature was enabled.
+2. When the Reflector adapter was *enabled* at runtime but the `oracle-adapter` feature was *off* at build time, the dispatch silently fell back to Ed25519 — allowing a weaker proof to resolve a market whose admin had explicitly configured Reflector.
+
+### Fix
+
+**Compile-time (`#[cfg]` gates):**
+
+- `MarketAdapterConfig` in `types.rs` is gated with `#[cfg(feature = "oracle-adapter")]` — the struct contains `oracle_adapter::Asset`, which does not exist without the feature.
+- `storage::{get,set}_market_adapter_config`, `lib::{set,get}_market_adapter_config`, and the `oracle.rs` dispatch branches that call into `oracle_adapter` are wrapped with `#[cfg(feature = "oracle-adapter")]` (enabled path) and `#[cfg(not(feature = "oracle-adapter"))]` (fail-closed path).
+- The crate now compiles cleanly *without* the feature.
+
+**Runtime (fail-closed when adapter enabled but feature off):**
+
+- `verify_via_reflector`: when the Reflector adapter is *enabled* but the feature is *off*, returns `Err(ContractError::UnauthorizedOracle)` instead of silently falling back to Ed25519. The V2 dispatch mirrors this.
+- Pyth was already fail-closed in both scenarios.
+
+**Tests and CI:**
+
+- `oracle_adapter_is_not_in_default_features` — `#[test]` in `oracle.rs` asserting `cfg!(feature = "oracle-adapter")` is `false` under plain `cargo test`. Fails CI the moment the feature is added to `default`.
+- `reflector_enabled_without_feature_fails_closed` — `#[cfg(not(feature = "oracle-adapter"))]` test verifying `UnauthorizedOracle` when Reflector is enabled at runtime but the feature is absent at compile time.
+- `oracle-adapter-not-default` CI job runs both a feature-free build and the guard test on every push/PR.
+
+### Invariant
+
+The `oracle-adapter` feature must **not** appear in `[features] default` in `contracts/market/Cargo.toml` until issue #139 (mainnet oracle switch) is fully implemented, reviewed, and audited. CI will fail immediately if this invariant is violated.

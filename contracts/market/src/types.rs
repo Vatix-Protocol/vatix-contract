@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN, String};
+use soroban_sdk::{contracttype, Address, BytesN, String, Symbol};
 
 /// Represents the possible states of a prediction market.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +38,27 @@ pub enum AdapterType {
     Reflector,
     Pyth,
 }
+
+/// Identifies the asset to query from the Reflector oracle.
+///
+/// Lives in `types` (not `oracle_adapter`) so the default wasm32 build can
+/// serialize `MarketAdapterConfig` without requiring `--features oracle-adapter`.
+/// Variant layout matches Reflector's `Asset` enum exactly.
+#[contracttype]
+#[derive(Clone)]
+pub enum Asset {
+    /// A Stellar-native SAC token identified by its issuer address.
+    Stellar(Address),
+    /// Any other asset identified by a 4-byte symbol (e.g. `symbol_short!("BTC")`).
+    Other(Symbol),
+}
+
+/// Maximum optimized market wasm size, including `--features oracle-adapter`.
+///
+/// Matches the current Soroban `maxContractSizeBytes` network limit (64 KiB).
+/// CI (`scripts/check-market-wasm-size.sh`) fails if the built artifact exceeds
+/// this budget so enabling the adapter cannot silently blow install/upgrade limits.
+pub const MARKET_WASM32_SIZE_BUDGET: u32 = 65_536;
 
 /// Core structure containing all relevant information for a Market.
 #[derive(Clone, Debug)]
@@ -158,8 +179,8 @@ pub struct PendingAdapterTypeChange {
 /// `market_id`, see `StorageKey::MarketAdapterConfig` in `storage.rs`)
 /// rather than as inline `Market` fields so existing `Market` storage
 /// entries need no migration; a market with no entry here simply has no
-/// adapter config and `oracle::verify_market_outcome` falls back to Ed25519
-/// (see #680).
+/// adapter config and `oracle::verify_market_outcome` fails closed if that adapter is enabled
+/// without config (#734); Ed25519 fallback is only used while the adapter is disabled.
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct MarketAdapterConfig {
@@ -167,7 +188,7 @@ pub struct MarketAdapterConfig {
     /// network.
     pub oracle_contract: Address,
     /// Reflector asset identifier queried via `lastprice`. Unused for Pyth.
-    pub asset: crate::oracle_adapter::Asset,
+    pub asset: Asset,
     /// Price threshold, in the oracle's native fixed-point units (Reflector:
     /// 7 decimals). The market resolves YES when the fetched price is
     /// `>= resolution_price`.
@@ -191,8 +212,6 @@ pub struct PendingThresholdSignersChange {
     pub effective_at: u64,
 }
 
-
-
 impl Position {
     /// Create an empty position for a user in a market.
     /// Used when a position has not been previously recorded in storage.
@@ -206,5 +225,17 @@ impl Position {
             total_deposited: 0,
             is_settled: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod wasm_budget_tests {
+    use super::MARKET_WASM32_SIZE_BUDGET;
+
+    /// Guard the documented Soroban 64 KiB install/upgrade limit (#734).
+    /// Bumping this constant without a network-limit change must fail CI.
+    #[test]
+    fn market_wasm32_budget_is_soroban_64kib_limit() {
+        assert_eq!(MARKET_WASM32_SIZE_BUDGET, 65_536);
     }
 }

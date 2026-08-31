@@ -16,6 +16,8 @@
 | **Market** | `settle_position` | Outcome token `burn()` external call occurred **before** `storage::set_position`. | Medium | **Fixed** |
 | **Market** | `deposit_collateral` | External collateral `transfer()` occurred **before** `storage::set_position` / `add_market_participant` / `set_last_deposit_time`. | Medium | **Fixed** |
 | **Market** | `void_market` (Issue #708) | No external calls: the caller-identity check reads `storage::get_resolution_contract`, the status flips to `Canceled` via `storage::set_market`, then `emit_market_voided` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
+| **Market** | `cancel_market` | No external calls: admin auth is checked, status validated via `validate_cancelable`, the market is persisted via `storage::set_market`, then `emit_market_canceled` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
+| **Market** | `reopen_market` | No external calls: admin auth is checked, status validated via `validate_reopenable` (Canceled only), the market is persisted via `storage::set_market`, then `emit_market_reopened` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
 | **Treasury** | `withdraw_fees` | External `transfer()` occurred **before** `storage::set_token_balance` / `set_total_collected`. | High | **Fixed** |
 | **Treasury** | `distribute_fees` | Per-stakeholder external `transfer()` calls occurred **inside** the accumulation loop, **before** `storage::set_token_balance` was updated with the reduced balance. | High | **Fixed** |
 | **Treasury** | `collect_fee` | No external token call — the caller (a market contract) moves funds separately; `collect_fee` only records the accounting entry. | — | No violation (informational) |
@@ -78,3 +80,30 @@
 
 ### `collect_fee` (`treasury/src/lib.rs`) — No violation
 `collect_fee` never makes an external token call itself; the actual token movement happens on the caller's side (a market contract's fee-routing code, already covered by the `withdraw_unused_collateral` entry above) before it invokes `collect_fee` to record the accounting entry. There is nothing to reorder within this function.
+
+---
+
+## Issues #752–#755 — Resolution audit additions (no new CEI concerns)
+
+The following changes introduced by Issues #752–#755 carry no new reentrancy or
+CEI implications:
+
+- **#752 — `get_factory` / `get_market_contract` / `get_admin` getters**: Pure
+  storage reads; no external calls, no state writes, no CEI ordering concern.
+
+- **#753 — Bond constant visibility (`MIN_BOND_AMOUNT`, `MIN_CHALLENGE_BOND_AMOUNT`)**: The
+  constants were changed from `const` to `pub const`. No CEI impact. The bond
+  transfer in `propose` / `challenge` was already ordered after all state writes
+  (see §6 and §7 above); making the floor constants visible for testing does not
+  alter the ordering.
+
+- **#754 — `finalize` open-caller documentation**: No code change to `finalize`
+  itself. The existing implementation already uses the keeper model and is
+  already CEI-compliant (see table row above: "Already CEI-compliant — status
+  persisted and bond settlement computed before every external transfer").
+
+- **#755 — `market_id_to_string` ABI bridge documentation**: No code change.
+  The `market_id_to_string` helper is a pure string-formatting function with no
+  external calls or state writes. The cross-contract call to `resolve_market`
+  that consumes its output already runs after all state writes in `finalize`
+  and `arbitrate_uphold_proposer` (see CEI table above).
