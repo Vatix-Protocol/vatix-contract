@@ -1,6 +1,12 @@
-//! #354: Property tests using proptest to verify the invariant
+//! #354 / #766: Property tests using proptest to verify the invariant
 //! `locked_collateral <= total_deposited` holds after every deposit,
 //! update_position, and withdraw_unused_collateral operation.
+//!
+//! ## Property Test Snapshots Policy (#766)
+//! Property test regression snapshots and failure seeds (`test_snapshots/`, `property_locked_collateral*`)
+//! are uncommitted by default per `.gitignore` rules to keep repository history clean and prevent
+//! bloat across large test matrices. When regression failures occur, developers can regenerate
+//! local snapshots using `cargo test --test proptest_locked_invariant`.
 
 #[allow(dead_code)]
 mod helpers;

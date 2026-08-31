@@ -348,7 +348,10 @@ pub fn set_total_locked_collateral(env: &Env, user: &Address, locked: i128) {
         .set(&StorageKey::TotalLockedCollateral(user.clone()), &locked);
 }
 
-// --- Market Participants (Issue #495) ---
+// --- Market Participants (Issue #495 / Issue #768) ---
+
+/// Maximum allowed participants per market to bound storage and execution limits (#768).
+pub const MAX_MARKET_PARTICIPANTS: u32 = 1000;
 
 /// Return the ordered list of every address that has ever held a position
 /// in `market_id`. Empty if the market has no positions yet.
@@ -359,15 +362,18 @@ pub fn get_market_participants(env: &Env, market_id: u32) -> Vec<Address> {
         .unwrap_or_else(|| Vec::new(env))
 }
 
-/// Record `user` as a participant of `market_id` if not already tracked.
+/// Record `user` as a participant of `market_id` if not already tracked and
+/// under the storage limit (`MAX_MARKET_PARTICIPANTS`).
 /// Idempotent — safe to call on every position update.
 pub fn add_market_participant(env: &Env, market_id: u32, user: &Address) {
     let mut participants = get_market_participants(env, market_id);
     if !participants.iter().any(|p| &p == user) {
-        participants.push_back(user.clone());
-        env.storage()
-            .persistent()
-            .set(&StorageKey::MarketParticipants(market_id), &participants);
+        if participants.len() < MAX_MARKET_PARTICIPANTS {
+            participants.push_back(user.clone());
+            env.storage()
+                .persistent()
+                .set(&StorageKey::MarketParticipants(market_id), &participants);
+        }
     }
 }
 
@@ -652,6 +658,8 @@ pub fn set_adapter_enabled(env: &Env, adapter_type: &crate::types::AdapterType, 
 /// Returns `None` when the admin has not configured an adapter for this
 /// market yet — callers should fall back to Ed25519 verification rather than
 /// treating this as an error (see `oracle::verify_market_outcome`).
+/// Only available when the `oracle-adapter` feature is compiled in (#778).
+#[cfg(feature = "oracle-adapter")]
 pub fn get_market_adapter_config(
     env: &Env,
     market_id: u32,
@@ -663,6 +671,8 @@ pub fn get_market_adapter_config(
 
 /// Set (or replace) the Reflector/Pyth adapter config for `market_id`
 /// (admin-gated in `lib.rs`).
+/// Only available when the `oracle-adapter` feature is compiled in (#778).
+#[cfg(feature = "oracle-adapter")]
 pub fn set_market_adapter_config(
     env: &Env,
     market_id: u32,
@@ -1230,5 +1240,87 @@ mod test {
             set_paused(&env, false);
             assert!(!is_paused(&env));
         });
+    }
+
+    /// Canary test for issue #764 — ensures that the four modules whose
+    /// dead-code suppression is required only due to `#[contractimpl]` macro
+    /// hiding call-sites (`positions`, `settlement`, `storage`, `validation`)
+    /// use the scoped `#[cfg_attr(not(test), allow(dead_code))]` form rather
+    /// than a blanket `#[allow(dead_code)]`.
+    ///
+    /// A blanket `#[allow(dead_code)]` on any of these modules would silently
+    /// hide genuinely unused admin entrypoints or storage helpers during
+    /// non-audit code reviews.  This test fails immediately if the pattern
+    /// regresses back to the unscoped form, catching it in `cargo test`
+    /// before it reaches a review or audit.
+    ///
+    /// HOW THIS WORKS:
+    ///   - `include_str!` embeds the raw source of `lib.rs` at compile time.
+    ///   - We assert that the string `#[allow(dead_code)]` does not appear as
+    ///     a standalone module-level attribute on the four guarded modules
+    ///     (by confirming the *only* dead_code attributes for those modules
+    ///     are the cfg_attr-scoped variants).
+    ///   - A false positive here means someone deliberately removed the
+    ///     cfg_attr wrapper — that needs an explicit, documented reason.
+    #[test]
+    fn test_no_bare_module_level_allow_dead_code_on_guarded_modules() {
+        extern crate std;
+        use std::string::ToString;
+
+        const LIB_SRC: &str = include_str!("lib.rs");
+
+        // The four modules that must use cfg_attr instead of a bare allow.
+        // Each entry is (module_name, explanatory_substring) — the second
+        // field confirms the cfg_attr annotation is present and correctly
+        // references the module.
+        let guarded = [
+            "positions",
+            "settlement",
+            "storage",
+            "validation",
+        ];
+
+        for module in guarded {
+            // Confirm the scoped cfg_attr form IS present.
+            let cfg_attr_form = "#[cfg_attr(not(test), allow(dead_code))]";
+            assert!(
+                LIB_SRC.contains(cfg_attr_form),
+                "lib.rs is missing the scoped '{}' attribute — \
+                 at least one of the guarded modules ({}) requires it; \
+                 do not replace it with a bare #[allow(dead_code)] (#764)",
+                cfg_attr_form,
+                module
+            );
+
+            // Confirm there is no bare `#[allow(dead_code)]` immediately
+            // followed (within 3 lines) by `mod {module}`.  We scan each
+            // line window rather than the whole file so we only flag the
+            // attribute when it directly precedes the module declaration.
+            let lines: std::vec::Vec<&str> = LIB_SRC.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                // Check if this line is a bare (non-cfg_attr) dead_code allow
+                let trimmed = line.trim();
+                if trimmed == "#[allow(dead_code)]" {
+                    // Look ahead up to 3 lines for the module declaration
+                    let window_end = (i + 4).min(lines.len());
+                    for ahead in &lines[i + 1..window_end] {
+                        let ahead_trimmed = ahead.trim();
+                        let mod_decl = std::format!("mod {};", module);
+                        let pub_mod_decl = std::format!("pub mod {};", module);
+                        if ahead_trimmed == mod_decl || ahead_trimmed == pub_mod_decl {
+                            panic!(
+                                "lib.rs has a bare #[allow(dead_code)] on `mod {}` \
+                                 (line {}). Replace it with \
+                                 `#[cfg_attr(not(test), allow(dead_code))]` \
+                                 to scope the suppression to non-test builds only. \
+                                 See issue #764.",
+                                module,
+                                i + 1
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

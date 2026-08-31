@@ -44,7 +44,32 @@ This directly satisfies the acceptance criteria ("second settle cannot drain
 funds twice") with an explicit, repeatable regression test rather than
 relying on the existing full-flow test's incidental error check.
 
+## Workspace-level integration tests
+
+`tests/settlement_test.rs` adds three workspace-level integration tests that
+exercise the same guards through the cross-crate boundary with a real SAC
+token, complementing the unit-level coverage in `settlement.rs`:
+
+- **`second_settle_cannot_double_pay`** — the YES-winner path: resolves a
+  market `result = Some(true)`, settles once, then verifies that three
+  repeat calls each return `Err(PositionAlreadySettled)` and leave both the
+  user's and the contract's token balances unchanged.
+
+- **`second_settle_cannot_double_pay_no_winner_path`** — the no-winner
+  refund path: resolves a market with `result = None`, settles once (refund
+  of full deposited collateral), then verifies that a repeat call returns
+  `Err(PositionAlreadySettled)` without moving any additional funds.
+
+- **`settlement_before_resolution_is_rejected`** — confirms `settle_position`
+  on an unresolved (Active) market returns `Err(MarketNotResolved)`.
+
+Both idempotency tests assert the *effect* (token balances byte-for-byte
+identical after each rejected repeat call), not just the error code — so a
+future regression that returns the right error but still moves tokens would
+also be caught.
+
 ## Files touched
 
-- `contracts/market/src/settlement.rs` — new test only; no production logic
-  changed, since the idempotency guard was already correct.
+- `contracts/market/src/settlement.rs` — existing unit test unchanged; no
+  production logic changed, since the idempotency guard was already correct.
+- `tests/settlement_test.rs` — workspace-level integration tests added.

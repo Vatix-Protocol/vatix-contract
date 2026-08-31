@@ -691,3 +691,152 @@ fn outcome_token_balances_isolated_across_markets() {
     assert_eq!(client.balance(&1, &user, &TokenKind::Yes), 100);
     assert_eq!(client.balance(&2, &user, &TokenKind::Yes), 200);
 }
+
+// ── Market: buy_yes / buy_no ──────────────────────────────────────────────────
+
+#[test]
+fn market_buy_yes_and_buy_no_entrypoints() {
+    let (env, admin, contract_id, token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+    let market_id = make_market(&client, &env, &admin, &token);
+
+    let user = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&user, &(200 * STROOPS));
+    client.deposit_collateral(&user, &market_id, &(200 * STROOPS));
+
+    client.buy_yes(&user, &market_id, &(50 * STROOPS), &5_000i128);
+    let pos1 = client.get_position(&market_id, &user).unwrap();
+    assert_eq!(pos1.yes_shares, 50 * STROOPS);
+
+    client.buy_no(&user, &market_id, &(50 * STROOPS), &5_000i128);
+    let pos2 = client.get_position(&market_id, &user).unwrap();
+    assert_eq!(pos2.no_shares, 50 * STROOPS);
+}
+
+// ── Market: pause / unpause / is_paused ───────────────────────────────────────
+
+#[test]
+fn market_pause_unpause_entrypoints() {
+    let (env, admin, contract_id, _token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+    client.pause(&admin).unwrap();
+    assert!(client.is_paused());
+    client.unpause(&admin).unwrap();
+    assert!(!client.is_paused());
+}
+
+// ── Market: fee waivers (add_fee_waiver / remove_fee_waiver / is_fee_waived) ──
+
+#[test]
+fn market_fee_waiver_entrypoints() {
+    let (env, admin, contract_id, _token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    assert!(!client.is_fee_waived(&user));
+    client.add_fee_waiver(&admin, &user).unwrap();
+    assert!(client.is_fee_waived(&user));
+    client.remove_fee_waiver(&admin, &user).unwrap();
+    assert!(!client.is_fee_waived(&user));
+}
+
+// ── Market: close_market_to_deposits / is_market_closed_to_deposits ───────────
+
+#[test]
+fn market_close_to_deposits_entrypoints() {
+    let (env, admin, contract_id, token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+    let market_id = make_market(&client, &env, &admin, &token);
+
+    assert!(!client.is_market_closed_to_deposits(&market_id));
+    client.close_market_to_deposits(&admin, &market_id).unwrap();
+    assert!(client.is_market_closed_to_deposits(&market_id));
+}
+
+// ── Market: fee rate timelock & cap entrypoints ───────────────────────────────
+
+#[test]
+fn market_fee_rate_timelock_and_cap_entrypoints() {
+    let (env, admin, contract_id, _token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    client.set_fee_cap(&admin, &1_000i128).unwrap();
+    assert_eq!(client.get_fee_cap(), 1_000i128);
+
+    client.propose_fee_rate(&admin, &500i128).unwrap();
+    let pending = client.get_pending_fee_rate_change().unwrap();
+    assert_eq!(pending.new_rate_bps, 500i128);
+
+    client.cancel_fee_rate_change(&admin).unwrap();
+    assert!(client.get_pending_fee_rate_change().is_none());
+}
+
+// ── Market: get_version & participant count entrypoints ───────────────────────
+
+#[test]
+fn market_version_and_participant_count_entrypoints() {
+    let (env, admin, contract_id, token) = market_env();
+    let client = MarketContractClient::new(&env, &contract_id);
+    let market_id = make_market(&client, &env, &admin, &token);
+
+    assert_eq!(client.get_version(), 1u32);
+    assert_eq!(client.get_market_participant_count(&market_id), 0u32);
+
+    let user = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&user, &(50 * STROOPS));
+    client.deposit_collateral(&user, &market_id, &(50 * STROOPS));
+
+    assert_eq!(client.get_market_participant_count(&market_id), 1u32);
+}
+
+// ── Market: settle_positions_page & void_market ──────────────────────────────
+
+#[test]
+fn market_settle_positions_page_and_void_market_entrypoints() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+
+    let (oracle_pubkey, signing_key) = oracle_keypair(&env);
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin).address();
+
+    let market_id = client.initialize_market(
+        &admin,
+        &String::from_str(&env, "Page settle?"),
+        &(env.ledger().timestamp() + 86_400),
+        &oracle_pubkey,
+        &token,
+    );
+
+    let user = Address::generate(&env);
+    StellarAssetClient::new(&env, &token).mint(&user, &(100 * STROOPS));
+    client.deposit_collateral(&user, &market_id, &(100 * STROOPS));
+
+    let sig = sign_outcome(&env, &signing_key, market_id, true);
+    client.resolve_market(&String::from_str(&env, "1"), &true, &sig);
+
+    let (payout, next_idx) = client.settle_positions_page(&market_id, &0u32, &10u32);
+    assert_eq!(payout, 100 * STROOPS);
+    assert_eq!(next_idx, 1u32);
+
+    let market_id2 = client.initialize_market(
+        &admin,
+        &String::from_str(&env, "Void?"),
+        &(env.ledger().timestamp() + 86_400),
+        &oracle_pubkey,
+        &token,
+    );
+    let res = Address::generate(&env);
+    client.set_resolution_contract(&admin, &res).unwrap();
+    client.void_market(&res, &market_id2);
+}
+

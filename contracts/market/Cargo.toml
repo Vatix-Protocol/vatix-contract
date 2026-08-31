@@ -18,8 +18,10 @@ vatix-outcome-token-contract = { path = "../outcome-token" }
 vatix-resolution-contract = { path = "../resolution" }
 
 [features]
-# Enables the oracle_adapter module (trait + Ed25519/Reflector/Pyth stubs).
-# Not enabled by default — no mainnet switch in issue #139.
+# Explicit adapter build for CI size-budget checks (#734).
+# The oracle_adapter module is compiled in the default wasm as well; this
+# flag exists so scripts/check-market-wasm-size.sh can build both shapes
+# and fail if either exceeds MARKET_WASM32_SIZE_BUDGET (64 KiB).
 oracle-adapter = []
 
 [dev-dependencies]

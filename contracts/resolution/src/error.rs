@@ -42,9 +42,15 @@ pub enum ContractError {
     Unauthorized = 40,
     NotAdmin = 41,
     AlreadyInitialized = 42,
+    /// `initialize` was called with a contract address as admin.
+    /// Admin must be a user account (Ed25519 key), not a deployed contract.
+    /// Mirrors `vatix_market_contract::ContractError::InvalidAdmin`.
+    InvalidAdmin = 43,
     /// The operation is blocked by the current emergency mode (Issue #662).
     /// Check [`crate::storage::get_emergency_mode`] for the active mode.
     EmergencyModeActive = 50,
+    /// The resolution contract is paused; state-mutating operations are suspended.
+    ContractPaused = 52,
     /// The on-chain storage schema version does not match the version this
     /// contract build expects (Issue #696). Mirrors
     /// `vatix_market_contract::ContractError::UpgradeRequired` /

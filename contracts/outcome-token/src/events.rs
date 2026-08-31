@@ -100,6 +100,7 @@ pub fn emit_market_contract_set(env: &Env, market_contract: &Address) {
 
 #[contractevent]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct TokenTransferred {
     #[topic]
     pub market_id: u32,
@@ -110,6 +111,7 @@ pub struct TokenTransferred {
     pub amount: i128,
 }
 
+#[allow(dead_code)]
 pub fn emit_token_transferred(
     env: &Env,
     market_id: u32,
@@ -124,6 +126,40 @@ pub fn emit_token_transferred(
         to: to.clone(),
         kind,
         amount,
+    }
+    .publish(env);
+}
+
+/// Emitted when an admin pauses the contract.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractPaused {
+    #[topic]
+    pub admin: Address,
+    pub paused_at: u64,
+}
+
+pub fn emit_contract_paused(env: &Env, admin: &Address) {
+    ContractPaused {
+        admin: admin.clone(),
+        paused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+/// Emitted when an admin unpauses the contract.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractUnpaused {
+    #[topic]
+    pub admin: Address,
+    pub unpaused_at: u64,
+}
+
+pub fn emit_contract_unpaused(env: &Env, admin: &Address) {
+    ContractUnpaused {
+        admin: admin.clone(),
+        unpaused_at: env.ledger().timestamp(),
     }
     .publish(env);
 }

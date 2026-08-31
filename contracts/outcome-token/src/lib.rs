@@ -1,3 +1,4 @@
+// Issue #765: Required no_std attribute for Soroban WASM contract execution
 #![no_std]
 #![warn(clippy::all)]
 
@@ -83,7 +84,7 @@ impl OutcomeTokenContract {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         storage::assert_version(&env)?;
-        let mut config = storage::get_config(&env);
+        let config = storage::get_config(&env);
         if admin != config.admin {
             return Err(ContractError::Unauthorized);
         }
@@ -133,6 +134,49 @@ impl OutcomeTokenContract {
         storage::get_pending_market_contract(&env)
     }
 
+    /// Pause the contract, blocking `mint`, `burn`, and `transfer`.
+    ///
+    /// Only the stored admin may call this. Once paused, all three token
+    /// mutation entrypoints reject with [`ContractError::ContractPaused`]
+    /// until the admin calls [`Self::unpause`].
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        storage::set_paused(&env, true);
+        events::emit_contract_paused(&env, &admin);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal token operations.
+    ///
+    /// Only the stored admin may call this.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        storage::set_paused(&env, false);
+        events::emit_contract_unpaused(&env, &admin);
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
+    }
+
     /// Update the SAC metadata (name and symbol). Admin only.
     pub fn set_metadata(
         env: Env,
@@ -180,6 +224,9 @@ impl OutcomeTokenContract {
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
         }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
         // Storage-version guard (Issue #696): a stale/partially-upgraded
         // deployment must fail closed here rather than let `mint` write
         // balances/supply under a storage layout the compiled contract no
@@ -214,6 +261,9 @@ impl OutcomeTokenContract {
     ) -> Result<(), ContractError> {
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
+        }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
         }
         storage::assert_version(&env)?;
         let config = storage::get_config(&env);
@@ -260,14 +310,17 @@ impl OutcomeTokenContract {
         env: Env,
         market_id: u32,
         from: Address,
-        to: Address,
-        kind: TokenKind,
+        _to: Address,
+        _kind: TokenKind,
         amount: i128,
     ) -> Result<(), ContractError> {
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
         }
         from.require_auth();
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
         storage::assert_version(&env)?;
 
         let config = storage::get_config(&env);

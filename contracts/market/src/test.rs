@@ -2896,6 +2896,53 @@ mod test {
         );
     }
 
+    // ========== Issue #718: set_adapter_enabled admin-only + event ==========
+
+    /// `set_adapter_enabled` is already admin-gated (see
+    /// `test_non_admin_cannot_call_admin_mutators` above) and paused-gated
+    /// (see the `assert_paused!` coverage), but until now no test exercised
+    /// the actual happy path: an admin call must flip `is_adapter_enabled`
+    /// and must emit `OracleAdapterConfigured` so off-chain indexers observe
+    /// the mainnet-switch flip.
+    #[test]
+    fn test_set_adapter_enabled_toggles_state_and_emits_event() {
+        use crate::types::AdapterType;
+
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        assert!(
+            !client.is_adapter_enabled(&AdapterType::Reflector),
+            "adapters must default to disabled"
+        );
+
+        env.events().all(); // clear setup events
+
+        client.set_adapter_enabled(&admin, &AdapterType::Reflector, &true);
+        assert!(client.is_adapter_enabled(&AdapterType::Reflector));
+        let events_after_enable = env.events().all();
+        assert!(
+            events_after_enable.len() > 0,
+            "OracleAdapterConfigured event should be emitted when an adapter is enabled"
+        );
+
+        client.set_adapter_enabled(&admin, &AdapterType::Reflector, &false);
+        assert!(!client.is_adapter_enabled(&AdapterType::Reflector));
+        let events_after_disable = env.events().all();
+        assert!(
+            events_after_disable.len() > 0,
+            "OracleAdapterConfigured event should be emitted when an adapter is disabled"
+        );
+
+        // Pyth is tracked independently of Reflector.
+        assert!(!client.is_adapter_enabled(&AdapterType::Pyth));
+        client.set_adapter_enabled(&admin, &AdapterType::Pyth, &true);
+        assert!(client.is_adapter_enabled(&AdapterType::Pyth));
+        assert!(
+            !client.is_adapter_enabled(&AdapterType::Reflector),
+            "toggling Pyth must not affect Reflector's independently-tracked flag"
+        );
+    }
+
     #[test]
     fn test_set_resolution_contract_records_address() {
         let (env, admin, client, _contract_id) = create_test_contract();
@@ -3098,6 +3145,106 @@ mod test {
         assert_eq!(applied, 1_000);
     }
 
+    // ========== cancel_fee_rate_change tests (Issue #748) ==========
+
+    /// Admin can cancel a pending fee-rate change before the timelock elapses.
+    /// After cancellation, `get_pending_fee_rate_change` returns `None` and
+    /// `execute_fee_rate_change` returns `NoPendingFeeChange`.
+    #[test]
+    fn test_cancel_fee_rate_change_clears_pending() {
+        use crate::error::ContractError;
+
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        // Propose a fee rate change.
+        client.set_fee_rate(&admin, &300i128);
+        assert!(
+            client.get_pending_fee_rate_change().is_some(),
+            "pending change must exist after set_fee_rate"
+        );
+
+        // Cancel it before the timelock.
+        client
+            .cancel_fee_rate_change(&admin)
+            .expect("admin should be able to cancel a pending change");
+
+        assert!(
+            client.get_pending_fee_rate_change().is_none(),
+            "pending change must be cleared after cancel"
+        );
+
+        // execute_fee_rate_change must now return NoPendingFeeChange.
+        let result = client.try_execute_fee_rate_change();
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::NoPendingFeeChange)),
+            "execute_fee_rate_change must fail with NoPendingFeeChange after cancel"
+        );
+    }
+
+    /// Calling `cancel_fee_rate_change` when no change is pending returns
+    /// `NoPendingFeeChange`.
+    #[test]
+    fn test_cancel_fee_rate_change_no_pending_returns_error() {
+        use crate::error::ContractError;
+
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        // No `set_fee_rate` called — nothing is pending.
+        let result = client.try_cancel_fee_rate_change(&admin);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::NoPendingFeeChange)),
+            "cancel_fee_rate_change must return NoPendingFeeChange when nothing is pending"
+        );
+    }
+
+    /// Non-admin cannot cancel a pending fee-rate change.
+    #[test]
+    fn test_cancel_fee_rate_change_non_admin_rejected() {
+        use crate::error::ContractError;
+
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        client.set_fee_rate(&admin, &200i128);
+
+        let stranger = Address::generate(&env);
+        let result = client.try_cancel_fee_rate_change(&stranger);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::NotAdmin)),
+            "non-admin must not be able to cancel a fee-rate change"
+        );
+    }
+
+    /// Admin can cancel and then propose a new fee rate — the cancel path does
+    /// not permanently block the fee-rate timelock family.
+    #[test]
+    fn test_cancel_fee_rate_change_allows_new_proposal() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        // Propose, cancel, then propose again with a different rate.
+        client.set_fee_rate(&admin, &100i128);
+        client.cancel_fee_rate_change(&admin).expect("cancel should succeed");
+
+        client.set_fee_rate(&admin, &200i128);
+        let pending = client
+            .get_pending_fee_rate_change()
+            .expect("pending change must exist after second proposal");
+        assert_eq!(
+            pending.new_rate_bps, 200i128,
+            "pending change must reflect the second proposal's rate"
+        );
+
+        // Advance past timelock and execute.
+        let now = env.ledger().timestamp();
+        env.ledger()
+            .set_timestamp(now + crate::FEE_RATE_TIMELOCK_SECONDS + 1);
+
+        let applied = client.execute_fee_rate_change();
+        assert_eq!(applied, 200i128, "new rate must be applied after execute");
+    }
+
     // ========== get_market view completeness tests (Issue #550) ==========
 
     /// Verify that `get_market` returns an error when the market does not exist.
@@ -3295,6 +3442,191 @@ mod test {
 
         assert!(client.is_fee_waived(&account));
         assert_eq!(client.get_fee_waivers().len(), 1);
+    }
+
+    // ========== GAP-2 regression: oracle V1 disabled fail-closed default ==========
+
+    /// Verifies the full lifecycle of the `oracle_v1_disabled` flag:
+    ///
+    /// 1. `initialize()` sets V1 disabled to `true` by default (fail-closed).
+    /// 2. `set_oracle_v1_disabled(admin, false)` re-enables V1.
+    /// 3. `set_oracle_v1_disabled(admin, true)` re-disables V1.
+    /// 4. `resolve_market` with a valid V1 signature while V1 is disabled
+    ///    returns `UnauthorizedOracle` — the contract is fail-closed.
+    ///
+    /// This uses `client.initialize(&admin)` rather than `create_test_contract()`
+    /// so the real initialization code path is exercised and the default is not
+    /// silently bypassed by raw storage writes.
+    #[test]
+    fn test_oracle_v1_disabled_fail_closed_default() {
+        use crate::error::ContractError;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        // Step 1: initialize via the real entrypoint — V1 must default to disabled.
+        client.initialize(&admin);
+        assert!(
+            client.is_oracle_v1_disabled(),
+            "is_oracle_v1_disabled() must return true immediately after initialize() \
+             (fail-closed default)"
+        );
+
+        // Step 2: admin enables V1.
+        client
+            .set_oracle_v1_disabled(&admin, &false)
+            .expect("admin should be able to enable V1");
+        assert!(
+            !client.is_oracle_v1_disabled(),
+            "is_oracle_v1_disabled() must return false after set_oracle_v1_disabled(admin, false)"
+        );
+
+        // Step 3: admin re-disables V1.
+        client
+            .set_oracle_v1_disabled(&admin, &true)
+            .expect("admin should be able to re-disable V1");
+        assert!(
+            client.is_oracle_v1_disabled(),
+            "is_oracle_v1_disabled() must return true after set_oracle_v1_disabled(admin, true)"
+        );
+
+        // Step 4: create a market and attempt resolve_market while V1 is disabled —
+        // must return UnauthorizedOracle regardless of the signature validity.
+        let question = String::from_str(&env, "V1 fail-closed regression test");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = 1u32;
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+        let collateral_token = Address::generate(&env);
+        client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &None,
+        );
+
+        let resolver = Address::generate(&env);
+        let market_id_str = String::from_str(&env, "1");
+        // V1 is disabled — resolve_market must fail with UnauthorizedOracle.
+        // The expiry/signature checks never run while V1 is disabled, so any
+        // expires_at value will produce the same error.
+        let result = client.try_resolve_market(
+            &resolver,
+            &market_id_str,
+            &outcome,
+            &signature,
+            &(env.ledger().timestamp() + 3_600),
+        );
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::UnauthorizedOracle)),
+            "resolve_market must return UnauthorizedOracle when V1 is disabled"
+        );
+    }
+
+    // ========== GAP-2 regression: emergency mode blocks deposits ==========
+
+    /// Verifies that `TradingHalted` emergency mode prevents new collateral
+    /// deposits while preserving the ability to restore `Normal` mode and
+    /// resume deposits.
+    ///
+    /// 1. `get_emergency_mode()` returns `Normal` after initialization.
+    /// 2. After `set_emergency_mode(TradingHalted)`, `deposit_collateral`
+    ///    returns `EmergencyModeActive`.
+    /// 3. After `set_emergency_mode(Normal)`, `deposit_collateral` succeeds.
+    #[test]
+    fn test_emergency_mode_blocks_trading() {
+        use crate::error::ContractError;
+        use crate::types::EmergencyMode;
+        use soroban_sdk::token::StellarAssetClient;
+
+        // Build a contract with a real Stellar asset so deposit_collateral can
+        // execute a token transfer. This mirrors the setup in setup_funded_market().
+        let env = Env::default();
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        env.mock_all_auths();
+
+        // Step 1: emergency mode defaults to Normal.
+        assert_eq!(
+            client.get_emergency_mode(),
+            EmergencyMode::Normal,
+            "get_emergency_mode() must return Normal before any explicit set"
+        );
+
+        // Create a market and a funded user.
+        let question = String::from_str(&env, "Emergency mode deposit regression");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &None,
+        );
+
+        let user = Address::generate(&env);
+        let initial_balance = 2_000i128;
+        let token_client = StellarAssetClient::new(&env, &collateral_token);
+        token_client.mint(&user, &initial_balance);
+
+        // Step 2: halt trading — deposit must be rejected with EmergencyModeActive.
+        client
+            .set_emergency_mode(&admin, &EmergencyMode::TradingHalted)
+            .expect("admin should be able to set TradingHalted");
+        assert_eq!(
+            client.get_emergency_mode(),
+            EmergencyMode::TradingHalted,
+            "get_emergency_mode() must reflect TradingHalted after set"
+        );
+
+        let halted_result =
+            client.try_deposit_collateral(&user, &market_id, &1_000i128);
+        assert_eq!(
+            halted_result,
+            Err(Ok(ContractError::EmergencyModeActive)),
+            "deposit_collateral must return EmergencyModeActive when TradingHalted is active"
+        );
+
+        // Step 3: restore Normal mode — the same deposit must now succeed.
+        client
+            .set_emergency_mode(&admin, &EmergencyMode::Normal)
+            .expect("admin should be able to restore Normal mode");
+        assert_eq!(
+            client.get_emergency_mode(),
+            EmergencyMode::Normal,
+            "get_emergency_mode() must return Normal after restoring"
+        );
+
+        client.deposit_collateral(&user, &market_id, &1_000i128);
+        // Confirm the deposit was accepted by checking the stored balance.
+        env.as_contract(&contract_id, || {
+            let position = storage::get_position(&env, market_id, &user)
+                .expect("version check ok")
+                .expect("position should exist after deposit");
+            assert_eq!(
+                position.deposited_collateral, 1_000i128,
+                "deposited_collateral must reflect the successful deposit after Normal restored"
+            );
+        });
     }
 }
 

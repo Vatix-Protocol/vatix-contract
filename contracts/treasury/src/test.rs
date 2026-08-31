@@ -706,6 +706,54 @@ fn pause_blocks_withdraw_fees() {
     assert_eq!(err, TreasuryError::ContractPaused);
 }
 
+// ── #719: withdraw_fees pause gate (symmetry with collect_fee's #593 coverage
+// above — same gate, same ordering guarantee, but previously only exercised
+// by the single happy-path-of-rejection test above) ───────────────────────────
+
+/// The pause gate is checked before the admin-equality check, so even a
+/// caller that is NOT the admin gets `ContractPaused` rather than
+/// `Unauthorized` while the treasury is paused — mirrors
+/// `collect_fee_paused_before_market_auth_check`.
+#[test]
+fn withdraw_fees_paused_before_admin_check() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client.pause(&s.admin);
+
+    let rogue = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&rogue, &s.token, &recipient, &100_000i128)
+        .unwrap_err()
+        .unwrap();
+
+    // The pause gate fires before the admin-equality check.
+    assert_eq!(err, TreasuryError::ContractPaused);
+}
+
+/// Balances must remain unchanged after a rejected `withdraw_fees` during
+/// pause — mirrors `collect_fee_paused_leaves_balances_unchanged`.
+#[test]
+fn withdraw_fees_paused_leaves_balances_unchanged() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    let balance_before = s.client.token_balance(&s.token);
+    let total_before = s.client.total_collected();
+
+    s.client.pause(&s.admin);
+
+    let recipient = Address::generate(&s.env);
+    let _ = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &100_000i128);
+
+    assert_eq!(s.client.token_balance(&s.token), balance_before);
+    assert_eq!(s.client.total_collected(), total_before);
+}
+
 #[test]
 fn unpause_restores_operations() {
     let s = setup();
@@ -1218,3 +1266,43 @@ fn total_collected_invariant_after_collect_and_withdraw() {
     assert_eq!(s.client.total_collected(), 0);
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Regression tests — Issue #786: admin cannot be a contract address on init
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// initialize must reject a contract address as admin.
+/// Allowing a contract admin would let the contract be called without a real
+/// key owner's consent, opening a privilege-escalation vector.
+#[test]
+fn initialize_rejects_contract_address_as_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let market = Address::generate(&env);
+    // Register any contract to produce a contract address.
+    let contract_addr = env.register(TreasuryContract, ());
+    let treasury_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let err = client
+        .try_initialize(&contract_addr, &market)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAdmin);
+}
+
+/// initialize must accept a regular user account (Ed25519 key) as admin.
+#[test]
+fn initialize_accepts_user_account_as_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env); // user account, not a contract
+    let market = Address::generate(&env);
+    let treasury_id = env.register(TreasuryContract, ());
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    client.initialize(&admin, &market);
+    assert_eq!(client.admin(), admin);
+}

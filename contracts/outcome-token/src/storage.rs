@@ -1,5 +1,5 @@
 use crate::error::ContractError;
-use crate::types::{OutcomeTokenConfig, TokenKind};
+use crate::types::{OutcomeTokenConfig, PendingAddressChange, TokenKind};
 use soroban_sdk::{contracttype, Address, Env};
 
 /// Bump this constant whenever the outcome-token storage layout changes in a
@@ -28,6 +28,9 @@ pub enum StorageKey {
     /// A proposed `market_contract` (mint authority) rotation awaiting its
     /// timelock delay (Issue #691).
     PendingMarketContract,
+    /// Stores whether the contract is administratively paused. When `true`,
+    /// `mint`, `burn`, and `transfer` are all rejected.
+    Paused,
 }
 
 // ── Version ───────────────────────────────────────────────────────────────
@@ -110,6 +113,22 @@ pub fn set_total_supply(env: &Env, market_id: u32, kind: &TokenKind, supply: i12
     env.storage()
         .persistent()
         .set(&StorageKey::TotalSupply(market_id, kind.clone()), &supply);
+}
+
+// ── Pause flag ────────────────────────────────────────────────────────────
+
+/// Returns `true` when the contract has been administratively paused.
+/// Defaults to `false` when the key is absent (fresh deployment).
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&StorageKey::Paused)
+        .unwrap_or(false)
+}
+
+/// Set the pause flag. `true` blocks `mint`, `burn`, and `transfer`.
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&StorageKey::Paused, &paused);
 }
 
 #[cfg(test)]

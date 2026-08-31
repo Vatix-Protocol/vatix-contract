@@ -64,6 +64,49 @@ shape. If you add a regression test vector for math logic, add it to
 `test-vectors/` alongside a Rust test that loads and asserts it (see
 `contracts/market/src/tests_vectors.rs` for the pattern).
 
+## Storage version reviewer checklist
+
+Any PR that **adds, removes, or renames a `StorageKey` variant** — or changes
+the type/semantics of a value stored under an existing key — **must** include a
+storage version bump.  Reviewers: reject the PR if the checklist below is not
+satisfied.
+
+> The automated CI guard lives in
+> [`contracts/market/src/storage.rs`](contracts/market/src/storage.rs) —
+> the test `test_storage_version_documented_in_migration_guide` will fail
+> `cargo test` if `STORAGE_VERSION` was bumped without updating
+> `STORAGE_MIGRATION_GUIDE.md`.  See
+> [`STORAGE_VERSION_CI_CHECK.md`](STORAGE_VERSION_CI_CHECK.md) for the
+> full rationale and how the guard works.
+
+### Reviewer checklist: `StorageKey` table drift
+
+- [ ] The `StorageKey` enum in `contracts/market/src/storage.rs` and the
+  **Storage layout** table in `contracts/market/src/lib.rs`'s module-level
+  doc comment are in sync — every variant has a row, and vice versa.
+- [ ] `STORAGE_VERSION` in `contracts/market/src/storage.rs` was incremented
+  when the storage layout changed (new key, removed key, type change, or
+  semantic change to an existing value).
+- [ ] A new `### Version {N} (Current)` section was added to
+  [`contracts/market/STORAGE_MIGRATION_GUIDE.md`](contracts/market/STORAGE_MIGRATION_GUIDE.md)
+  describing what changed and the migration path, and the previous
+  `(Current)` heading was demoted.
+- [ ] [`contracts/market/MIGRATION.md`](contracts/market/MIGRATION.md) has
+  an entry for this version bump with a brief changelog and the issue
+  reference.
+- [ ] `scripts/upgrade/version-matrix.json` `storageVersion` for `market`
+  matches the new constant value (the CI job
+  `cross-contract upgrade dry-run` enforces this via Phase A of
+  `scripts/upgrade/check-upgrade.sh`).
+- [ ] `cargo test -p vatix-market-contract version` passes locally
+  (exercises `test_storage_version_documented_in_migration_guide` and the
+  `UpgradeRequired` regression tests).
+
+For a complete step-by-step guide — including testnet/mainnet migration
+procedures, dual-read migration templates, rollback plans, and common
+pitfalls — see the
+[Storage Migration Guide](contracts/market/STORAGE_MIGRATION_GUIDE.md).
+
 ## PR / issue hygiene
 
 - Keep PRs scoped to one issue; note in the PR description which

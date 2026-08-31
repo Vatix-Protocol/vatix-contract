@@ -99,6 +99,7 @@ pub struct BondSlashed {
     pub slashed_at: u64,
 }
 
+// Issue #765: emit_bond_slashed requires 8 explicit parameters for event payload initialization
 #[allow(clippy::too_many_arguments)]
 pub fn emit_bond_slashed(
     env: &Env,
@@ -345,6 +346,40 @@ pub fn emit_candidate_appealed(env: &Env, candidate: &crate::types::ResolutionCa
 
 // ── Emergency Mode (Issue #662) ──────────────────────────────────────────────
 
+/// Emitted when the resolution contract is paused for emergency maintenance.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ResolutionPaused {
+    #[topic]
+    pub admin: Address,
+    pub paused_at: u64,
+}
+
+pub fn emit_resolution_paused(env: &Env, admin: &Address) {
+    ResolutionPaused {
+        admin: admin.clone(),
+        paused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+/// Emitted when the resolution contract is unpaused, restoring normal operation.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ResolutionUnpaused {
+    #[topic]
+    pub admin: Address,
+    pub unpaused_at: u64,
+}
+
+pub fn emit_resolution_unpaused(env: &Env, admin: &Address) {
+    ResolutionUnpaused {
+        admin: admin.clone(),
+        unpaused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct EmergencyModeChanged {
@@ -359,6 +394,34 @@ pub fn emit_emergency_mode_changed(env: &Env, new_mode: &crate::types::Emergency
         new_mode: new_mode.clone(),
         admin: admin.clone(),
         changed_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+/// Admin slashed the full deposited collateral of an incorrect proposer
+/// (Issue #724). Emitted after state is zeroed and before the token transfer
+/// so off-chain indexers see the slash regardless of token-transfer outcome.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct CollateralSlashed {
+    #[topic]
+    pub proposer: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    pub slashed_at: u64,
+}
+
+pub fn emit_collateral_slashed(
+    env: &Env,
+    proposer: &Address,
+    recipient: &Address,
+    amount: i128,
+) {
+    CollateralSlashed {
+        proposer: proposer.clone(),
+        recipient: recipient.clone(),
+        amount,
+        slashed_at: env.ledger().timestamp(),
     }
     .publish(env);
 }

@@ -81,3 +81,55 @@ fn market_with_many_positions_stays_within_mainnet_budget() {
         "expected the mainnet budget tracker to record consumed memory"
     );
 }
+
+/// #768: Verifies that tracking MarketParticipants vec stays within mainnet CPU/memory limits
+/// and respects MAX_MARKET_PARTICIPANTS storage bound under mainnet budget simulation.
+#[test]
+fn market_participants_vec_storage_limits_test() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.cost_estimate().budget().reset_default();
+
+    let contract_id = env.register(MarketContract, ());
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        storage::set_admin(&env, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env.register_stellar_asset_contract_v2(token_admin);
+    let collateral_token = token.address();
+
+    let question = soroban_sdk::String::from_str(&env, "Participant limit test?");
+    let end_time = env.ledger().timestamp() + 86_400;
+    let oracle_pubkey = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+
+    let market_id = client.initialize_market(
+        &admin,
+        &question,
+        &end_time,
+        &oracle_pubkey,
+        &collateral_token,
+    );
+
+    let deposit = 10 * STROOPS_PER_USDC;
+    // Exercise participant list growth with distinct addresses
+    for _ in 0..25 {
+        let user = Address::generate(&env);
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &deposit);
+        client.deposit_collateral(&user, &market_id, &deposit);
+    }
+
+    env.as_contract(&contract_id, || {
+        let count = storage::get_market_participant_count(&env, market_id);
+        assert_eq!(count, 25);
+        assert!(count <= storage::MAX_MARKET_PARTICIPANTS);
+    });
+
+    let budget = env.cost_estimate().budget();
+    assert!(budget.cpu_instruction_cost() > 0);
+    assert!(budget.memory_bytes_cost() > 0);
+}
+

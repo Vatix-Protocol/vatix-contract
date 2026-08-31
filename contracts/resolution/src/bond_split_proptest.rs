@@ -69,9 +69,9 @@ proptest! {
         let treasury_cut = total - reward - burned;
 
         prop_assert!(reward >= 0 && burned >= 0 && treasury_cut >= 0,
-            "negative leg: reward={reward} burned={burned} treasury_cut={treasury_cut}");
+            "negative leg: reward={} burned={} treasury_cut={}", reward, burned, treasury_cut);
         prop_assert_eq!(reward + burned + treasury_cut, total,
-            "split legs did not sum to total: {reward}+{burned}+{treasury_cut} != {total}");
+            "split legs did not sum to total: {}+{}+{} != {}", reward, burned, treasury_cut, total);
     }
 
     /// Invariant: with no treasury registered, the treasury-cut leg simply
