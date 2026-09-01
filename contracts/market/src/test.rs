@@ -143,7 +143,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #40)")]
+    #[should_panic(expected = "Error(Contract, #41)")]
     fn test_initialize_market_non_admin_fails() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
@@ -463,15 +463,20 @@ mod test {
 
     #[test]
     fn test_collateral_deposit_emits_event() {
+        use soroban_sdk::token::StellarAssetClient;
+
         let (env, admin, client, _contract_id) = create_test_contract();
 
-        // Create a market
+        // Create a real SAC token so deposit_collateral's transfer succeeds.
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
         let question = String::from_str(&env, "Test market");
         let end_time = env.ledger().timestamp() + 86400;
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
-        let collateral_token = Address::generate(&env);
 
-        let _market_id = client.initialize_market(
+        let market_id = client.initialize_market(
             &admin,
             &question,
             &end_time,
@@ -482,14 +487,101 @@ mod test {
         // Clear events from initialization
         env.events().all();
 
-        // Deposit collateral
+        // Mint tokens for the user so the transfer succeeds.
         let user = Address::generate(&env);
-        let amount = 1000i128;
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+        sac.mint(&user, &10_000);
 
-        client.deposit_collateral(&user, &1, &amount);
+        client.deposit_collateral(&user, &market_id, &1000i128);
 
         // Verify event was emitted
         let events = env.events().all();
         assert!(events.len() > 0, "CollateralDeposited event should be emitted");
+    }
+
+    // ========== Issue 1: Share Accounting Source of Truth ==========
+    //
+    // The on-chain `Position` struct stored under `StorageKey::Position(market_id, user)`
+    // is the canonical source of truth for YES/NO share balances.  Off-chain indexers
+    // (e.g. vatix-backend `UserPosition`) must reconcile against `get_position`.
+    //
+    // This regression test asserts that:
+    //   1. `get_position` returns `None` before any interaction.
+    //   2. After `deposit_collateral`, `get_position` reflects the correct on-chain state.
+    //   3. Every field survives the full storage round-trip (no silent truncation).
+    //
+    // If this test is removed or weakened the auditor gap is reintroduced.
+
+    #[test]
+    fn regression_get_position_is_canonical_source_of_truth() {
+        use soroban_sdk::token::StellarAssetClient;
+
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Set up a real SAC token so the transfer in deposit_collateral works.
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+
+        let question = String::from_str(&env, "Will BTC reach $100k?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+
+        let market_id =
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+
+        let user = Address::generate(&env);
+
+        // 1. Before any deposit — get_position must return None.
+        //    If it returned Some here the gap would be silently hidden.
+        let before = client.get_position(&market_id, &user);
+        assert!(
+            before.is_none(),
+            "get_position must return None before any interaction — \
+             returning stale data from off-chain indexer would violate \
+             the canonical source-of-truth invariant"
+        );
+
+        // 2. Mint tokens and deposit so a Position record is written on-chain.
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+        sac.mint(&user, &10_000);
+        let deposit_amount = 5_000i128;
+        client.deposit_collateral(&user, &market_id, &deposit_amount);
+
+        // 3. get_position must now reflect the exact on-chain state.
+        let pos = client
+            .get_position(&market_id, &user)
+            .expect("get_position must return Some after deposit — \
+                     position was written to StorageKey::Position by deposit_collateral");
+
+        // Share balances: deposit_collateral does NOT allocate shares, it sets
+        // total_deposited and locked_collateral only.
+        assert_eq!(pos.yes_shares, 0, "yes_shares must be 0 after deposit-only");
+        assert_eq!(pos.no_shares, 0, "no_shares must be 0 after deposit-only");
+        assert_eq!(
+            pos.total_deposited, deposit_amount,
+            "total_deposited must equal the deposited amount (canonical source of truth)"
+        );
+        assert_eq!(
+            pos.locked_collateral, deposit_amount,
+            "locked_collateral must equal deposited amount before any trades"
+        );
+        assert!(!pos.is_settled, "position must not be marked settled");
+        assert_eq!(pos.market_id, market_id);
+        assert_eq!(pos.user, user);
+
+        // 4. Cross-check: storage layer and public entrypoint must agree.
+        let from_storage = env.as_contract(&contract_id, || {
+            crate::storage::get_position(&env, market_id, &user)
+                .expect("storage layer must also have the position")
+        });
+        assert_eq!(
+            from_storage.total_deposited, pos.total_deposited,
+            "public entrypoint and storage layer must return identical data — \
+             any discrepancy means a caching or serialisation bug"
+        );
+        assert_eq!(from_storage.yes_shares, pos.yes_shares);
+        assert_eq!(from_storage.no_shares, pos.no_shares);
+        assert_eq!(from_storage.locked_collateral, pos.locked_collateral);
     }
 }

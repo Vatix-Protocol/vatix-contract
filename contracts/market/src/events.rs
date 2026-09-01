@@ -237,6 +237,7 @@ pub fn emit_position_updated(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ValidationFailedEvent {
     #[topic]
     pub context: soroban_sdk::Symbol,
@@ -261,6 +262,7 @@ pub struct ValidationFailedEvent {
 ///     ContractError::InvalidQuantity as u32,
 /// );
 /// ```
+#[allow(dead_code)]
 pub fn emit_validation_failed(env: &Env, context: soroban_sdk::Symbol, error_code: u32) {
     ValidationFailedEvent {
         context,
@@ -313,6 +315,7 @@ pub fn emit_position_settled(
 
 #[contractevent]
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct OracleSignatureVerifiedEvent {
     #[topic]
     pub market_id: u32,
@@ -327,6 +330,7 @@ pub struct OracleSignatureVerifiedEvent {
 /// * market_id - Market identifier
 /// * outcome - Verified outcome (true = YES, false = NO)
 /// * verified_at - Unix timestamp when verification occurred
+#[allow(dead_code)]
 pub fn emit_oracle_signature_verified(
     env: &Env,
     market_id: u32,
@@ -337,6 +341,122 @@ pub fn emit_oracle_signature_verified(
         market_id,
         outcome,
         verified_at,
+    }
+    .publish(env);
+}
+
+// --- Fee Rate Events ---
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeRateChangeQueuedEvent {
+    #[topic]
+    pub queued_by: Address,
+    pub new_rate_bps: u32,
+    pub effective_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeRateAppliedEvent {
+    #[topic]
+    pub applied_by: Address,
+    pub new_rate_bps: u32,
+    pub applied_at: u64,
+}
+
+/// Emit an event when a fee-rate change is queued by the admin.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `queued_by` - Admin address that queued the change
+/// * `new_rate_bps` - The proposed new fee rate in basis points
+/// * `effective_at` - Ledger timestamp at which the change may be applied
+pub fn emit_fee_rate_change_queued(
+    env: &Env,
+    queued_by: &Address,
+    new_rate_bps: u32,
+    effective_at: u64,
+) {
+    FeeRateChangeQueuedEvent {
+        queued_by: queued_by.clone(),
+        new_rate_bps,
+        effective_at,
+    }
+    .publish(env);
+}
+
+/// Emit an event when a pending fee-rate change is applied.
+///
+/// # Arguments
+/// * `env` - Soroban environment
+/// * `applied_by` - Admin address that applied the change
+/// * `new_rate_bps` - The new fee rate now in effect, in basis points
+/// * `applied_at` - Ledger timestamp when the change was applied
+pub fn emit_fee_rate_applied(
+    env: &Env,
+    applied_by: &Address,
+    new_rate_bps: u32,
+    applied_at: u64,
+) {
+    FeeRateAppliedEvent {
+        applied_by: applied_by.clone(),
+        new_rate_bps,
+        applied_at,
+    }
+    .publish(env);
+}
+
+// --- Fee Waiver Events ---
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeWaiverAddedEvent {
+    #[topic]
+    pub added_by: Address,
+    #[topic]
+    pub waiver_address: Address,
+    /// Number of addresses currently on the waiver list after this addition.
+    pub waiver_count: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeWaiverRemovedEvent {
+    #[topic]
+    pub removed_by: Address,
+    #[topic]
+    pub waiver_address: Address,
+    /// Number of addresses currently on the waiver list after this removal.
+    pub waiver_count: u32,
+}
+
+/// Emit an event when an address is added to the fee-waiver list.
+pub fn emit_fee_waiver_added(
+    env: &Env,
+    added_by: &Address,
+    waiver_address: &Address,
+    waiver_count: u32,
+) {
+    FeeWaiverAddedEvent {
+        added_by: added_by.clone(),
+        waiver_address: waiver_address.clone(),
+        waiver_count,
+    }
+    .publish(env);
+}
+
+/// Emit an event when an address is removed from the fee-waiver list.
+pub fn emit_fee_waiver_removed(
+    env: &Env,
+    removed_by: &Address,
+    waiver_address: &Address,
+    waiver_count: u32,
+) {
+    FeeWaiverRemovedEvent {
+        removed_by: removed_by.clone(),
+        waiver_address: waiver_address.clone(),
+        waiver_count,
     }
     .publish(env);
 }
@@ -497,9 +617,10 @@ mod tests {
         let market_id = 1u32;
         let user = Address::generate(&env);
         let payout = 100i128;
+        let settled_at = 9_999u64;
 
         env.as_contract(&contract_id, || {
-            emit_position_settled(&env, &user, market_id, payout);
+            emit_position_settled(&env, market_id, &user, payout, settled_at);
         });
 
         let events = env.events().all();
@@ -511,11 +632,11 @@ mod tests {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "position_settled_event"));
 
-        let topic1: Address = topics.get(1).unwrap().into_val(&env);
-        assert_eq!(topic1, user);
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, market_id);
 
-        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, market_id);
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, user);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let payout_val: i128 = data
@@ -523,6 +644,11 @@ mod tests {
             .unwrap()
             .into_val(&env);
         assert_eq!(payout_val, payout);
+        let settled_at_val: u64 = data
+            .get(Symbol::new(&env, "settled_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]

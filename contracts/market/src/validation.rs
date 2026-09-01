@@ -23,24 +23,6 @@ pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
     Ok(())
 }
 
-/// Validates market creation parameters
-pub fn validate_market_creation(
-    question: &String,
-    end_time: u64,
-    current_time: u64,
-) -> Result<(), ContractError> {
-    // Question must not be empty
-    if question.is_empty() {
-        return Err(ContractError::InvalidQuestion);
-    }
-
-    if question.len() >= 500 {
-        return Err(ContractError::InvalidQuestion);
-    }
-
-    Ok(())
-}
-
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
@@ -52,6 +34,17 @@ fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractErr
         return Err(ContractError::InvalidTimestamp);
     }
 
+    Ok(())
+}
+
+/// Validates that the market question is non-empty and within the 499-character limit.
+fn validate_question_format(question: &String) -> Result<(), ContractError> {
+    if question.is_empty() {
+        return Err(ContractError::InvalidQuestion);
+    }
+    if question.len() >= 500 {
+        return Err(ContractError::InvalidQuestion);
+    }
     Ok(())
 }
 

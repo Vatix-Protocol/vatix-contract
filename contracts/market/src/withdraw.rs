@@ -349,6 +349,9 @@ mod tests {
         let collateral_token = token.address();
         let contract_id = env.register(crate::MarketContract, ());
 
+        // mock_all_auths BEFORE any authorized calls (including mint)
+        env.mock_all_auths();
+
         // Fund the contract with collateral (simulates prior deposit)
         let token_client = StellarAssetClient::new(&env, &collateral_token);
         token_client.mint(&contract_id, &200);
@@ -369,8 +372,6 @@ mod tests {
             storage::set_market(&env, market_id, &market);
             storage::set_position(&env, market_id, &user, &position);
         });
-
-        env.mock_all_auths();
 
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
@@ -418,16 +419,21 @@ mod tests {
         assert_eq!(result, Err(ContractError::InsufficientCollateral));
 
         let events = env.events().all();
-        let withdraw_edge_case_events: Vec<_> = events
+        // Events are 3-tuples: (contract_id: Address, topics: soroban_sdk::Vec<Val>, data: Val)
+        let edge_case_count = events
             .iter()
-            .filter(|(event, _)| {
-                // Check for WithdrawEdgeCaseEvent
-                event.topics.len() == 2
-                    && event.contract_id == contract_id
+            .filter(|(cid, topics, _data)| {
+                use soroban_sdk::IntoVal;
+                *cid == contract_id
+                    && topics.len() >= 1
+                    && {
+                        let t: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
+                        t == soroban_sdk::Symbol::new(&env, "withdraw_edge_case_event")
+                    }
             })
-            .collect();
+            .count();
 
-        assert_eq!(withdraw_edge_case_events.len(), 1);
+        assert_eq!(edge_case_count, 1);
     }
 }
 

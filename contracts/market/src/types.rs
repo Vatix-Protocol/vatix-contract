@@ -38,3 +38,13 @@ pub struct Position {
     pub total_deposited: i128,
     pub is_settled: bool,
 }
+
+/// Pending fee-rate change queued by admin, gated by a 172800-second timelock.
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct PendingFeeRate {
+    /// New fee rate in basis points (0–500, i.e., 0%–5%).
+    pub new_rate_bps: u32,
+    /// Ledger timestamp at which this change was queued.
+    pub queued_at: u64,
+}

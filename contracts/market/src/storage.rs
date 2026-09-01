@@ -1,5 +1,5 @@
-use crate::types::{Market, Position};
-use soroban_sdk::{contracttype, Address, Env};
+use crate::types::{Market, PendingFeeRate, Position};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 // --- Storage Keys ---
 // TODO: https://github.com/vatix-protocol/vatix-contract/issues/79
@@ -12,6 +12,11 @@ pub enum StorageKey {
     Position(u32, Address),
     Admin,
     MarketCounter,
+    FeeRateBps,
+    PendingFeeRate,
+    /// Bounded list of addresses granted fee-waiver status.
+    /// Length is capped at MAX_FEE_WAIVERS to prevent unbounded-Vec griefing.
+    FeeWaivers,
 }
 
 // --- Market Storage ---
@@ -82,6 +87,69 @@ pub fn increment_market_id(env: &Env) -> u32 {
         .persistent()
         .set(&StorageKey::MarketCounter, &next_id);
     next_id
+}
+
+// --- Fee Rate Storage ---
+
+/// Return the current fee rate in basis points. Defaults to 0 if never set.
+pub fn get_fee_rate_bps(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeRateBps)
+        .unwrap_or(0)
+}
+
+/// Persist the current fee rate in basis points.
+pub fn set_fee_rate_bps(env: &Env, rate: u32) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeRateBps, &rate);
+}
+
+/// Return the pending fee-rate change, or `None` if no change is queued.
+pub fn get_pending_fee_rate(env: &Env) -> Option<PendingFeeRate> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::PendingFeeRate)
+}
+
+/// Persist a pending fee-rate change.
+pub fn set_pending_fee_rate(env: &Env, p: &PendingFeeRate) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingFeeRate, p);
+}
+
+/// Remove the pending fee-rate change from storage.
+pub fn clear_pending_fee_rate(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingFeeRate);
+}
+
+// --- Fee Waiver Storage ---
+
+/// Maximum number of addresses that may hold a fee waiver.
+///
+/// Capped to prevent unbounded-Vec griefing: an attacker with admin access
+/// cannot grow the list without bound and stall the chain by exhausting the
+/// per-transaction ledger-entry read budget.
+pub const MAX_FEE_WAIVERS: u32 = 100;
+
+/// Return the current fee-waiver list. Returns an empty Vec if no list has
+/// ever been written (first-access lazy initialisation).
+pub fn get_fee_waivers(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeWaivers)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Persist the fee-waiver list.
+pub fn set_fee_waivers(env: &Env, waivers: &Vec<Address>) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeWaivers, waivers);
 }
 
 #[cfg(test)]

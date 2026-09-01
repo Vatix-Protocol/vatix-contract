@@ -3,6 +3,8 @@
 mod deposit;
 mod error;
 mod events;
+mod fee_rate;
+mod fee_waiver;
 mod oracle;
 #[allow(dead_code)]
 mod positions;
@@ -220,5 +222,126 @@ impl MarketContract {
         events::emit_market_resolved(&env, market_id, outcome, resolved_at);
 
         Ok(())
+    }
+
+    // --- Fee Rate Management ---
+
+    /// Queue a fee-rate change with a 172 800-second (48 h) timelock.
+    ///
+    /// The change is not applied until `apply_pending_fee_rate` is called
+    /// after the timelock expires.
+    ///
+    /// # Arguments
+    /// * `caller` - Admin address (must be the stored admin)
+    /// * `new_rate_bps` - Proposed fee rate in basis points (0–500)
+    ///
+    /// # Errors
+    /// - `NotAdmin` – caller is not the admin
+    /// - `FeeRateOutOfRange` – new_rate_bps > 500
+    pub fn queue_fee_rate_change(
+        env: Env,
+        caller: Address,
+        new_rate_bps: u32,
+    ) -> Result<(), ContractError> {
+        fee_rate::queue_fee_rate_change(&env, &caller, new_rate_bps)
+    }
+
+    /// Apply the queued fee-rate change once the timelock has expired.
+    ///
+    /// # Arguments
+    /// * `caller` - Admin address (must be the stored admin)
+    ///
+    /// # Returns
+    /// The new fee rate in basis points now in effect.
+    ///
+    /// # Errors
+    /// - `NotAdmin` – caller is not the admin
+    /// - `FeeRateTimelockNotExpired` – no pending change, or timelock not elapsed
+    pub fn apply_pending_fee_rate(
+        env: Env,
+        caller: Address,
+    ) -> Result<u32, ContractError> {
+        fee_rate::apply_pending_fee_rate(&env, &caller)
+    }
+
+    /// Return the current fee rate in basis points (read-only).
+    ///
+    /// Defaults to 0 if no fee rate has ever been set.
+    pub fn get_fee_rate_bps(env: Env) -> u32 {
+        storage::get_fee_rate_bps(&env)
+    }
+
+    /// Return the on-chain [`Position`] for `user` in `market_id`.
+    ///
+    /// This is the **canonical source of truth** for share balances. Off-chain
+    /// indexers that maintain their own `UserPosition` table MUST reconcile
+    /// against this entrypoint; any discrepancy means the indexer is stale or
+    /// has a bug. See `docs/cross-contract-call-graph.md` § Share Accounting.
+    ///
+    /// # Arguments
+    /// * `market_id` - Market identifier
+    /// * `user` - User's Stellar address
+    ///
+    /// # Returns
+    /// `Some(Position)` if the user has ever interacted with this market,
+    /// `None` if no position record exists.
+    ///
+    /// # Notes
+    /// This is a read-only view — it requires no authorization and makes no
+    /// state mutations.
+    pub fn get_position(
+        env: Env,
+        market_id: u32,
+        user: Address,
+    ) -> Option<crate::types::Position> {
+        storage::get_position(&env, market_id, &user)
+    }
+
+    // --- Fee Waiver Management ---
+
+    /// Add `waiver_address` to the fee-waiver list.
+    ///
+    /// Addresses on this list pay zero protocol fees on settlement.
+    ///
+    /// The list is hard-capped at `MAX_FEE_WAIVERS = 100` entries to prevent
+    /// unbounded-Vec griefing (see `fee_waiver.rs` for the threat model).
+    ///
+    /// # Arguments
+    /// * `caller` - Admin address (must authorize)
+    /// * `waiver_address` - Address to grant a fee waiver
+    ///
+    /// # Errors
+    /// - `NotAdmin` – caller is not the admin
+    /// - `FeeWaiverCapReached` – list is already at `MAX_FEE_WAIVERS`
+    ///
+    /// # Events
+    /// Emits `FeeWaiverAddedEvent`.
+    pub fn add_fee_waiver(
+        env: Env,
+        caller: Address,
+        waiver_address: Address,
+    ) -> Result<(), ContractError> {
+        fee_waiver::add_fee_waiver(&env, &caller, &waiver_address)
+    }
+
+    /// Remove `waiver_address` from the fee-waiver list.
+    ///
+    /// Idempotent: removing an address not on the list is a no-op.
+    ///
+    /// # Arguments
+    /// * `caller` - Admin address (must authorize)
+    /// * `waiver_address` - Address to remove from the fee-waiver list
+    ///
+    /// # Errors
+    /// - `NotAdmin` – caller is not the admin
+    ///
+    /// # Events
+    /// Emits `FeeWaiverRemovedEvent` if the address was actually on the list.
+    pub fn remove_fee_waiver(
+        env: Env,
+        caller: Address,
+        waiver_address: Address,
+    ) -> Result<(), ContractError> {
+        fee_waiver::remove_fee_waiver(&env, &caller, &waiver_address)
     }
 }

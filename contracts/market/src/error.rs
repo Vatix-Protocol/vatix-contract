@@ -132,6 +132,28 @@ pub enum ContractError {
     ///
     /// The operation would exceed the maximum value for the data type.
     ArithmeticOverflow = 60,
+
+    // ========== Fee Rate Errors (70-79) ==========
+    /// The fee-rate timelock has not yet expired.
+    ///
+    /// The pending fee-rate change cannot be applied until 172 800 seconds
+    /// (48 h) have elapsed since it was queued. Also returned when no pending
+    /// change exists.
+    FeeRateTimelockNotExpired = 70,
+
+    /// The requested fee rate exceeds the maximum allowed value (500 bps / 5%).
+    ///
+    /// Fee rates must be in the range 0–500 basis points.
+    FeeRateOutOfRange = 71,
+
+    // ========== Fee Waiver Errors (80-89) ==========
+    /// The fee-waiver list is at capacity (`MAX_FEE_WAIVERS = 100`).
+    ///
+    /// Remove an existing waiver before adding a new one. This cap prevents
+    /// unbounded-Vec griefing: without it an admin can grow the list without
+    /// limit and stall the contract by exhausting the per-tx ledger-entry
+    /// read budget.
+    FeeWaiverCapReached = 80,
 }
 
 #[cfg(test)]
@@ -160,6 +182,9 @@ mod tests {
         assert_eq!(ContractError::NotAdmin as u32, 41);
         assert_eq!(ContractError::TokenTransferFailed as u32, 50);
         assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
+        assert_eq!(ContractError::FeeRateTimelockNotExpired as u32, 70);
+        assert_eq!(ContractError::FeeRateOutOfRange as u32, 71);
+        assert_eq!(ContractError::FeeWaiverCapReached as u32, 80);
     }
 
     #[test]
