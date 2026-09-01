@@ -556,6 +556,7 @@ mod tests {
         let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
         let mut pos = create_test_position(&env, 100, 0, false);
+        let contract_id = env.register(crate::MarketContract, ());
 
         let payout = env.as_contract(&contract_id, || {
             execute_settlement(&env, &mut pos, &market).unwrap()
@@ -570,6 +571,7 @@ mod tests {
         let contract_id = env.register(crate::MarketContract, ());
         let market = create_test_market(&env, MarketStatus::Resolved, Some(false));
         let mut pos = create_test_position(&env, 100, 30, false);
+        let contract_id = env.register(crate::MarketContract, ());
 
         let payout = env.as_contract(&contract_id, || {
             execute_settlement(&env, &mut pos, &market).unwrap()

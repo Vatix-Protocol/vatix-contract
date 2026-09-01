@@ -127,7 +127,6 @@ If oracle adapters fail to activate correctly:
 - Storage versioning: [contracts/market/src/storage.rs](../../contracts/market/src/storage.rs)
 - Fail-closed security model: [docs/SECURITY.md](../../docs/SECURITY.md)
 - Issue tracking: [#139 - Decentralized Oracle Integration](https://github.com/Vatix-Protocol/vatix-contract/issues/139)
-=======
 # Cross-Contract Upgrade Playbook
 
 > **Executable upgrade safety net for the four interdependent Vatix contracts

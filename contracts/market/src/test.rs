@@ -1246,7 +1246,7 @@ mod test {
         let end_time = env.ledger().timestamp() + 86400;
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
 
-        let _market_id = client.initialize_market(
+        let market_id = client.initialize_market(
             &admin,
             &question,
             &end_time,

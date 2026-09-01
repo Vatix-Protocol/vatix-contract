@@ -1729,8 +1729,8 @@ mod tests {
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, EVENT_VERSION);
 
-        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, market_id);
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, user);
 
         let topic3: Address = topics.get(3).unwrap().into_val(&env);
         assert_eq!(topic3, user);
@@ -1741,6 +1741,11 @@ mod tests {
             .unwrap()
             .into_val(&env);
         assert_eq!(payout_val, payout);
+        let settled_at_val: u64 = data
+            .get(Symbol::new(&env, "settled_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(settled_at_val, settled_at);
     }
 
     #[test]

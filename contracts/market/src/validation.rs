@@ -47,6 +47,17 @@ fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractErr
     Ok(())
 }
 
+/// Validates that the market question is non-empty and within the 499-character limit.
+fn validate_question_format(question: &String) -> Result<(), ContractError> {
+    if question.is_empty() {
+        return Err(ContractError::InvalidQuestion);
+    }
+    if question.len() >= 500 {
+        return Err(ContractError::InvalidQuestion);
+    }
+    Ok(())
+}
+
 /// Validates market creation parameters
 pub fn validate_market_creation(
     question: &String,
