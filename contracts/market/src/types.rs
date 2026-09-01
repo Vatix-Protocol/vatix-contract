@@ -45,7 +45,7 @@ pub enum AdapterType {
 /// serialize `MarketAdapterConfig` without requiring `--features oracle-adapter`.
 /// Variant layout matches Reflector's `Asset` enum exactly.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Asset {
     /// A Stellar-native SAC token identified by its issuer address.
     Stellar(Address),

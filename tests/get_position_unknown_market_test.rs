@@ -33,8 +33,7 @@ fn setup() -> (Env, Address, Address) {
         storage::set_admin(&env, &admin);
     });
 
-    let user = Address::generate(&env);
-    (env, contract_id, user)
+    (env, contract_id, admin)
 }
 
 #[test]

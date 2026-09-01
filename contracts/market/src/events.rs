@@ -432,7 +432,6 @@ pub fn emit_market_resolved(
 
 #[contractevent]
 #[derive(Clone, Debug)]
-feat/cross-contract-upgrade-safety-803
 pub struct OracleAdaptersEnabledEvent {
     pub enabled_at: u64,
 }
@@ -448,7 +447,10 @@ pub struct OracleAdaptersEnabledEvent {
 pub fn emit_oracle_adapters_enabled(env: &Env) {
     let enabled_at = env.ledger().timestamp();
     OracleAdaptersEnabledEvent { enabled_at }.publish(env);
+}
 
+#[contractevent]
+#[derive(Clone, Debug)]
 pub struct MarketCanceled {
     #[topic]
     pub version: u32,
@@ -556,18 +558,13 @@ pub fn emit_market_reopened(env: &Env, market_id: u32, admin: &Address, reopened
         reopened_at,
     }
     .publish(env);
-dev
 }
 
 #[contractevent]
 #[derive(Clone, Debug)]
-feat/cross-contract-upgrade-safety-803
 pub struct PositionLimitExceededEvent {
-
-pub struct PositionLimitExceeded {
     #[topic]
     pub version: u32,
-dev
     #[topic]
     pub market_id: u32,
     #[topic]
@@ -591,7 +588,7 @@ dev
 /// emit_position_limit_exceeded(&env, market_id, &user, true);
 /// ```
 pub fn emit_position_limit_exceeded(env: &Env, market_id: u32, user: &Address, side_yes: bool) {
-    PositionLimitExceeded {
+    PositionLimitExceededEvent {
         version: EVENT_VERSION,
         market_id,
         user: user.clone(),
@@ -1086,6 +1083,15 @@ pub fn emit_fee_rate_change_proposed(env: &Env, new_rate_bps: i128, effective_at
         version: EVENT_VERSION,
         new_rate_bps,
         effective_at,
+    }
+    .publish(env);
+}
+
+pub fn emit_fee_rate_changed(env: &Env, new_rate_bps: i128) {
+    FeeRateChangeExecuted {
+        version: EVENT_VERSION,
+        new_rate_bps,
+        executed_at: env.ledger().timestamp(),
     }
     .publish(env);
 }

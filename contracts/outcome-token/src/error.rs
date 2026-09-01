@@ -27,4 +27,6 @@ pub enum ContractError {
     /// against the original depositor's position record, not the current
     /// token holder (Issue #690).
     TransferBlockedAfterResolve = 11,
+    /// The contract is paused; state-mutating operations are suspended.
+    ContractPaused = 12,
 }

@@ -58,7 +58,7 @@ pub const MAX_PRICE_AGE_SECONDS: u64 = 3_600;
 /// failures; a mismatched field type or missing variant would, respectively,
 /// fail to deserialise or panic. None of those apply here.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Asset {
     /// A Stellar-native SAC token identified by its issuer address.
     Stellar(Address),
