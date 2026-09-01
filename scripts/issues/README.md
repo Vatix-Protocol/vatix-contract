@@ -2,9 +2,53 @@
 
 ## Deployment
 
-- [`deploy.sh`](../deploy.sh) — deploys the compiled contract to the configured network.
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — echo guard; documents what a real testnet deploy should do (build → deploy via Soroban CLI → log contract ID).
-- [`invoke-example.sh`](../invoke-example.sh) — example invocation of a deployed contract function.
+- [`deploy.sh`](../deploy.sh) — builds, deploys, and smoke-invokes contracts via Stellar CLI on the target network (#760).
+- [`deploy-testnet.sh`](../deploy-testnet.sh) — builds and deploys all four contracts (Market, Treasury, Outcome Token, Resolution) in playbook order to Stellar testnet (#759).
+- [`invoke-example.sh`](../invoke-example.sh) — demonstrates the `stellar contract invoke` pattern for smoke-testing a deployed contract function.
+
+
+### invoke-example.sh usage
+
+`invoke-example.sh` shows how to call a function on a deployed Soroban contract.
+Replace the `echo` with the real invocation once a contract has been deployed and
+`CONTRACT_ID` is set (e.g. exported from the deploy step):
+
+```bash
+# Smoke-test the hello function on testnet
+export CONTRACT_ID="CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+stellar contract invoke \
+  --id "$CONTRACT_ID" \
+  --network testnet \
+  --fn hello \
+  --arg --world
+```
+
+The script is intentionally kept as an echo guard until testnet credentials are
+available as repository secrets. See the CI step `Invoke example (echo guard)` in
+[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) for where it runs.
+
+## Cross-contract upgrade playbook (`scripts/upgrade/`)
+
+Tooling for upgrading all four contracts (Market, Treasury, Resolution,
+Outcome Token) together safely — see
+[`scripts/upgrade/UPGRADE_PLAYBOOK.md`](../upgrade/UPGRADE_PLAYBOOK.md) for
+the full playbook.
+
+- [`upgrade/check-upgrade.sh`](../upgrade/check-upgrade.sh) — scripted dry-run:
+  storage-version drift check, WASM hash verification, and `UpgradeRequired`
+  regression tests. Runs in CI as the `upgrade-dry-run` job.
+- [`upgrade/rollback.sh`](../upgrade/rollback.sh) — recovers a previous
+  `deployments/testnet.json` registry from git history to re-point traffic
+  at a prior deployment.
+- [`upgrade/version-matrix.json`](../upgrade/version-matrix.json) — the
+  machine-checked storage version compatibility matrix across contracts.
+- [`upgrade/expected-hashes.json`](../upgrade/expected-hashes.json) — pinned
+  WASM hashes per contract (placeholders until a rollout build is chosen).
+- [`upgrade/STAGING_DRY_RUN_CHECKLIST.md`](../upgrade/STAGING_DRY_RUN_CHECKLIST.md) —
+  manual testnet rehearsal checklist.
+- [`upgrade/DUAL_READ_MIGRATION_TEMPLATE.md`](../upgrade/DUAL_READ_MIGRATION_TEMPLATE.md) —
+  copy-paste template for a dual-read storage migration on the next version bump.
 
 ---
 
@@ -53,3 +97,4 @@ Generated JSON is gitignored; re-run anytime for a fresh local export.
 ## Tooling config
 
 - **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
+- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides `build`, `test`, `fmt`, and `clean` targets. Each target currently includes an echo-guard comment explaining what the real implementation should do. Replace these guards with the actual commands once the build pipeline is finalized.

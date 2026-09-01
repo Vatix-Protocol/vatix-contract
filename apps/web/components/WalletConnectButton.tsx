@@ -5,6 +5,7 @@
  * <WalletConnectButton
  *   address={address}
  *   isConnecting={isConnecting}
+ *   connectError={connectError}
  *   onConnect={connect}
  *   onDisconnect={disconnect}
  * />
@@ -17,6 +18,9 @@ export interface WalletConnectButtonProps {
   /** Whether a wallet connection is in progress. */
   isConnecting: boolean;
 
+  /** Error message from the last failed connect() attempt, or null. */
+  connectError?: string | null;
+
   /** Callback function to initiate wallet connection. */
   onConnect: () => void | Promise<void>;
 
@@ -26,12 +30,13 @@ export interface WalletConnectButtonProps {
 
 /**
  * A button component that displays wallet connection status and triggers
- * connect/disconnect actions. Shows "Connect wallet" when disconnected,
- * displays the truncated address when connected, or "Connecting…" during connection.
+ * connect/disconnect actions. Shows an inline error message below the button
+ * when a connection attempt fails (e.g., extension not installed, user rejected).
  */
 export function WalletConnectButton({
   address,
   isConnecting,
+  connectError,
   onConnect,
   onDisconnect,
 }: WalletConnectButtonProps) {
@@ -49,15 +54,25 @@ export function WalletConnectButton({
   }
 
   return (
-    <button
-      type="button"
-      disabled={isConnecting}
-      onClick={() => void onConnect()}
-      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-500 disabled:opacity-60"
-      aria-label={isConnecting ? "Connecting wallet" : "Connect wallet"}
-    >
-      {isConnecting ? "Connecting…" : "Connect wallet"}
-    </button>
+    <div className="flex flex-col items-start gap-1">
+      <button
+        type="button"
+        disabled={isConnecting}
+        onClick={() => void onConnect()}
+        className="rounded-lg bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-500 disabled:opacity-60"
+        aria-label={isConnecting ? "Connecting wallet" : "Connect wallet"}
+      >
+        {isConnecting ? "Connecting…" : "Connect wallet"}
+      </button>
+      {connectError && (
+        <p
+          role="alert"
+          className="max-w-xs text-xs text-red-600 dark:text-red-400"
+        >
+          {connectError}
+        </p>
+      )}
+    </div>
   );
 }
 

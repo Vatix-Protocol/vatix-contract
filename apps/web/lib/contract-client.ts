@@ -1,0 +1,320 @@
+/**
+ * Contract client helpers using generated TypeScript bindings.
+ *
+ * This module provides a simplified interface for interacting with
+ * Soroban contracts using the auto-generated bindings and Freighter wallet.
+ */
+
+import {
+  Address,
+  Contract,
+  rpc,
+  TransactionBuilder,
+  BASE_FEE,
+  Account,
+  xdr,
+  nativeToScVal,
+  scValToNative,
+} from "@stellar/stellar-sdk";
+
+// Network configuration from environment
+const NETWORK_PASSPHRASE =
+  process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ??
+  "Test SDF Network ; September 2015";
+
+const SOROBAN_RPC_URL =
+  process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
+  "https://soroban-testnet.stellar.org";
+
+const HORIZON_URL =
+  process.env.NEXT_PUBLIC_HORIZON_URL ??
+  "https://horizon-testnet.stellar.org";
+
+// Contract IDs
+export const MARKET_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_MARKET_CONTRACT_ID ?? "";
+export const TREASURY_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_TREASURY_CONTRACT_ID ?? "";
+export const OUTCOME_TOKEN_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_OUTCOME_TOKEN_CONTRACT_ID ?? "";
+export const RESOLUTION_CONTRACT_ID =
+  process.env.NEXT_PUBLIC_RESOLUTION_CONTRACT_ID ?? "";
+
+// Initialize RPC server
+const server = new rpc.Server(SOROBAN_RPC_URL);
+
+/**
+ * Contract invocation result
+ */
+export interface InvokeResult {
+  hash: string;
+  status: string;
+}
+
+/**
+ * Simulate and submit a contract invocation with Freighter signing.
+ *
+ * @param contractId - The contract address
+ * @param method - The contract method name
+ * @param args - Array of XDR-encoded arguments for the method
+ * @param sourceAddress - The user's Stellar address (from Freighter)
+ * @returns Transaction hash and status
+ */
+export async function invokeContract(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[],
+  sourceAddress: string
+): Promise<InvokeResult> {
+  if (typeof window === "undefined") {
+    throw new Error(
+      "invokeContract can only run in the browser (requires a wallet extension)."
+    );
+  }
+
+  if (!contractId) {
+    throw new Error(
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
+    );
+  }
+
+  try {
+    // 1. Load account from Horizon to get sequence number
+    const accountResponse = await fetch(
+      `${HORIZON_URL}/accounts/${sourceAddress}`
+    );
+    if (!accountResponse.ok) {
+      throw new Error("Failed to load account from Horizon");
+    }
+    const accountData = await accountResponse.json();
+    const account = new Account(sourceAddress, accountData.sequence);
+
+    // 2. Build the contract invocation operation
+    const contract = new Contract(contractId);
+    const operation = contract.call(method, ...args);
+
+    // 3. Build transaction
+    const transaction = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+
+    // 4. Simulate the transaction
+    const simulated = await server.simulateTransaction(transaction);
+
+    if (rpc.Api.isSimulationError(simulated)) {
+      throw new Error(`Simulation failed: ${simulated.error}`);
+    }
+
+    if (!simulated.result) {
+      throw new Error("Simulation returned no result");
+    }
+
+    // 5. Prepare the transaction with simulation results
+    const prepared = rpc.assembleTransaction(
+      transaction,
+      simulated
+    ).build();
+
+    // 6. Sign with Freighter. Imported dynamically (rather than at module
+    // scope) so this module stays safe to import from server-rendered code
+    // paths; the extension is only ever touched once we're in the browser.
+    const { signTransaction } = await import("@stellar/freighter-api");
+    const signedResult = await signTransaction(prepared.toXDR(), {
+      networkPassphrase: NETWORK_PASSPHRASE,
+      address: sourceAddress,
+    });
+
+    if (signedResult.error) {
+      throw new Error(`Freighter signing failed: ${signedResult.error}`);
+    }
+
+    // 7. Submit the signed transaction
+    const signedTx = TransactionBuilder.fromXDR(
+      signedResult.signedTxXdr,
+      NETWORK_PASSPHRASE
+    );
+
+    const sendResponse = await server.sendTransaction(signedTx);
+
+    if (sendResponse.status === "ERROR") {
+      throw new Error(
+        `Transaction submission failed: ${sendResponse.errorResult}`
+      );
+    }
+
+    // 8. Wait for transaction confirmation (optional but recommended)
+    let getResponse = await server.getTransaction(sendResponse.hash);
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    while (
+      getResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
+      attempts < maxAttempts
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      getResponse = await server.getTransaction(sendResponse.hash);
+      attempts++;
+    }
+
+    if (getResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Transaction failed: ${getResponse.resultXdr}`);
+    }
+
+    return {
+      hash: sendResponse.hash,
+      status: sendResponse.status,
+    };
+  } catch (error) {
+    console.error("Contract invocation error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Read-only contract query (no transaction submission).
+ *
+ * @param contractId - The contract address
+ * @param method - The contract method name
+ * @param args - Array of XDR-encoded arguments for the method
+ * @returns The decoded result
+ */
+export async function queryContract<T>(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[] = []
+): Promise<T> {
+  if (!contractId) {
+    throw new Error(
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
+    );
+  }
+
+  try {
+    const contract = new Contract(contractId);
+
+    // Use a dummy source account for simulation
+    const dummyAccount = new Account(
+      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "0"
+    );
+
+    const operation = contract.call(method, ...args);
+
+    const transaction = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+
+    const simulated = await server.simulateTransaction(transaction);
+
+    if (rpc.Api.isSimulationError(simulated)) {
+      throw new Error(`Simulation failed: ${simulated.error}`);
+    }
+
+    if (!simulated.result) {
+      throw new Error("Simulation returned no result");
+    }
+
+    // Decode the result
+    const resultValue = simulated.result.retval;
+
+    // Return the raw XDR value - caller should decode based on expected type
+    return resultValue as unknown as T;
+  } catch (error) {
+    console.error("Contract query error:", error);
+    throw error;
+  }
+}
+
+/**
+ * A user's open position in a market, as returned by the contract's
+ * `get_position` read method. Share/collateral amounts are in stroops
+ * (1 token = 10^7 stroops).
+ */
+export interface PositionData {
+  yesShares: bigint;
+  noShares: bigint;
+  lockedCollateral: bigint;
+  totalDeposited: bigint;
+  isSettled: boolean;
+}
+
+/**
+ * Read a user's live position for a market straight from the contract.
+ * Returns `null` when the user has no recorded position (the contract's
+ * `get_position` returns `None`).
+ */
+export async function getPosition(
+  marketId: number,
+  userAddress: string
+): Promise<PositionData | null> {
+  const retval = await queryContract<xdr.ScVal>(MARKET_CONTRACT_ID, "get_position", [
+    u32ToScVal(marketId),
+    addressToScVal(userAddress),
+  ]);
+
+  const native = scValToNative(retval) as
+    | {
+        yes_shares: bigint;
+        no_shares: bigint;
+        locked_collateral: bigint;
+        total_deposited: bigint;
+        is_settled: boolean;
+      }
+    | null
+    | undefined;
+
+  if (native == null) {
+    return null;
+  }
+
+  return {
+    yesShares: BigInt(native.yes_shares),
+    noShares: BigInt(native.no_shares),
+    lockedCollateral: BigInt(native.locked_collateral),
+    totalDeposited: BigInt(native.total_deposited),
+    isSettled: Boolean(native.is_settled),
+  };
+}
+
+/**
+ * Helper to convert string amounts to i128 XDR values (Soroban amounts are i128)
+ */
+export function amountToScVal(amount: string | number | bigint): xdr.ScVal {
+  return nativeToScVal(BigInt(amount), { type: "i128" });
+}
+
+/**
+ * Helper to convert Stellar addresses (G... or C...) to ScVal
+ */
+export function addressToScVal(stellarAddress: string): xdr.ScVal {
+  return nativeToScVal(new Address(stellarAddress), { type: "address" });
+}
+
+/**
+ * Helper to convert u32 to ScVal
+ */
+export function u32ToScVal(value: number): xdr.ScVal {
+  return xdr.ScVal.scvU32(value);
+}
+
+/**
+ * Helper to convert boolean to ScVal
+ */
+export function boolToScVal(value: boolean): xdr.ScVal {
+  return xdr.ScVal.scvBool(value);
+}
+
+/**
+ * Helper to convert string to ScVal
+ */
+export function stringToScVal(value: string): xdr.ScVal {
+  return xdr.ScVal.scvString(value);
+}

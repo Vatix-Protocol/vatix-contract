@@ -1,0 +1,13 @@
+{
+  "description": "Canonical oracle message V2: keccak256(domain_separator || network_passphrase_hash || market_id_be || outcome_byte || valid_until_be || epoch_be)",
+  "domain_separator": "VATIX_ORACLE_V2",
+  "network_passphrase_hash_hex": "9999999999999999999999999999999999999999999999999999999999999999",
+  "market_id": 1,
+  "outcome": "YES",
+  "valid_until": 2000000000,
+  "epoch": 1,
+  "raw_hex": "56415449585f4f5241434c455f563299999999999999999999999999999999999999999999999999999999999999990000000101000000007735940000000001",
+  "keccak_hex": "26fa05d6e2e50ed7ffdbd9e79435b6ef4ef13ce26978667ce19ee5bc36c0a0c2",
+  "pubkey_hex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+  "signature_hex": "b53f66a8dbbd4fef13efcf00f2ef975d0458df8ef4b77f981084226d9c6ccebe9f76a5991d9cfab7ecceaa913b827dfbfbdfc51f98d79361ad2485fa50014704"
+}

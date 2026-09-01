@@ -1,5 +1,6 @@
-import { MOCK_MARKETS, type Market } from "./markets";
+import { getMarkets, type Market } from "./markets";
 
-export function findMarketById(id: string): Market | undefined {
-  return MOCK_MARKETS.find((market) => market.id === id);
+export async function findMarketById(id: string): Promise<Market | undefined> {
+  const markets = await getMarkets();
+  return markets.find((market) => market.id === id);
 }

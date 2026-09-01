@@ -1,206 +1,209 @@
 # Cross-Contract Call Graph
 
-> **Audit status:** production ABI — reflects `vatix-market-contract` as implemented in
-> `contracts/market/src/`.  This document supersedes any earlier mock-ABI versions.
+Documents every cross-contract invocation in the Vatix protocol so
+developers can reason about call chains, authorization requirements, and
+failure modes without reading all four contract sources.
 
-## Scope
+## Contracts
 
-The Vatix v1 on-chain surface is a **single deployed contract** —
-`vatix-market-contract` — which is the entry point for all market lifecycle
-operations.  There are **no inter-contract calls between custom Vatix contracts**
-in the current production code.
-
-The only external contract call made by `vatix-market-contract` is to the
-**Stellar Asset Contract (SAC)** for the market's collateral token (e.g. USDC),
-via the standard `soroban_sdk::token` interface.
-
----
-
-## Contract map
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  vatix-market-contract  (contracts/market/src/lib.rs)            │
-│                                                                  │
-│  Public entrypoints (production ABI)                             │
-│  ──────────────────────────────────────────────────────────────  │
-│  initialize_market         admin-only, writes Market storage     │
-│  deposit_collateral        user-auth,  calls SAC::transfer       │
-│  withdraw_unused_collateral user-auth,  calls SAC::transfer      │
-│  resolve_market            no Soroban auth (oracle sig only)     │
-│  queue_fee_rate_change     admin-only, writes PendingFeeRate     │
-│  apply_pending_fee_rate    admin-only, writes FeeRateBps         │
-│  get_fee_rate_bps          read-only,  no auth                   │
-│  get_position              read-only,  no auth                   │
-│  add_fee_waiver            admin-only, writes FeeWaivers         │
-│  remove_fee_waiver         admin-only, writes FeeWaivers         │
-│                                                                  │
-│  External call targets                                           │
-│  ──────────────────────────────                                  │
-│  SAC (Stellar Asset Contract)                                    │
-│    token::Client::transfer(from, to, amount)                     │
-└──────────────────────────────────────────────────────────────────┘
-```
+| Contract | Crate | Purpose |
+|---|---|---|
+| **Market** | `contracts/market` | Core trading, deposit/withdraw, oracle resolution, settlement |
+| **Treasury** | `contracts/treasury` | Custody and accounting of protocol fees |
+| **Outcome Token** | `contracts/outcome-token` | Mint/burn YES/NO share tokens per market |
+| **Resolution** | `contracts/resolution` | Challenge-window lifecycle for oracle candidates |
 
 ---
 
-## Entrypoint call paths
-
-### `initialize_market`
+## Call Graph
 
 ```
-initialize_market(creator, question, end_time, oracle_pubkey, collateral_token)
-  └─ creator.require_auth()
-  └─ storage::get_admin()                     [read]
-  └─ validation::validate_market_creation()
-  └─ storage::increment_market_id()           [write: MarketCounter]
-  └─ storage::set_market()                    [write: Market(id)]
-  └─ events::emit_market_created()
+User
+ │
+ ├─ deposit_collateral(market_id, amount)
+ │      Market (no cross-contract calls)
+ │
+ ├─ update_position(market_id, yes_delta, no_delta, price)
+ │      Market
+ │       ├─[if outcome_token_contract set]──► OutcomeToken::balance(market_id, user, Yes|No)
+ │       │        [reconciliation guard — rejects with PositionTokenMismatch on divergence]
+ │       └─[if outcome_token_contract set]──► OutcomeToken::mint(market_id, user, kind, amount)
+ │                                            OutcomeToken::burn(market_id, user, kind, amount)
+ │
+ ├─ settle_position / batch_settle_positions / settle_positions_page(market_id)
+ │      Market
+ │       └─[if outcome_token_contract set]──► OutcomeToken::balance(market_id, user, Yes|No)
+ │                [reconciliation guard — rejects/skips user on divergence]
+ │
+ ├─ withdraw_unused_collateral(market_id, amount)
+ │      Market
+ │       └─[if treasury set AND fee > 0]
+ │              SAC token transfer: Market → Treasury (fee_amount)
+ │              └──► Treasury::collect_fee(caller, token, market_id, fee_amount)
+ │
+ ├─ resolve_market(market_id, outcome, signature)
+ │      Market (no cross-contract calls; oracle sig verified in-contract)
+ │
+ ├─ Admin: reconcile_position_tokens(market_id, user)
+ │      Market
+ │       └──► OutcomeToken::mint(market_id, user, kind, amount)
+ │            OutcomeToken::burn(market_id, user, kind, amount)
+ │            [mints/burns tokens to match Position; admin-gated repair path]
+ │
+ └─ Resolution lifecycle (off-chain orchestrator drives these)
+        │
+        ├─ Resolution::propose(proposer, market_id, outcome, signature, ...)
+        │       └──► Market::verify_signature(market_id, outcome, signature)
+        │            [rejects proposal early if oracle sig is invalid]
+        │
+        └─ Resolution::finalize(finalizer, candidate_id)
+                └──► Market::resolve_market(market_id, outcome, signature)
+                     [atomically settles the market after challenge window]
 ```
 
-### `deposit_collateral`
+---
+
+## Edge-by-Edge Reference
+
+### 1. Market → OutcomeToken (mint/burn)
+
+| Property | Value |
+|---|---|
+| Caller | `MarketContract::update_position` |
+| Callee | `OutcomeTokenContract::mint` / `OutcomeTokenContract::burn` |
+| Trigger | `yes_delta` or `no_delta` ≠ 0 AND `outcome_token_contract` is registered |
+| Auth required | `OutcomeToken` checks `market_contract.require_auth()` — the Market contract must be the registered market |
+| Failure behaviour | If the callee panics or returns an error the entire `update_position` call reverts |
+| Registration | `MarketContract::set_outcome_token_contract(admin, address)` |
 
 ```
-deposit_collateral(user, market_id, amount)
-  └─ user.require_auth()
-  └─ validation::validate_collateral_amount()
-  └─ storage::get_market()                    [read]
-  └─ SAC::transfer(user → contract)           ← only cross-contract call
-  └─ storage::get_position()                  [read]
-  └─ storage::set_position()                  [write: Position(market_id, user)]
-  └─ events::emit_collateral_deposited()
+update_position(user, market_id, +yes_delta, 0, price)
+  → OutcomeToken::mint(market_id, user, TokenKind::Yes, yes_delta)
+
+update_position(user, market_id, -yes_delta, 0, price)
+  → OutcomeToken::burn(market_id, user, TokenKind::Yes, yes_delta)
 ```
 
-### `withdraw_unused_collateral`
+### 2. Market → Treasury (fee routing)
+
+| Property | Value |
+|---|---|
+| Caller | `MarketContract::withdraw_unused_collateral` |
+| Callee | `TreasuryContract::collect_fee` |
+| Trigger | Fee rate > 0 AND treasury address is registered AND computed fee > 0 |
+| Token transfer | SAC `transfer(market_contract → treasury, fee_amount)` happens *before* `collect_fee` is called |
+| Auth required | `Treasury` checks `caller == authorized_market_contract` |
+| Failure behaviour | If `collect_fee` reverts the token transfer also reverts (same transaction) |
+| Registration | `MarketContract::set_treasury(admin, address)` + `MarketContract::set_fee_rate(admin, bps)` |
 
 ```
 withdraw_unused_collateral(user, market_id, amount)
-  └─ user.require_auth()
-  └─ validation::validate_collateral_amount()
-  └─ storage::get_market()                    [read]
-  └─ storage::get_position()                  [read]
-  └─ positions::calculate_locked_collateral()
-  └─ storage::set_position()                  [write: Position(market_id, user)]
-  └─ SAC::transfer(contract → user)           ← only cross-contract call
-  └─ events::emit_collateral_withdrawn()
+  → SAC::transfer(market → treasury, fee)
+  → Treasury::collect_fee(market, token, market_id, fee)
 ```
 
-**CEI note:** state is updated before the SAC transfer — this satisfies the
-Checks-Effects-Interactions pattern.  See `docs/reentrancy-cei-audit.md`.
+### 3. Resolution → Market (signature pre-validation)
 
-### `resolve_market`
-
-```
-resolve_market(market_id_str, outcome, signature)
-  └─ validation::parse_market_id()
-  └─ storage::get_market()                    [read]
-  └─ oracle::verify_oracle_signature()
-  │   └─ env.crypto().ed25519_verify()        [host fn — not a cross-contract call]
-  └─ storage::set_market()                    [write: Market(id)]
-  └─ events::emit_market_resolved()
-```
-
-**Auth note:** no `require_auth` — authorization is implicit in the Ed25519
-oracle signature stored in the market at creation.
-
-### `queue_fee_rate_change`
+| Property | Value |
+|---|---|
+| Caller | `ResolutionContract::propose` |
+| Callee | `MarketContract::verify_signature` |
+| Trigger | Always — every `propose` call pre-validates the oracle signature |
+| Purpose | Reject invalid signatures at proposal time, not at finalize time |
+| Auth required | None (read-only verification) |
+| Failure behaviour | If verification fails `propose` returns `ContractError::InvalidSignature` |
+| Registration | `ResolutionContract::initialize(admin, factory, market_contract)` |
 
 ```
-queue_fee_rate_change(caller, new_rate_bps)
-  └─ caller.require_auth()
-  └─ storage::get_admin()                     [read]
-  └─ [validate: new_rate_bps ≤ FEE_RATE_MAX_BPS=500]
-  └─ env.ledger().timestamp()                 [clock: ledger time]
-  └─ storage::set_pending_fee_rate()          [write: PendingFeeRate]
-  └─ events::emit_fee_rate_change_queued()
+Resolution::propose(proposer, market_id, outcome, signature, ...)
+  → Market::verify_signature(market_id, outcome, signature)
 ```
 
-Timelock: `FEE_RATE_TIMELOCK_SECONDS = 172_800` (48 h).
+### 4. Resolution → Market (finalize → resolve)
 
-### `apply_pending_fee_rate`
-
-```
-apply_pending_fee_rate(caller)
-  └─ caller.require_auth()
-  └─ storage::get_admin()                     [read]
-  └─ storage::get_pending_fee_rate()          [read]
-  └─ env.ledger().timestamp()                 [clock: LEDGER TIME — not wall clock]
-  └─ storage::set_fee_rate_bps()              [write: FeeRateBps]
-  └─ storage::clear_pending_fee_rate()        [delete: PendingFeeRate]
-  └─ events::emit_fee_rate_applied()
-```
-
-### `get_fee_rate_bps`
+| Property | Value |
+|---|---|
+| Caller | `ResolutionContract::finalize` |
+| Callee | `MarketContract::resolve_market` |
+| Trigger | Challenge window has closed AND candidate is not challenged AND signature is not expired |
+| Purpose | Atomically mark the market as resolved on-chain after the dispute window |
+| Auth required | `Market::resolve_market` requires `resolver.require_auth()` — the Resolution contract's address acts as resolver |
+| Failure behaviour | If `resolve_market` reverts (e.g. already resolved) the entire `finalize` call reverts |
+| Registration | `ResolutionContract::initialize(admin, factory, market_contract)` |
 
 ```
-get_fee_rate_bps()
-  └─ storage::get_fee_rate_bps()              [read-only, no auth]
+Resolution::finalize(finalizer, candidate_id)
+  → (candidate.status = Finalized)
+  → Market::resolve_market(market_id, outcome, signature)
 ```
 
-### `get_position`
+### 5. Market ↔ OutcomeToken (dual-ledger reconciliation)
+
+| Property | Value |
+|---|---|
+| Caller | `MarketContract::update_position`, `settle_position` (+ batch/page variants), `get_position_token_parity`, `reconcile_position_tokens` |
+| Callee | `OutcomeTokenContract::balance` (read), plus `mint`/`burn` from `reconcile_position_tokens` |
+| Trigger | Every trade and settlement attempt (guard check); admin-initiated repair |
+| Purpose | `Position` (Market storage) and `OutcomeToken` balances are two ledgers that are supposed to always agree — a historical bug, partial upgrade, or manual admin mint/burn issued directly on the outcome-token contract can make them diverge. The guard reads both ledgers and refuses to proceed on mismatch instead of silently re-syncing |
+| Auth required | Guard reads (`balance`) need no auth. `reconcile_position_tokens` requires the Market contract's stored admin |
+| Failure behaviour | `update_position`/`settle_position` reject with `ContractError::PositionTokenMismatch` (after emitting `PositionTokenMismatchDetected`) when the two ledgers disagree for that user/market. `batch_settle_positions`/`settle_positions_page` skip the affected user rather than aborting the whole batch |
+| Repair | `MarketContract::reconcile_position_tokens(admin, market_id, user)` mints/burns `OutcomeToken` balances to match `Position` (Position is the source of truth — see `contracts/market/src/reconciliation.rs`), emitting `PositionTokensReconciled` |
+| Registration | Reuses the existing `set_outcome_token_contract` wiring — no separate registration step |
 
 ```
-get_position(market_id, user)
-  └─ storage::get_position()                  [read-only, no auth]
-```
+update_position(user, market_id, yes_delta, no_delta, price)
+  → OutcomeToken::balance(market_id, user, Yes|No)   [parity check, both sides]
+  → reject with PositionTokenMismatch if divergent, else proceed as in edge 1
 
-Canonical source of truth for YES/NO share balances.  Off-chain indexers
-(`vatix-backend.UserPosition`) **must reconcile** against this entrypoint.
-Regression: `regression_get_position_is_canonical_source_of_truth` in `test.rs`.
+settle_position(user, market_id) / batch_settle_positions / settle_positions_page
+  → OutcomeToken::balance(market_id, user, Yes|No)   [parity check]
+  → reject (single) or skip (batch/page) with PositionTokenMismatch if divergent
 
-### `add_fee_waiver`
-
-```
-add_fee_waiver(caller, waiver_address)
-  └─ caller.require_auth()
-  └─ storage::get_admin()                     [read]
-  └─ storage::get_fee_waivers()               [read]
-  └─ [cap check: len < MAX_FEE_WAIVERS=100]
-  └─ storage::set_fee_waivers()               [write: FeeWaivers]
-  └─ events::emit_fee_waiver_added()
-```
-
-### `remove_fee_waiver`
-
-```
-remove_fee_waiver(caller, waiver_address)
-  └─ caller.require_auth()
-  └─ storage::get_admin()                     [read]
-  └─ storage::get_fee_waivers()               [read]
-  └─ storage::set_fee_waivers()               [write: FeeWaivers]
-  └─ events::emit_fee_waiver_removed()
+reconcile_position_tokens(admin, market_id, user)     [admin-gated]
+  → OutcomeToken::mint / OutcomeToken::burn            [bring balances back to Position]
 ```
 
 ---
 
-## Share accounting source of truth
+Registering a resolution contract selects this challenge-based lifecycle as the
+market's exclusive resolution mode. While the registration is present,
+`Market::resolve_market_threshold` fails closed with
+`ResolutionNotFinalized`; a threshold quorum therefore cannot bypass an open or
+challenged candidate. Threshold resolution remains available only when no
+resolution contract is registered. After `finalize` resolves the market through
+the guarded single-signature callback, any later resolution attempt fails with
+`MarketAlreadyResolved`.
 
-| Layer | Location | Authoritative? |
-|---|---|---|
-| On-chain storage | `StorageKey::Position(market_id, user)` | **Yes — canonical** |
-| Public entrypoint | `get_position(market_id, user)` | Yes (reads storage) |
-| Off-chain indexer | `vatix-backend.UserPosition` | No — must reconcile |
+## Authorization Summary
 
-Any `UserPosition` record that disagrees with `get_position` is stale or
-incorrect.  The `regression_get_position_is_canonical_source_of_truth` test
-in `contracts/market/src/test.rs` is the CI sentinel for this invariant.
-
----
-
-## Known design gaps
-
-| # | Gap | Status |
-|---|---|---|
-| 1 | `resolve_market` has no `require_auth` — relies solely on Ed25519 sig | Intentional oracle model; document risk in audit report |
-| 2 | `ed25519_verify` panics on invalid signature instead of returning `Err` | SDK limitation; see `oracle.rs` TODO |
-| 3 | Per-market isolated collateral (no cross-market pool) | Open — post-MVP |
-| 4 | No outcome token minting in current ABI | Planned — `outcome-token` crate |
+| Call | Who authorizes |
+|---|---|
+| `OutcomeToken::mint` / `burn` | Market contract address (`market_contract.require_auth()`) |
+| `Treasury::collect_fee` | Market contract address (`caller == authorized_market_contract`) |
+| `Market::verify_signature` | No auth (public read) |
+| `Market::resolve_market` (via Resolution) | Resolution contract address as `resolver` |
+| `Market::reconcile_position_tokens` | Market contract's stored admin |
+| `Market::get_position_token_parity` | No auth (public read) |
+| `Market::resolve_market_threshold` | Caller authorizes as `resolver`; disabled while a Resolution contract is registered |
 
 ---
 
-## Out of scope (v1)
+## Registration Prerequisites
 
-- `contracts/treasury` — not yet deployed
-- `contracts/resolution` — not yet deployed
-- `contracts/outcome-token` — not yet deployed
-- Off-chain indexer (`vatix-backend`) — separate repository
+All cross-contract wiring is opt-in and admin-controlled. No calls are made
+unless the relevant address has been registered:
+
+```
+# Wire outcome tokens
+MarketContract::set_outcome_token_contract(admin, outcome_token_address)
+OutcomeTokenContract::set_market_contract(admin, market_address)
+
+# Wire treasury fee routing
+MarketContract::set_treasury(admin, treasury_address)
+MarketContract::set_fee_rate(admin, fee_rate_bps)          # 0 = disabled
+TreasuryContract::initialize(admin, market_address)         # or set_market_contract
+
+# Wire resolution gating
+ResolutionContract::initialize(admin, factory, market_address)
+MarketContract::set_resolution_contract(admin, resolution_address)
+```
