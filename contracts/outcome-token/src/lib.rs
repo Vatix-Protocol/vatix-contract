@@ -49,6 +49,10 @@ impl OutcomeTokenContract {
         if storage::has_config(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
+        // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
+        if name.is_empty() || symbol.is_empty() {
+            return Err(ContractError::EmptyMetadata);
+        }
         storage::set_config(
             &env,
             &OutcomeTokenConfig {
@@ -189,6 +193,10 @@ impl OutcomeTokenContract {
         let mut config = storage::get_config(&env);
         if admin != config.admin {
             return Err(ContractError::Unauthorized);
+        }
+        // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
+        if name.is_empty() || symbol.is_empty() {
+            return Err(ContractError::EmptyMetadata);
         }
         config.name = name;
         config.symbol = symbol;

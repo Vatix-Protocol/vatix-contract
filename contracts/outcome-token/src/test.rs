@@ -542,3 +542,213 @@ fn burn_sac_amount_reduces_supply_exactly() {
         two_tokens - half_token,
     );
 }
+
+// ── #790: non-empty name/symbol required ──────────────────────────────────────
+//
+// An empty ticker or name breaks SAC-compatible wallets and indexers — wallets
+// display nothing, some reject the token entirely.  Both `initialize` and
+// `set_metadata` must reject empty strings with `ContractError::EmptyMetadata`.
+// These tests are regression sentinels: they MUST remain in the suite to
+// guarantee the guard is never silently removed.
+
+/// `initialize` must reject an empty `name` with `ContractError::EmptyMetadata`.
+/// This is the #790 sentinel — do not remove.
+#[test]
+fn initialize_rejects_empty_name() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+
+    let empty = String::from_str(&env, "");
+    let symbol = String::from_str(&env, "vYES");
+    assert_eq!(
+        client.try_initialize(&admin, &market, &empty, &symbol),
+        Err(Ok(ContractError::EmptyMetadata)),
+        "#790 sentinel: initialize must reject empty name with EmptyMetadata"
+    );
+}
+
+/// `initialize` must reject an empty `symbol` with `ContractError::EmptyMetadata`.
+/// This is the #790 sentinel — do not remove.
+#[test]
+fn initialize_rejects_empty_symbol() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+
+    let name = String::from_str(&env, "Vatix YES Token");
+    let empty = String::from_str(&env, "");
+    assert_eq!(
+        client.try_initialize(&admin, &market, &name, &empty),
+        Err(Ok(ContractError::EmptyMetadata)),
+        "#790 sentinel: initialize must reject empty symbol with EmptyMetadata"
+    );
+}
+
+/// `set_metadata` must reject an empty `name` with `ContractError::EmptyMetadata`.
+/// This is the #790 sentinel — do not remove.
+#[test]
+fn set_metadata_rejects_empty_name() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    let empty = String::from_str(&env, "");
+    let symbol = String::from_str(&env, "vNO");
+    assert_eq!(
+        client.try_set_metadata(&admin, &empty, &symbol),
+        Err(Ok(ContractError::EmptyMetadata)),
+        "#790 sentinel: set_metadata must reject empty name with EmptyMetadata"
+    );
+}
+
+/// `set_metadata` must reject an empty `symbol` with `ContractError::EmptyMetadata`.
+/// This is the #790 sentinel — do not remove.
+#[test]
+fn set_metadata_rejects_empty_symbol() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    let name = String::from_str(&env, "Vatix NO Token");
+    let empty = String::from_str(&env, "");
+    assert_eq!(
+        client.try_set_metadata(&admin, &name, &empty),
+        Err(Ok(ContractError::EmptyMetadata)),
+        "#790 sentinel: set_metadata must reject empty symbol with EmptyMetadata"
+    );
+}
+
+/// Valid (non-empty) name and symbol must still initialize successfully —
+/// this ensures the guard does not over-reject.
+#[test]
+fn initialize_accepts_non_empty_name_and_symbol() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+
+    let name = String::from_str(&env, "Vatix YES Token");
+    let symbol = String::from_str(&env, "vYES");
+    // Must succeed — the guard must not fire for valid metadata.
+    client.initialize(&admin, &market, &name, &symbol);
+
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+}
+
+// ── #791: burn exceeding balance returns typed error, not panic ───────────────
+//
+// On a deployed Soroban WASM contract (panic = "abort"), a panic-based failure
+// traps the VM and returns a generic host error with no structured type
+// information — the caller cannot distinguish "InsufficientBalance" from any
+// other trap.  Typed `ContractError` values are observable and matchable.
+//
+// The implementation already returns `ContractError::InsufficientBalance` here;
+// these tests are explicit regression sentinels.  **Do not remove them.**
+
+/// Burning more than the current balance must return
+/// `ContractError::InsufficientBalance` — never panic.
+/// This is the #791 sentinel — do not remove.
+#[test]
+fn outcome_token_burn_exceeding_balance_returns_typed_error_not_panic() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    // Give the user a known balance.
+    client.mint(&1, &user, &TokenKind::Yes, &100);
+
+    // Attempt to burn more than the balance — must return typed error.
+    let result = client.try_burn(&1, &user, &TokenKind::Yes, &101);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::InsufficientBalance)),
+        "#791 sentinel: burn exceeding balance must return \
+         ContractError::InsufficientBalance, not panic"
+    );
+
+    // Balance must be unmodified — the burn must be fully atomic.
+    assert_eq!(
+        client.balance(&1, &user, &TokenKind::Yes),
+        100,
+        "#791: balance must be unchanged after a rejected over-burn"
+    );
+}
+
+/// Burning exactly balance + 1 on a zero-balance account must also return
+/// `ContractError::InsufficientBalance` — never panic.
+/// This is the #791 sentinel — do not remove.
+#[test]
+fn outcome_token_burn_exceeding_zero_balance_returns_typed_error_not_panic() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    // No mint — the user has zero balance.
+    let result = client.try_burn(&1, &user, &TokenKind::No, &1);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::InsufficientBalance)),
+        "#791 sentinel: burn on zero balance must return \
+         ContractError::InsufficientBalance, not panic"
+    );
+}
+
+// ── #792: mint zero returns typed error, not panic ────────────────────────────
+//
+// Same rationale as #791: a zero-amount mint is a protocol invariant
+// violation that must surface as a typed `ContractError::InvalidAmount` so
+// callers can match and handle it programmatically rather than receiving an
+// opaque trap.  **Do not remove these tests.**
+
+/// Minting zero tokens must return `ContractError::InvalidAmount` — never panic.
+/// This is the #792 sentinel — do not remove.
+#[test]
+fn outcome_token_mint_zero_returns_typed_error_not_panic() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    let result = client.try_mint(&1, &user, &TokenKind::Yes, &0);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::InvalidAmount)),
+        "#792 sentinel: mint(0) must return ContractError::InvalidAmount, not panic"
+    );
+
+    // Balance and supply must remain at zero — no partial state mutation.
+    assert_eq!(
+        client.balance(&1, &user, &TokenKind::Yes),
+        0,
+        "#792: balance must stay 0 after a rejected zero-mint"
+    );
+    assert_eq!(
+        client.total_supply(&1, &TokenKind::Yes),
+        0,
+        "#792: total_supply must stay 0 after a rejected zero-mint"
+    );
+}
+
+/// Minting a negative amount must also return `ContractError::InvalidAmount` —
+/// the guard covers both zero and negative inputs.
+/// This is the #792 sentinel — do not remove.
+#[test]
+fn outcome_token_mint_negative_returns_typed_error_not_panic() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    let result = client.try_mint(&1, &user, &TokenKind::No, &-1);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::InvalidAmount)),
+        "#792 sentinel: mint(-1) must return ContractError::InvalidAmount, not panic"
+    );
+}
