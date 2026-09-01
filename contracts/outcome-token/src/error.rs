@@ -29,4 +29,11 @@ pub enum ContractError {
     TransferBlockedAfterResolve = 11,
     /// The contract is paused; state-mutating operations are suspended.
     ContractPaused = 12,
+    /// `name` or `symbol` was supplied as an empty string.
+    ///
+    /// An empty ticker or name breaks SAC-compatible wallets and indexers:
+    /// wallets display nothing, and some reject a token with no symbol
+    /// outright.  Both fields are required to be non-empty at `initialize`
+    /// and `set_metadata` (Issue #790).
+    EmptyMetadata = 13,
 }

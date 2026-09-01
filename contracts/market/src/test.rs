@@ -3237,6 +3237,123 @@ mod test {
         assert_eq!(applied, 1_000);
     }
 
+    // ========== #789: set_fee_cap can lower the cap from MAX_FEE_RATE_BPS ==========
+    //
+    // Before `set_fee_cap` existed, the cap was permanently stuck at
+    // `MAX_FEE_RATE_BPS` (10_000 bps = 100 %).  These tests are regression
+    // sentinels: they MUST remain in the suite to guarantee
+    //
+    //   (a) the default cap is exactly `MAX_FEE_RATE_BPS` (fresh deployment),
+    //   (b) `set_fee_cap` can lower it to any value in [0, MAX_FEE_RATE_BPS],
+    //   (c) `set_fee_rate` correctly enforces the *lowered* cap, and
+    //   (d) a `set_fee_rate` call that would have passed under the old
+    //       permissive default is rejected once the cap is tightened.
+    //
+    // **Do not remove these tests.**
+
+    /// Without calling `set_fee_cap`, the effective cap is `MAX_FEE_RATE_BPS`
+    /// (10_000 bps) — a fresh deployment must allow any rate up to that bound.
+    /// This is the #789 sentinel — do not remove.
+    #[test]
+    fn test_fee_cap_default_is_max_fee_rate_bps() {
+        use crate::storage::MAX_FEE_RATE_BPS;
+
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        // A rate exactly at MAX_FEE_RATE_BPS must be accepted without ever
+        // calling set_fee_cap — the cap defaults to MAX_FEE_RATE_BPS.
+        let result = client.try_set_fee_rate(&admin, &MAX_FEE_RATE_BPS);
+        assert!(
+            result.is_ok(),
+            "#789 sentinel: set_fee_rate(MAX_FEE_RATE_BPS) must succeed on a fresh \
+             deployment (default cap == MAX_FEE_RATE_BPS)"
+        );
+    }
+
+    /// After `set_fee_cap(500)`, `set_fee_rate(501)` must be rejected with
+    /// `ContractError::FeeCapExceeded`.  Without `set_fee_cap` the old
+    /// permissive default (MAX_FEE_RATE_BPS) would let it through silently.
+    /// This is the #789 sentinel — do not remove.
+    #[test]
+    fn test_set_fee_cap_lowers_cap_from_default() {
+        use crate::error::ContractError;
+
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        // Lower the cap well below MAX_FEE_RATE_BPS.
+        client.set_fee_cap(&admin, &500i128);
+
+        // A rate that would have been valid under the default cap (10_000)
+        // must now be rejected.
+        let result = client.try_set_fee_rate(&admin, &501i128);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::FeeCapExceeded)),
+            "#789 sentinel: set_fee_rate above the lowered cap must return \
+             ContractError::FeeCapExceeded — cap must not be stuck at MAX_FEE_RATE_BPS"
+        );
+    }
+
+    /// After `set_fee_cap(500)`, `set_fee_rate(500)` (exactly at cap) must
+    /// succeed — the cap is inclusive.
+    /// This is the #789 sentinel — do not remove.
+    #[test]
+    fn test_set_fee_cap_allows_rate_at_cap_boundary() {
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        client.set_fee_cap(&admin, &500i128);
+
+        // Rate exactly equal to the new cap must succeed.
+        let result = client.try_set_fee_rate(&admin, &500i128);
+        assert!(
+            result.is_ok(),
+            "#789 sentinel: set_fee_rate(cap) must succeed — the cap bound is inclusive"
+        );
+    }
+
+    /// `set_fee_cap` can be called multiple times; each call replaces the
+    /// previous cap.  A second tightening must be honoured immediately.
+    /// This is the #789 sentinel — do not remove.
+    #[test]
+    fn test_set_fee_cap_can_be_tightened_again() {
+        use crate::error::ContractError;
+
+        let (_env, admin, client, _contract_id) = create_test_contract();
+
+        // First tighten to 1_000 bps.
+        client.set_fee_cap(&admin, &1_000i128);
+        // A rate at 900 should be fine.
+        client.try_set_fee_rate(&admin, &900i128).expect("900 <= 1_000 cap");
+
+        // Re-tighten to 500 bps.
+        client.set_fee_cap(&admin, &500i128);
+
+        // The previously-valid 900 bps rate must now be blocked.
+        let result = client.try_set_fee_rate(&admin, &900i128);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::FeeCapExceeded)),
+            "#789 sentinel: after re-tightening the cap, previously-valid \
+             rates must be rejected"
+        );
+    }
+
+    /// Non-admin must not be able to call `set_fee_cap`.
+    #[test]
+    fn test_non_admin_cannot_set_fee_cap() {
+        use crate::error::ContractError;
+
+        let (_env, _admin, client, _contract_id) = create_test_contract();
+        let attacker = soroban_sdk::Address::generate(&_env);
+
+        let result = client.try_set_fee_cap(&attacker, &100i128);
+        assert_eq!(
+            result,
+            Err(Ok(ContractError::NotAdmin)),
+            "non-admin must not be able to lower the fee cap"
+        );
+    }
+
     // ========== cancel_fee_rate_change tests (Issue #748) ==========
 
     /// Admin can cancel a pending fee-rate change before the timelock elapses.
