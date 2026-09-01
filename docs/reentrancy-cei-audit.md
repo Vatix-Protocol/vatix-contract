@@ -4,6 +4,7 @@
 - `contracts/market/src/withdraw.rs`
 - `contracts/market/src/settlement.rs`
 - `contracts/market/src/deposit.rs` (Issue #695)
+- `contracts/market/src/lib.rs` — `withdraw_canceled_collateral` (Issue #784)
 - `contracts/treasury/src/lib.rs` (Issue #695)
 - `contracts/resolution/src/lib.rs` (Issue #695)
 - `contracts/outcome-token/src/lib.rs` (Issue #695)
@@ -13,7 +14,8 @@
 | Contract | Function | Issue / Order Violation | Severity | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **Market** | `withdraw_unused_collateral` | External fee transfer & `collect_fee` call occurred **before** `storage::set_position`. | High | **Fixed** |
-| **Market** | `settle_position` | Outcome token `burn()` external call occurred **before** `storage::set_position`. | Medium | **Fixed** |
+| **Market** | `settle_position` | Duplicate `storage::set_position` write — the position was written once before `burn_settled_outcome_tokens` and once again after it, leaving a window between the two writes where `is_settled` was already `true` in the local `position` struct but the second (post-burn) write had not yet landed. Removed the duplicate; only one `set_position` now runs, before both `burn_settled_outcome_tokens` and the payout transfer. | Low | **Fixed (#784)** |
+| **Market** | `withdraw_canceled_collateral` | External collateral `token_client.transfer()` occurred **before** `storage::set_position` zeroed `total_deposited` / `locked_collateral`. A reentrant call during the transfer would have observed the stale, non-zero balance and been able to claim the same collateral twice. | High | **Fixed (#784)** |
 | **Market** | `deposit_collateral` | External collateral `transfer()` occurred **before** `storage::set_position` / `add_market_participant` / `set_last_deposit_time`. | Medium | **Fixed** |
 | **Market** | `void_market` (Issue #708) | No external calls: the caller-identity check reads `storage::get_resolution_contract`, the status flips to `Canceled` via `storage::set_market`, then `emit_market_voided` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
 | **Market** | `cancel_market` | No external calls: admin auth is checked, status validated via `validate_cancelable`, the market is persisted via `storage::set_market`, then `emit_market_canceled` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
@@ -67,6 +69,15 @@
 ### 8. `deposit_collateral` (`resolution/src/lib.rs`, Issue #695)
 - **Before:** `TokenClient::new(&env, &collateral_token).transfer(&proposer, &env.current_contract_address(), &amount)` ran before `storage::set_proposer_collateral` persisted the increased balance; `prev` was read once, before the transfer.
 - **After:** `storage::set_proposer_collateral(&env, &proposer, prev + amount)` now runs **before** the transfer, so a reentrant call can no longer read the same stale `prev` and overwrite (rather than accumulate) one of two concurrent deposits.
+
+### 9. `withdraw_canceled_collateral` (`market/src/lib.rs`, Issue #784)
+- **Before:** `token_client.transfer(&contract_address, &user, &refund)` ran first; `position.total_deposited` and `position.locked_collateral` were only zeroed and persisted via `storage::set_position` **after** the transfer returned. A malicious or upgraded collateral token that re-entered `withdraw_canceled_collateral` from inside its `transfer` implementation would have read the stale, non-zero `total_deposited` and been able to claim the same collateral a second time before the first call's state update landed.
+- **After:** `position.total_deposited = 0` / `position.locked_collateral = 0` and `storage::set_position` now run **before** `token_client.transfer`. A reentrant call will read the zeroed position and be rejected with `InsufficientCollateral`, closing the double-spend window.
+- **Regression test:** `test_784_withdraw_canceled_collateral_cei_position_zeroed_before_transfer` in `contracts/market/src/test.rs` — asserts that a second call after a successful reclaim returns `InsufficientCollateral` and that the position is already zeroed in storage immediately after the first call.
+
+### 10. `settle_position` duplicate `set_position` write (`market/src/settlement.rs`, Issue #784)
+- **Before:** `storage::set_position` was called **twice** — once before `burn_settled_outcome_tokens` and once after it. Between the two writes the position had `is_settled = true` in the in-memory struct but only the first write had actually landed in storage; any observation of storage between the two writes (e.g. a reentrant call triggered by the outcome token `burn`) would have seen the post-settle state inconsistently. The redundant second write also doubled the storage-write cost of every settlement.
+- **After:** Only one `storage::set_position` call remains, placed before both `burn_settled_outcome_tokens` and the payout transfer, matching the single-write pattern used by `batch_settle_positions` and `settle_positions_page`.
 
 ---
 

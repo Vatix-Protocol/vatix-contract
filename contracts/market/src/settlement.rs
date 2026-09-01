@@ -206,12 +206,14 @@ pub fn settle_position(env: &Env, user: &Address, market_id: u32) -> Result<i128
     // payout, marks the position settled, and emits the PositionSettled event.
     let payout = execute_settlement(env, &mut position, &market)?;
 
-     storage::set_position(env, market_id, user, &position)?;
+    // CEI: persist settled state BEFORE any external call (burn or transfer).
+    // Previously this write appeared twice — once here and once after
+    // burn_settled_outcome_tokens. The duplicate write was redundant and
+    // created a window where a reentrant call could observe a stale
+    // is_settled == false between the two writes (#784).
+    storage::set_position(env, market_id, user, &position)?;
 
     burn_settled_outcome_tokens(env, market_id, user, &position);
-
-    // Persist the settled position before paying out.
-    storage::set_position(env, market_id, user, &position)?;
 
     // Transfer the payout in collateral tokens from the contract to the user.
     if payout > 0 {

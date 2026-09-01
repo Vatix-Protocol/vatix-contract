@@ -1163,15 +1163,22 @@ impl MarketContract {
             return Err(ContractError::InsufficientCollateral);
         }
 
-        // 4. Refund the collateral from the contract back to the user.
-        let contract_address = env.current_contract_address();
-        let token_client = soroban_sdk::token::Client::new(&env, &market.collateral_token);
-        token_client.transfer(&contract_address, &user, &refund);
-
-        // 5. Zero out the position balances now that the collateral has left.
+        // 4. Zero out the position balances FIRST (Checks-Effects-Interactions, #784).
+        //
+        // CEI ordering: the position state must be persisted to storage before
+        // the external token transfer fires. A malicious or upgraded collateral
+        // token could otherwise re-enter `withdraw_canceled_collateral` from
+        // inside `token_client.transfer` and observe the stale, not-yet-zeroed
+        // position, allowing a second refund against the same collateral.
         position.total_deposited = 0;
         position.locked_collateral = 0;
         storage::set_position(&env, market_id, &user, &position)?;
+
+        // 5. Now transfer the collateral from the contract back to the user
+        //    (external Interactions call, ordered after all state writes above).
+        let contract_address = env.current_contract_address();
+        let token_client = soroban_sdk::token::Client::new(&env, &market.collateral_token);
+        token_client.transfer(&contract_address, &user, &refund);
 
         // 6. Emit position_updated so indexers see the zeroed balances.
         events::emit_position_updated(

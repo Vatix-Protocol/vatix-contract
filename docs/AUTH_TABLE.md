@@ -119,12 +119,35 @@ When other Vatix contracts call the market contract, they should:
 ## Security Considerations
 
 ### No Reentrancy Risk
-The market contract uses transfer-first-then-update pattern for collateral deposits:
+The market contract follows the Checks-Effects-Interactions (CEI) pattern for all
+`TokenClient::transfer` call sites. State writes (position balances, settled flags)
+run **before** the external transfer fires. See
+[`docs/reentrancy-cei-audit.md`](reentrancy-cei-audit.md) for the full per-function
+inventory and remediation history.
+
+Example — `deposit_collateral` (correct CEI order):
 ```rust
-collateral_token.transfer(&user, &env.current_contract_address(), &amount)?;
-// Only after successful transfer:
-storage::set_position(&env, market_id, &user, &new_position);
+// Effects: state written first
+storage::set_position(&env, market_id, &user, &position)?;
+storage::add_market_participant(&env, market_id, &user);
+storage::set_last_deposit_time(&env, market_id, &user, env.ledger().timestamp());
+// Interactions: external transfer last
+token_client.transfer(&user, &contract_address, &amount);
 ```
+
+Example — `withdraw_canceled_collateral` (correct CEI order, fixed in #784):
+```rust
+// Effects: zero out position before any external call
+position.total_deposited = 0;
+position.locked_collateral = 0;
+storage::set_position(&env, market_id, &user, &position)?;
+// Interactions: transfer fires after state is committed
+token_client.transfer(&contract_address, &user, &refund);
+```
+
+**PR requirement (#784):** Any PR adding or modifying a `TokenClient::transfer` call
+must include a reentrancy/CEI checklist in the PR description and update
+`docs/reentrancy-cei-audit.md`. See `.github/PULL_REQUEST_TEMPLATE.md`.
 
 ### No Overflow/Underflow Risk
 Position tracking uses signed integers with validation:
