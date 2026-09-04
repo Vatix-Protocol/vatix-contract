@@ -64,6 +64,49 @@ shape. If you add a regression test vector for math logic, add it to
 `test-vectors/` alongside a Rust test that loads and asserts it (see
 `contracts/market/src/tests_vectors.rs` for the pattern).
 
+## Reentrancy / CEI audit (#784)
+
+**Required for every PR that adds or modifies a `TokenClient::transfer` call
+(or any other external token / cross-contract call that moves value).**
+
+All Vatix contracts follow the **Checks-Effects-Interactions (CEI)** pattern:
+all storage writes that gate re-entry must run *before* any external call that
+could trigger a callback into this contract.
+
+### What to check
+
+For each new or modified `token_client.transfer(...)` call site:
+
+1. **Effects before Interactions**: Every storage write that a reentrant caller
+   could use to re-enter and claim value a second time (position balances,
+   `is_settled`, lock fields, token balances) must run *before* the transfer.
+2. **No post-transfer state writes that gate re-entry**: Confirm no storage
+   write that an attacker can exploit sits after the transfer call.
+3. **Regression test**: Add or cite a test that asserts the idempotency
+   boundary — a second call after the first succeeds must be rejected
+   (`InsufficientCollateral`, `PositionAlreadySettled`, etc.).
+4. **Audit doc**: Update `docs/reentrancy-cei-audit.md` with the new call
+   site, its CEI status, and a reference to the regression test.
+
+### PR template checkbox
+
+The `.github/PULL_REQUEST_TEMPLATE.md` contains a dedicated
+**Reentrancy / CEI audit** section that must be filled in for every PR
+touching a transfer call site. Reviewers must reject PRs that leave this
+section blank or unchecked.
+
+### Reference implementations
+
+| Function | File | Pattern |
+|---|---|---|
+| `deposit_collateral` | `contracts/market/src/deposit.rs` | State writes → `token.transfer(user → contract)` |
+| `withdraw_unused_collateral` | `contracts/market/src/withdraw.rs` | `set_position` → fee transfer → user transfer |
+| `withdraw_canceled_collateral` | `contracts/market/src/lib.rs` | `set_position` (zeroed) → `token.transfer(contract → user)` |
+| `settle_position` | `contracts/market/src/settlement.rs` | `set_position` (settled) → `burn_tokens` → `token.transfer` |
+
+See [`docs/reentrancy-cei-audit.md`](docs/reentrancy-cei-audit.md) for the
+complete per-function inventory across all four contracts.
+
 ## Storage version reviewer checklist
 
 Any PR that **adds, removes, or renames a `StorageKey` variant** — or changes
