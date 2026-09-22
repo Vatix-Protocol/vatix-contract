@@ -95,15 +95,37 @@ for all four contracts at once, and
 [`check-upgrade.sh`](check-upgrade.sh) as the script that builds every
 contract and fails if a pinned hash doesn't match what was just built.
 
-- An empty `expectedSha256` means "not yet pinned" — a warning, not a
-  failure (matches the placeholder convention already used in
-  `deployments/testnet.json`).
-- Once you've picked the exact commit/build you intend to roll out, fill in
-  the real hash (`bash scripts/verify-wasm-hash.sh <contract-dir>`) and
-  commit `expected-hashes.json`. From that point, any accidental rebuild
-  drift (toolchain change, uncommitted local edit, wrong branch) fails the
-  dry-run instead of silently shipping a different artifact than the one
-  that was reviewed.
+### Fail-closed semantics (pinned vs. unpinned)
+
+`check-upgrade.sh` treats each contract's `expectedSha256` as a **pin**:
+
+- **Unpinned** (`expectedSha256` is `null` or absent): the contract is not
+  yet pinned, so the check is skipped with a warning and does **not** fail
+  the run. This is the placeholder convention already used in
+  `deployments/testnet.json`.
+- **Pinned** (`expectedSha256` is a non-empty string): the freshly built
+  artifact **must** match exactly. Any drift — a mismatched hash, or an
+  empty/whitespace-only value that was meant to be a pin — exits non-zero
+  and fails the dry-run. There is no silent fallback: a pinned contract
+  that cannot be verified is a hard failure, not a warning.
+
+This is deliberate. Once you've picked the exact commit/build you intend to
+roll out, fill in the real hash (`bash scripts/verify-wasm-hash.sh
+<contract-dir>`) and commit `expected-hashes.json`. From that point, any
+accidental rebuild drift (toolchain change, uncommitted local edit, wrong
+branch) fails the dry-run instead of silently shipping a different artifact
+than the one that was reviewed.
+
+### Pinning and unpinning a contract
+
+- **To pin:** run `bash scripts/verify-wasm-hash.sh <contract-dir>` for the
+  contract, copy the resulting SHA-256 into that contract's
+  `expectedSha256` in `expected-hashes.json`, and commit it in the same PR
+  as the build you intend to ship.
+- **To unpin (intentionally):** set `expectedSha256` back to `null` (not an
+  empty string) and commit with a rationale. `null` is the explicit
+  "not yet pinned" signal; an empty string is treated as a broken pin and
+  fails closed.
 
 ## Storage version compatibility matrix
 
@@ -180,7 +202,9 @@ The `upgrade-dry-run` job in
 (Rust + Stellar CLI), so:
 
 - Storage-version drift between source and `version-matrix.json` fails CI.
-- A pinned WASM hash that doesn't match the freshly built artifact fails CI.
+- A pinned WASM hash that doesn't match the freshly built artifact fails CI,
+  and a pinned contract with an empty/missing hash fails closed rather than
+  warning.
 - The `UpgradeRequired` regression tests for all four contracts (market,
   treasury, resolution, outcome-token — see #696) run as part of the same
   job, so a change that accidentally removes a version guard (see "Pitfall

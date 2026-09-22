@@ -17,10 +17,17 @@
 #
 #   Phase B — WASM hash verification (guarded on the `stellar` CLI being on
 #             PATH). Builds each contract via `stellar contract build` and
-#             compares its SHA-256 hash against expected-hashes.json. An
-#             unpinned (empty) expected hash is a warning, not a failure; a
-#             pinned hash that doesn't match the freshly built artifact is a
-#             failure.
+#             compares its SHA-256 hash against expected-hashes.json.
+#             Fail-closed semantics (issue #697):
+#               * A pinned (non-empty) expected hash that doesn't match the
+#                 freshly built artifact is a failure.
+#               * A pinned (non-empty) expected hash whose entry is present
+#                 but empty/missing is a failure — an empty hash on a pinned
+#                 contract is treated as drift, not a warning.
+#               * An unpinned contract (no `expectedSha256` key at all, or
+#                 the entry explicitly marked `"pinned": false`) is a
+#                 warning only, unless ALLOW_UNPINNED_HASHES=1 is unset and
+#                 the contract is marked pinned.
 #
 #   Phase C — UpgradeRequired regression tests (guarded on `cargo` being on
 #             PATH). Runs the existing version-guard unit tests for all four
@@ -126,11 +133,20 @@ if ! command -v stellar >/dev/null 2>&1; then
 else
   check_hash() {
     local name="$1"
-    local manifest wasm_file expected actual wasm_path
+    local manifest wasm_file expected actual wasm_path pinned
 
     manifest="$(jq -r ".contracts.${name}.manifestPath" "${HASHES_FILE}")"
     wasm_file="$(jq -r ".contracts.${name}.wasmFile" "${HASHES_FILE}")"
     expected="$(jq -r ".contracts.${name}.expectedSha256 // empty" "${HASHES_FILE}")"
+    # A contract is considered "pinned" when the expectedSha256 key exists
+    # (even if its value is empty) OR the entry explicitly sets "pinned": true.
+    # This lets us distinguish "intentionally unpinned" from "pinned but the
+    # hash drifted to empty" — the latter must fail closed (issue #697).
+    pinned="$(jq -r "
+      if (.contracts.${name} | has(\"expectedSha256\")) then \"true\"
+      elif (.contracts.${name}.pinned // false) then \"true\"
+      else \"false\" end
+    " "${HASHES_FILE}")"
 
     log "Building ${manifest}..."
     if ! stellar contract build --manifest-path "${ROOT_DIR}/${manifest}" >/dev/null; then
@@ -151,7 +167,10 @@ else
     fi
 
     if [[ -z "${expected}" ]]; then
-      if [[ "${ALLOW_UNPINNED_HASHES:-}" == "1" ]]; then
+      if [[ "${pinned}" == "true" ]]; then
+        # Pinned contract with an empty hash is hash drift, not a warning.
+        fail "${name}: pinned contract has empty expectedSha256 in expected-hashes.json (built hash: ${actual}). Fail-closed for audit/mainnet readiness (Issue #697) — pin it via scripts/verify-wasm-hash.sh, or remove the expectedSha256 key to mark it intentionally unpinned."
+      elif [[ "${ALLOW_UNPINNED_HASHES:-}" == "1" ]]; then
         warn "${name}: no expectedSha256 pinned in expected-hashes.json yet (built hash: ${actual}) — ALLOW_UNPINNED_HASHES=1 set, not failing"
       else
         fail "${name}: no expectedSha256 pinned in expected-hashes.json (built hash: ${actual}). Fail-closed by default for audit/mainnet readiness (Issue #697) — pin it via scripts/verify-wasm-hash.sh, or set ALLOW_UNPINNED_HASHES=1 for local/dev dry-runs."

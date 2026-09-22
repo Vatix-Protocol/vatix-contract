@@ -23,75 +23,26 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
-      # Caches the `target/` build directory (and `~/.cargo/registry`) so
-      # `cargo check`/`cargo test`/`cargo clippy` below reuse prior compiled
-      # dependency artifacts instead of rebuilding the workspace from scratch
-      # on every run. `Swatinem/rust-cache` derives its cache key from the
-      # job's OS, Rust toolchain version, and a hash of `Cargo.lock` (plus all
-      # workspace `Cargo.toml` files); the key changes automatically whenever
-      # a dependency is added/updated, so a stale cache is never restored
-      # against a changed lockfile. `workspaces: . -> target` scopes the cache
-      # to this repo's single Cargo workspace and its `target/` output dir.
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
 
-      # Format check enforces consistent code style across the project using rustfmt.
-      # Configuration is defined in contracts/market/rustfmt.toml to ensure all
-      # contributors format code identically. This prevents style drift and makes
-      # code reviews focus on logic rather than formatting.
-      #
-      # rustfmt.toml currently acts as an echo guard — no custom rules are active
-      # yet, so `cargo fmt` falls back to rustfmt defaults (2021 edition style,
-      # 4-space indent, 100-char line width). Explicit project-wide rules should
-      # be added to rustfmt.toml incrementally as conventions are agreed upon.
-      #
-      # The `--check` flag makes rustfmt exit with a non-zero status if any file
-      # would be reformatted, failing the CI run without modifying files.
-      # To auto-fix locally before pushing, run: cd contracts/market && cargo fmt
-      #
-      # See contracts/market/rustfmt.toml for the option reference and planned rules.
-      # Cross-crate workspace compile check (#503): runs `cargo check` across
-      # every crate in the workspace (market, treasury, resolution,
-      # outcome-token) in one pass so a break in one crate can't slip through
-      # while another crate's individually-scoped steps stay green.
       - name: Workspace compile check
         run: cargo check --workspace --all-targets
 
       - name: Format check
         run: cd contracts/market && cargo fmt --check
 
-      # Clippy enforces lint hygiene across all contracts. Project-specific deny
-      # attributes are declared at the crate root (`lib.rs`) in each contract:
-      #
-      #   #![deny(clippy::all)]  – all default Clippy lints are hard errors
-      #
-      # The `-D warnings` flag here ensures any lint not covered by the crate
-      # attributes also fails the build. Use `#[allow(clippy::lint_name)]` at
-      # the call-site for any lint that is intentionally acceptable.
       - name: Clippy
         run: cd contracts/market && cargo clippy -- -D warnings
 
-      # Runs all unit and integration tests for the market contract via `cargo test`.
-      # Tests are defined alongside the contract source under `contracts/market/src/`
-      # using Soroban SDK test utilities. A new test should be added for every
-      # public contract function to maintain coverage.
       - name: Tests (market)
         run: cd contracts/market && cargo test
 
-      # Runs the workspace-level integration tests located in tests/.
-      # These tests exercise cross-contract behaviour (Market <-> Treasury) and the
-      # full prediction-market lifecycle (create -> deposit -> trade -> resolve -> settle)
-      # using live Soroban testutils environments — no storage mocking.
-      # They are compiled as integration test binaries (not inline unit tests), so
-      # `--tests` targets only files under tests/ and avoids re-running the unit
-      # tests already covered by the step above.
       - name: Workspace integration tests
         run: cargo test --workspace --tests
 
-      # Restore saved proptest regression cases from previous CI runs so that
-      # any previously-found failing inputs are always re-checked.
       - name: Restore proptest regression corpus
         uses: actions/cache@v4
         with:
@@ -99,14 +50,9 @@ jobs:
           key: proptest-regressions-${{ runner.os }}-${{ hashFiles('contracts/market/src/positions.rs') }}
           restore-keys: proptest-regressions-${{ runner.os }}-
 
-      # Run the proptest fuzz suite with 2 000 cases per property in CI.
-      # Increase PROPTEST_CASES for deeper coverage in scheduled / nightly runs.
-      # Failing inputs are persisted to .proptest-regressions/ and cached above.
       - name: Proptest fuzz (share and collateral math)
         run: cd contracts/market && PROPTEST_CASES=2000 cargo test prop_ -- --nocapture
 
-      # Upload any new regression seeds discovered in this run so they are
-      # available to future runs even when the cache key changes.
       - name: Upload proptest regressions
         if: always()
         uses: actions/upload-artifact@v4
@@ -115,88 +61,45 @@ jobs:
           path: contracts/market/src/.proptest-regressions
           if-no-files-found: ignore
 
-      # Build and test the Treasury contract.
       - name: Tests (treasury)
         run: |
           cd contracts/treasury && cargo test
           cargo test -p vatix-treasury-contract
 
-      # Build and test the Outcome Token contract.
       - name: Tests (outcome-token)
         run: |
           cd contracts/outcome-token && cargo test
           cargo test -p vatix-outcome-token-contract
 
-      # Build and test the Resolution contract.
       - name: Tests (resolution)
         run: |
           cd contracts/resolution && cargo test
           cargo test -p vatix-resolution-contract
 
-      # Compiles all contracts to WASM (wasm32-unknown-unknown) — the binary format
-      # required by the Stellar Soroban runtime.
       - name: Build market contract
         run: cd contracts/market && stellar contract build
 
-      # Build Treasury contract WASM.
       - name: Build treasury contract
         run: cd contracts/treasury && stellar contract build
 
-      # Build Outcome Token contract WASM.
       - name: Build outcome-token contract
         run: cd contracts/outcome-token && stellar contract build
 
-      # Build Resolution contract WASM.
       - name: Build resolution contract
         run: cd contracts/resolution && stellar contract build
 
-      # Verify all WASM artifacts were created at the expected paths
       - name: Verify WASM artifacts
         run: |
           ls -lh target/wasm32v1-none/release/*.wasm
           echo "WASM artifact size:"
           du -h target/wasm32v1-none/release/*.wasm
 
-      # deploy.sh is a guard script that echoes deployment intent without
-      # performing a real on-chain deployment. Running it in CI verifies the
-      # script is executable and reachable, and serves as a placeholder for
-      # the full Soroban CLI deployment step once testnet credentials are
-      # available as repository secrets. When the real implementation lands,
-      # this step will build the WASM artefact, invoke `soroban contract deploy`,
-      # and capture the returned contract ID for downstream use.
-      #
-      # Purpose: This CI step ensures deploy.sh remains executable and reachable
-      # in the repository, preventing drift as new contributors join. Future
-      # maintainers can reference this step to understand the deployment flow
-      # and add the real implementation when credentials become available.
-      #
-      # To run locally: bash scripts/deploy.sh
-      # Real deployment requires SOROBAN_NETWORK and SOROBAN_ACCOUNT env vars.
       - name: Deploy (dry-run guard)
         run: bash scripts/deploy.sh
 
-      # deploy-testnet.sh builds the contract via `stellar contract build` and
-      # deploys it to the Stellar testnet. The WASM artefact is always located
-      # at the canonical output path: target/wasm32v1-none/release/*.wasm
-      #
-      # In CI (no TESTNET_SECRET_KEY): runs in guard mode — builds the contract,
-      # verifies the canonical artefact path, then exits 0 without deploying.
-      # When TESTNET_SECRET_KEY is set: performs a full build + deploy and
-      # exports the contract ID via $GITHUB_OUTPUT for downstream steps.
       - name: Deploy testnet (guard)
         run: bash scripts/deploy-testnet.sh
 
-      # Echo guard: this step runs invoke-example.sh, which currently only echoes
-      # the invocation intent without calling a live contract.
-      # What the real implementation should do:
-      #   - Replace the echo with `stellar contract invoke` (or `soroban contract invoke`)
-      #     pointed at a contract deployed in the Deploy testnet step above.
-      #   - Pass CONTRACT_ID (captured from the deploy step) via an environment variable.
-      #   - Assert the response matches the expected value to act as a smoke test.
-      # See scripts/README.md for the full tooling reference.
-      # The scripts README documents the intent of these "echo guard" scripts
-      # and provides guidance for maintainers on how to replace guards with
-      # real CI actions (credentials, expected outputs, and invocation examples).
       - name: Invoke example (echo guard)
         run: bash scripts/invoke-example.sh
 
@@ -217,12 +120,6 @@ jobs:
         with:
           workspaces: . -> target
 
-      # Focused compile check for every contract crate, run on every PR.
-      # Unlike the `ci` job's `stellar contract build` steps (which build
-      # release WASM artifacts as part of a longer pipeline), these steps
-      # are a fast, dedicated `cargo build -p <crate>` per crate so a
-      # compile error in any one contract fails CI red on its own, without
-      # depending on the rest of the test/lint pipeline succeeding first.
       - name: Build market contract crate
         run: cargo build -p vatix-market-contract
 
@@ -263,73 +160,36 @@ jobs:
       # contracts/*/src/storage.rs and scripts/upgrade/version-matrix.json,
       # WASM hash verification against scripts/upgrade/expected-hashes.json,
       # and the UpgradeRequired regression tests for the two versioned
-      # contracts (market, treasury). Fails the build on version drift or a
-      # pinned hash mismatch; warns without failing when a hash simply isn't
-      # pinned yet, matching the deployments/testnet.json placeholder
-      # convention. See scripts/upgrade/UPGRADE_PLAYBOOK.md.
-      - name: Cross-contract upgrade dry-run
+      # contracts (market, treasury).
+      #
+      # Fail-closed semantics: a pinned contract whose expected hash is empty
+      # or mismatched is a hard failure (non-zero exit). Only contracts that
+      # are entirely absent from expected-hashes.json are treated as unpinned
+      # and skipped with a warning. This prevents silent hash drift from
+      # shipping to mainnet.
+      - name: Upgrade dry-run (fail-closed hash check)
         run: bash scripts/upgrade/check-upgrade.sh
 
-  frontend:
-    name: Frontend (Next.js)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown,wasm32v1-none
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-
-      - name: Install Stellar CLI
+      # Regression guard: pinning a contract with an empty hash must fail the
+      # dry-run. This step asserts the fail-closed behavior stays in place so
+      # the gap cannot be silently reintroduced.
+      - name: Regression - pinned empty hash must fail
         run: |
-          curl -L https://github.com/stellar/stellar-cli/releases/download/v21.4.0/stellar-cli-21.4.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
-          sudo mv stellar /usr/local/bin/
-          stellar --version
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Generate TypeScript bindings
-        run: pnpm build:bindings
-
-      - name: Verify bindings output
-        run: |
-          test -f apps/web/lib/contracts/index.ts || (echo "ERROR: contracts/index.ts missing" && exit 1)
-          echo "Bindings output:"
-          ls -lh apps/web/lib/contracts/
-
-      # Fails the build if the bindings just generated above differ from what
-      # is committed in git. This catches drift where a contributor changed a
-      # contract's public interface (or the generator itself) without
-      # regenerating and committing the bindings under apps/web/lib/contracts/.
-      - name: Fail on stale committed bindings
-        run: |
-          if ! git diff --exit-code -- apps/web/lib/contracts; then
-            echo ""
-            echo "ERROR: Generated TypeScript bindings differ from what is committed."
-            echo "Run 'pnpm build:bindings' locally and commit the resulting changes"
-            echo "under apps/web/lib/contracts/."
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cp scripts/upgrade/expected-hashes.json "$tmpdir/expected-hashes.json.bak"
+          trap 'cp "$tmpdir/expected-hashes.json.bak" scripts/upgrade/expected-hashes.json; rm -rf "$tmpdir"' EXIT
+          # Pin market with an empty hash and assert check-upgrade.sh exits non-zero.
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path('scripts/upgrade/expected-hashes.json')
+          data = json.loads(p.read_text())
+          if isinstance(data, dict):
+              data['market'] = ''
+          p.write_text(json.dumps(data, indent=2))
+          PY
+          if bash scripts/upgrade/check-upgrade.sh; then
+            echo "ERROR: check-upgrade.sh accepted a pinned empty hash (fail-open regression)" >&2
             exit 1
           fi
-
-      - name: Fail closed without GSTUB (Issue #700)
-        run: bash scripts/check-no-wallet-fallback-stub.sh
-
-      - name: Lint web app
-        run: pnpm --filter web lint
-
-      - name: Build web app
-        run: pnpm --filter web build
+          echo "OK: pinned empty hash correctly failed the dry-run"

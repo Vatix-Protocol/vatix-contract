@@ -145,6 +145,50 @@ as a pre-deploy CI gate.
 
 ---
 
+## Pinned-hash verification (fail-closed)
+
+[`scripts/upgrade/check-upgrade.sh`](../scripts/upgrade/check-upgrade.sh)
+compares the freshly built WASM hash against the entries in
+[`expected-hashes.json`](../expected-hashes.json). The check is
+**fail-closed**:
+
+- **Pinned entry** (a contract listed in `expected-hashes.json` with a
+  non-empty `sha256`): the built hash **must** match exactly. Any mismatch —
+  including a pinned entry whose expected hash is empty or missing — causes
+  `check-upgrade.sh` to exit non-zero. There is no warning-only path and no
+  silent Ed25519 fallback when adapters are enabled.
+- **Unpinned entry** (contract absent from `expected-hashes.json`): the check
+  reports the computed hash and exits zero. This is the default for local
+development and for contracts that have not yet been promoted to a pinned
+release.
+
+Because the check is fail-closed, `scripts/upgrade-dry-run.sh` and the CI
+`upgrade-dry-run` job propagate the non-zero exit and abort the pipeline.
+
+### Intentionally pinning a contract
+
+1. Build the release WASM and record its hash:
+
+   ```bash
+   bash scripts/verify-wasm-hash.sh contracts/market
+   ```
+
+2. Add or update the entry in `expected-hashes.json` with the full
+   `sha256:<hex>` value. Do **not** leave the `sha256` field empty — an empty
+   value on a pinned entry is treated as drift and fails the check.
+
+3. Commit the updated `expected-hashes.json` alongside the WASM-affecting
+   change so CI and reviewers see the pin in the same PR.
+
+### Intentionally unpinning a contract
+
+Remove the contract's entry from `expected-hashes.json` (or delete the file
+entry entirely). The check will then report the computed hash without
+failing. Unpinning is appropriate only for contracts that are not yet part of
+a released, audited set; document the reason in the PR description.
+
+---
+
 ## Checklist for contributors
 
 Before opening a PR that touches storage:
@@ -154,6 +198,7 @@ Before opening a PR that touches storage:
 - [ ] `StorageKey` enum and `lib.rs` doc table kept in sync
   (see [Reviewer Checklist](../contracts/market/STORAGE_MIGRATION_GUIDE.md#reviewer-checklist-storagekey-table-drift))
 - [ ] `assert_version()` tests pass locally
+- [ ] `expected-hashes.json` updated for any pinned contract whose WASM changed
 - [ ] Dry-run simulation succeeds (`bash scripts/upgrade-dry-run.sh`)
 - [ ] WASM hash documented in PR description
 
@@ -164,6 +209,8 @@ Before opening a PR that touches storage:
 - [Storage Migration Guide](../contracts/market/STORAGE_MIGRATION_GUIDE.md) —
   full procedures for testnet and mainnet, rollback plans, and common pitfalls.
 - [Migration History](../contracts/market/MIGRATION.md) — per-version changelog.
+- [Upgrade Playbook](../scripts/upgrade/UPGRADE_PLAYBOOK.md) — end-to-end
+  upgrade runbook including the pinned-hash gate.
 - [Build Verification](../README.md#build-verification) — how to confirm your
   WASM hash matches CI.
 - [Testnet Smoke Test](../README.md#testnet-smoke-test) — lightweight
