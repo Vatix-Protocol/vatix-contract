@@ -8,6 +8,63 @@ See `contracts/outcome-token/src/lib.rs` for the full entry-point reference
 and `docs/cross-contract-call-graph.md` for how this contract is invoked from
 the Market contract.
 
+## SAC metadata invariants
+
+This contract is a Stellar Asset Contract (SAC)-compatible token: it exposes
+the standard SEP-41 metadata surface (`name`, `symbol`, `decimals`) so wallets,
+explorers, and the Market contract can treat outcome tokens like any other
+SAC asset. Metadata is **immutable after initialization** and is set exactly
+once, at deploy/init time, from the market's registered parameters.
+
+### Invariants
+
+1. **Set-once / idempotent.** `name`, `symbol`, and `decimals` are written a
+   single time during `initialize`. A second `initialize` (or any
+   `set_metadata`) call is rejected with `ContractError::AlreadyInitialized`
+   (`#867`). Replaying the same init payload is a no-op that returns the
+   existing values — it never mutates them.
+2. **Non-empty, bounded strings.** `name` and `symbol` must be non-empty and
+   within `MAX_NAME_LEN` / `MAX_SYMBOL_LEN` (see `src/lib.rs`). Empty or
+   over-long values are rejected with `ContractError::InvalidMetadata`.
+3. **Fixed decimals.** `decimals` must equal `OUTCOME_TOKEN_DECIMALS` (7, the
+   Stellar SAC convention). Any other value is rejected with
+   `ContractError::InvalidMetadata` — outcome tokens must not silently change
+   scale, since that would corrupt collateral math in the Market contract.
+4. **Admin-gated writes.** Only the stored admin may call `initialize` /
+   `set_metadata`. Untrusted callers are denied by default with
+   `ContractError::Unauthorized`; there is no public write path to metadata.
+5. **Reads are always safe.** `name`/`symbol`/`decimals` are pure reads with
+   no auth requirement and never fail once initialized; before init they
+   return `ContractError::NotInitialized` (fail-closed, never a default).
+
+### Error codes
+
+| Code | Error | Meaning |
+|---|---|---|
+| `#867-1` | `AlreadyInitialized` | Metadata already set; write rejected |
+| `#867-2` | `InvalidMetadata` | Empty/over-long name/symbol or wrong decimals |
+| `#867-3` | `Unauthorized` | Caller is not the stored admin |
+| `#867-4` | `NotInitialized` | Metadata read before `initialize` |
+
+All metadata entrypoints emit a correlation id (the market id, or `0` for
+contract-wide init) in their events/logs so ops can trace a rejected write
+back to the originating market without leaking secrets.
+
+### Fail-closed behavior
+
+Metadata writes are fail-closed: if the admin auth check cannot be satisfied
+(expired/absent auth, wrong role) or a dependency read fails, the call is
+rejected rather than defaulting. There is no partial write — either all three
+fields are set atomically or none are.
+
+### Tests
+
+`contracts/outcome-token/src/lib.rs` covers: successful init setting all three
+fields, re-init rejected as `AlreadyInitialized`, idempotent replay returning
+existing values, empty/over-long name/symbol rejected, wrong `decimals`
+rejected, non-admin `initialize`/`set_metadata` rejected as `Unauthorized`,
+and reads before init returning `NotInitialized`.
+
 ## Dual-ledger reconciliation (Position ↔ OutcomeToken)
 
 `Position` (Market contract storage: `yes_shares`/`no_shares`) and this
