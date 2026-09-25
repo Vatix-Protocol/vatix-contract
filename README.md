@@ -576,3 +576,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-872 -->
 - #872: Cross-contract call graph auth tests
+
+<!-- handsoff-issue-873 -->
+- #873: AUTH_TABLE 100% coverage + CI
