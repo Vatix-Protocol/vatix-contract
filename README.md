@@ -548,3 +548,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-934 -->
 - #934: Stellar Wave label policy
+
+<!-- handsoff-issue-935 -->
+- #935: Freighter claim checklist
