@@ -49,3 +49,22 @@ file's doc comment for v4, adding `StorageKey::AdapterEnabled` for #488), but
   fixed stale version references.
 - `contracts/market/src/storage.rs` — new guide-linkage test and checklist
   doc comment.
+
+## Contributor runbook
+
+The drift check is deterministic and dependency-free: it runs as part of the
+existing `cargo test` step in `.github/workflows/ci.yml` (no new workflow
+step, no new tooling). To bump storage safely:
+
+1. Increment `STORAGE_VERSION` in `contracts/market/src/storage.rs`.
+2. Add a `### Version {N} (Current)` section to
+   `contracts/market/STORAGE_MIGRATION_GUIDE.md` and demote the previous
+   `(Current)` heading to plain `### Version {N-1}`.
+3. Document any new `StorageKey` variants and their migration path in the
+   new section.
+4. Run `cargo test -p vatix-market` locally; the guide-linkage test fails
+   closed if steps 1–3 are inconsistent.
+
+If the check fails in CI, treat it as a hard stop: do not merge a
+`STORAGE_VERSION` bump until the guide matches, since a mismatch would leave
+on-chain state unreadable after upgrade.
