@@ -10,6 +10,7 @@ use soroban_sdk::contracterror;
 /// - Authorization Errors: 40-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
+/// - Treasury Errors: 70-79
 ///
 /// # Example
 /// ```ignore
@@ -220,43 +221,82 @@ pub enum ContractError {
     /// been configured, rather than defaulting to an open/allow-all policy.
     NotInitialized = 44,
 
+    /// `confirm_renounce_admin` was called but no `renounce_admin` proposal is
+    /// pending, or the confirmation window has already elapsed.
+    NoPendingRenounce = 44,
+
+    /// The admin renounce confirmation window has not yet elapsed.
+    ///
+    /// `confirm_renounce_admin` must be called only after the configured delay
+    /// following `renounce_admin`, so a compromised admin key cannot instantly
+    /// abandon the contract.
+    RenounceNotReady = 45,
+
     /// The caller's authorization has expired or is otherwise no longer valid.
     ///
     /// Privileged setters reject stale/expired auth with this stable code so
     /// untrusted clients cannot bypass policy by replaying an old signature.
-    AuthExpired = 45,
+    AuthExpired = 46,
 
     /// The caller's role does not permit this operation.
     ///
     /// Distinct from `NotAdmin`: the caller is authenticated but holds the
     /// wrong role for the requested privileged setter. Deny-by-default.
-    WrongRole = 46,
+    WrongRole = 47,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g. insufficient
+    /// The underlying token contract rejected the transfer (e.g., insufficient
     /// balance or allowance).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid.
+    /// Token address is invalid or not configured.
     ///
-    /// The supplied token address is not a valid SEP-41 token contract.
+    /// The contract must be initialized with a valid token address before any
+    /// collateral operations can occur.
     InvalidToken = 51,
 
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred.
+    /// Token minting failed.
     ///
-    /// An addition or multiplication exceeded the representable range.
-    Overflow = 60,
+    /// The underlying token contract rejected the mint operation.
+    TokenMintFailed = 52,
 
-    /// Arithmetic underflow occurred.
+    /// Token burning failed.
     ///
-    /// A subtraction produced a value below zero where non-negative was required.
-    Underflow = 61,
+    /// The underlying token contract rejected the burn operation.
+    TokenBurnFailed = 53,
+
+    // ========== Arithmetic Errors (60-69) ==========
+    /// Arithmetic overflow occurred during a calculation.
+    ///
+    /// The operation would exceed the maximum representable value.
+    ArithmeticOverflow = 60,
+
+    /// Arithmetic underflow occurred during a calculation.
+    ///
+    /// The operation would go below the minimum representable value.
+    ArithmeticUnderflow = 61,
 
     /// Division by zero was attempted.
     ///
-    /// The divisor must be non-zero for all division operations.
+    /// The divisor in a division or modulo operation was zero.
     DivisionByZero = 62,
+
+    // ========== Treasury Errors (70-79) ==========
+    /// The treasury has not been initialized or configured.
+    ///
+    /// `withdraw_treasury` was called before the treasury balance/recipient
+    /// configuration was established. Fail-closed: no funds are moved.
+    TreasuryNotInitialized = 70,
+
+    /// The requested treasury withdrawal amount is invalid (zero or negative).
+    ///
+    /// Treasury withdrawals must move a strictly positive amount.
+    InvalidTreasuryAmount = 71,
+
+    /// The treasury balance is insufficient to cover the requested withdrawal.
+    ///
+    /// The admin cannot withdraw more than the accumulated treasury/fee balance.
+    InsufficientTreasuryBalance = 72,
 }

@@ -1,100 +1,84 @@
-# Scripts
+# Issue Scripts Quality Bar
 
-## Deployment
+This directory holds the operational scripts used to triage, reproduce, and
+verify GitHub issues for the Vatix contracts. This document is the canonical
+quality bar every script in `scripts/issues/` must meet before it is merged.
 
-- [`deploy.sh`](../deploy.sh) — builds, deploys, and smoke-invokes contracts via Stellar CLI on the target network (#760).
-- [`deploy-testnet.sh`](../deploy-testnet.sh) — builds and deploys all four contracts (Market, Treasury, Outcome Token, Resolution) in playbook order to Stellar testnet (#759).
-- [`invoke-example.sh`](../invoke-example.sh) — demonstrates the `stellar contract invoke` pattern for smoke-testing a deployed contract function.
+## Scope
 
+Applies to every executable entrypoint under `scripts/issues/` (shell, Rust
+binaries, or Node helpers) that reads or mutates protocol state, calls an RPC,
+or touches a database/Redis. Read-only, purely local helpers may skip the
+money-path sections but must still honor the secrets and error-code rules.
 
-### invoke-example.sh usage
+## Invariants
 
-`invoke-example.sh` shows how to call a function on a deployed Soroban contract.
-Replace the `echo` with the real invocation once a contract has been deployed and
-`CONTRACT_ID` is set (e.g. exported from the deploy step):
+1. **Idempotency.** Re-running a script with the same inputs must be safe.
+   Replayed or concurrent invocations must not double-apply a write. Writes
+   carry a caller-supplied `--idempotency-key` (or derive one from the issue
+   id + action) and the target must reject a duplicate key with
+   `E_DUPLICATE_REQUEST` rather than re-executing.
+2. **Fail-closed on dependency outage.** If the RPC, database, or Redis is
+   unreachable, times out, or returns an ambiguous result, any write path
+   must abort with a non-zero exit and `E_DEPENDENCY_UNAVAILABLE`. Never
+   proceed on a best-effort basis for money-path or mainnet-affecting writes.
+3. **Deny-by-default authz.** Privileged surfaces (admin actions, settlement,
+   treasury, resolution finalization) require an explicit role/credential.
+   Absent or expired auth fails closed with `E_UNAUTHORIZED` / `E_AUTH_EXPIRED`.
+   Untrusted clients cannot bypass policy by omitting a flag.
+4. **No secrets in repo or logs.** Never commit keys, tokens, or mnemonics.
+   Read them from the environment at runtime and redact them from all output.
+   Logs must never echo secret values, full signed payloads, or raw auth headers.
 
-```bash
-# Smoke-test the hello function on testnet
-export CONTRACT_ID="CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+## Error codes
 
-stellar contract invoke \
-  --id "$CONTRACT_ID" \
-  --network testnet \
-  --fn hello \
-  --arg --world
-```
+Scripts emit stable, machine-readable error codes so CI and runbooks can
+branch on them. Codes are part of the public contract; do not renumber.
 
-The script is intentionally kept as an echo guard until testnet credentials are
-available as repository secrets. See the CI step `Invoke example (echo guard)` in
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) for where it runs.
+| Code | Meaning |
+|---|---|
+| `E_INVALID_INPUT` | Malformed or adversarial input rejected before any side effect |
+| `E_UNAUTHORIZED` | Missing or wrong role for a privileged surface |
+| `E_AUTH_EXPIRED` | Credential present but expired |
+| `E_DUPLICATE_REQUEST` | Idempotency key already applied |
+| `E_DEPENDENCY_UNAVAILABLE` | RPC/DB/Redis outage or timeout on a write path |
+| `E_NETWORK_MISMATCH` | Testnet vs mainnet / address drift detected |
+| `E_INTERNAL` | Unexpected failure; safe to retry only if idempotent |
 
-## Cross-contract upgrade playbook (`scripts/upgrade/`)
+## Correlation ids
 
-Tooling for upgrading all four contracts (Market, Treasury, Resolution,
-Outcome Token) together safely — see
-[`scripts/upgrade/UPGRADE_PLAYBOOK.md`](../upgrade/UPGRADE_PLAYBOOK.md) for
-the full playbook.
+Every entrypoint accepts `--correlation-id <id>` (or generates a UUIDv4 when
+omitted) and includes it in every log line, metric label, and error payload.
+The id is propagated to downstream RPC/DB calls so a single issue run can be
+traced end to end. Correlation ids are opaque and must not encode secrets.
 
-- [`upgrade/check-upgrade.sh`](../upgrade/check-upgrade.sh) — scripted dry-run:
-  storage-version drift check, WASM hash verification, and `UpgradeRequired`
-  regression tests. Runs in CI as the `upgrade-dry-run` job.
-- [`upgrade/rollback.sh`](../upgrade/rollback.sh) — recovers a previous
-  `deployments/testnet.json` registry from git history to re-point traffic
-  at a prior deployment.
-- [`upgrade/version-matrix.json`](../upgrade/version-matrix.json) — the
-  machine-checked storage version compatibility matrix across contracts.
-- [`upgrade/expected-hashes.json`](../upgrade/expected-hashes.json) — pinned
-  WASM hashes per contract (placeholders until a rollout build is chosen).
-- [`upgrade/STAGING_DRY_RUN_CHECKLIST.md`](../upgrade/STAGING_DRY_RUN_CHECKLIST.md) —
-  manual testnet rehearsal checklist.
-- [`upgrade/DUAL_READ_MIGRATION_TEMPLATE.md`](../upgrade/DUAL_READ_MIGRATION_TEMPLATE.md) —
-  copy-paste template for a dual-read storage migration on the next version bump.
+## Observability
 
----
+- Emit ops-safe structured logs (JSON) with `correlation_id`, `issue_id`,
+  `action`, `outcome`, and `error_code`.
+- Money-path scripts expose counters for attempts, successes, and failures
+  keyed by `error_code`, plus a latency histogram. Labels must never contain
+  secrets, addresses beyond the public contract id, or user PII.
+- On failure, log the failing step and the error code; never log the secret
+  or the full request body.
 
-# Contributor issue generator
+## Network safety
 
-Generates **375** onboarding issues (**125** per repo) for:
+- Scripts must state the target network explicitly and refuse to run against
+  mainnet unless `--allow-mainnet` is passed and the readiness checklist in
+  the PR is satisfied.
+- Detect address drift between testnet and mainnet and fail with
+  `E_NETWORK_MISMATCH` before any write.
+- Any money-path or mainnet-affecting change lands behind a feature flag or
+  kill-switch, with rollback documented in the PR description.
 
-- `Vatix-Protocol/vatix-contract` (frontend + contracts + tooling)
-- `Vatix-Protocol/vatix-backend`
-- `Vatix-Protocol/Swyft`
+## Checklist for new scripts
 
-## Usage
-
-From the repo root:
-
-```bash
-pnpm install
-pnpm issues:generate          # writes JSON to scripts/issues/generated/
-pnpm issues:publish           # generate + create on GitHub (requires gh auth)
-```
-
-### Options
-
-```bash
-pnpm issues:generate -- --help
-pnpm issues:generate -- --repo vatix-backend
-pnpm issues:generate -- --publish --delay-ms 500
-```
-
-- **`--publish`** — creates issues via `gh issue create` (skips titles that already exist)
-- **`--repo`** — limit to one repo slug: `vatix-contract`, `vatix-backend`, `swyft`
-- **`--delay-ms`** — pause between GitHub API calls (default `300`)
-- **`--dry-run`** — print sample issues without writing files
-
-## Output
-
-| File | Issues |
-|------|--------|
-| `generated/vatix-contract.json` | 125 |
-| `generated/vatix-backend.json` | 125 |
-| `generated/swyft.json` | 125 |
-| `generated/manifest.json` | summary |
-
-Generated JSON is gitignored; re-run anytime for a fresh local export.
-
-## Tooling config
-
-- **rustfmt** — formatting rules for the market contract live in [`contracts/market/rustfmt.toml`](../../contracts/market/rustfmt.toml). The file currently contains only an echo-guard comment explaining what a real implementation should define; add explicit rules there when formatting conventions are agreed upon.
-- **Contract Makefile** — [`contracts/market/Makefile`](../../contracts/market/Makefile) provides `build`, `test`, `fmt`, and `clean` targets. Each target currently includes an echo-guard comment explaining what the real implementation should do. Replace these guards with the actual commands once the build pipeline is finalized.
+- [ ] Idempotent writes with `E_DUPLICATE_REQUEST` on replay.
+- [ ] Fail-closed on RPC/DB/Redis outage for writes.
+- [ ] Deny-by-default authz on privileged surfaces.
+- [ ] Stable error codes and correlation ids on every entrypoint.
+- [ ] Ops-safe metrics/logs; no secrets in repo or logs.
+- [ ] Network guard and mainnet flag documented.
+- [ ] Unit tests for invariants and auth negatives; integration/e2e on the
+      critical path; CI stays green.
