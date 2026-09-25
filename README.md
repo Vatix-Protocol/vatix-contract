@@ -548,3 +548,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-855 -->
 - #855: Market: oracle adapter ADR-001
+
+<!-- handsoff-issue-856 -->
+- #856: Market: resolve gated by resolution finalize
