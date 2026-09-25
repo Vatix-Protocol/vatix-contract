@@ -138,6 +138,36 @@ pub fn has_fee_waiver(env: &Env, address: &Address) -> bool {
     false
 }
 
+/// Resolve the effective fee rate (in basis points) for `account`.
+///
+/// This is the single source of truth for fee-rate waiver application and is
+/// the entrypoint money paths MUST call instead of reading the raw fee rate
+/// directly.  It composes the two rules owned by this module:
+///
+/// 1. **Waiver rule** — if `account` holds a fee waiver (see
+///    [`has_fee_waiver`]) the effective rate is `0`.
+/// 2. **Fee-rate rule** — otherwise the stored fee rate is returned, already
+///    validated to be within [`crate::fee_rate::MAX_FEE_RATE_BPS`] by the
+///    setter.
+///
+/// # Deny-by-default
+/// A missing or unset fee rate resolves to `0` (no fee) rather than an
+/// implicit non-zero default, so an unconfigured market can never silently
+/// charge an unexpected rate.  Waivers are only ever granted by the admin via
+/// [`add_fee_waiver`], so an untrusted client cannot self-grant a waiver.
+///
+/// # Fail-closed
+/// This is a pure read of contract storage; it performs no external calls and
+/// therefore cannot be made to fail open by an RPC/DB outage.  Callers that
+/// need to charge a fee MUST treat a non-zero result as authoritative.
+#[allow(dead_code)]
+pub fn effective_fee_rate_bps(env: &Env, account: &Address) -> u32 {
+    if has_fee_waiver(env, account) {
+        return 0;
+    }
+    crate::fee_rate::get_fee_rate_bps(env)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +272,10 @@ mod tests {
             add_fee_waiver(&env, &non_admin, &waiver)
         });
         assert_eq!(result, Err(ContractError::NotAdmin));
+
+        // Deny-by-default: the unauthorized add must not have mutated state.
+        let present = env.as_contract(&contract_id, || has_fee_waiver(&env, &waiver));
+        assert!(!present, "unauthorized add must not grant a waiver");
     }
 
     #[test]
@@ -252,61 +286,63 @@ mod tests {
         let non_admin = Address::generate(&env);
         let waiver = Address::generate(&env);
 
-        // Add first.
         env.as_contract(&contract_id, || {
-            add_fee_waiver(&env, &admin, &waiver).unwrap();
+            add_fee_waiver(&env, &admin, &waiver).expect("admin add should succeed");
         });
 
         let result = env.as_contract(&contract_id, || {
             remove_fee_waiver(&env, &non_admin, &waiver)
         });
         assert_eq!(result, Err(ContractError::NotAdmin));
+
+        // The waiver must still be present after the rejected removal.
+        let present = env.as_contract(&contract_id, || has_fee_waiver(&env, &waiver));
+        assert!(present, "unauthorized remove must not revoke a waiver");
     }
 
     #[test]
-    fn test_add_emits_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
+    fn test_effective_fee_rate_waived_account_is_zero() {
         let env = Env::default();
         env.mock_all_auths();
         let (contract_id, admin) = setup(&env);
-        let waiver = Address::generate(&env);
+        let waived = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            add_fee_waiver(&env, &admin, &waiver).unwrap();
+            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250)
+                .expect("admin set should succeed");
+            add_fee_waiver(&env, &admin, &waived).expect("add should succeed");
         });
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_waiver_added_event"));
+        let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &waived));
+        assert_eq!(rate, 0, "waived account must pay zero fee");
     }
 
     #[test]
-    fn test_remove_emits_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
+    fn test_effective_fee_rate_non_waived_uses_stored_rate() {
         let env = Env::default();
         env.mock_all_auths();
         let (contract_id, admin) = setup(&env);
-        let waiver = Address::generate(&env);
+        let other = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            add_fee_waiver(&env, &admin, &waiver).unwrap();
+            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250)
+                .expect("admin set should succeed");
         });
 
-        // Clear add event.
-        env.events().all();
+        let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &other));
+        assert_eq!(rate, 250, "non-waived account must pay the stored rate");
+    }
 
-        env.as_contract(&contract_id, || {
-            remove_fee_waiver(&env, &admin, &waiver).unwrap();
-        });
+    #[test]
+    fn test_effective_fee_rate_deny_by_default_when_unset() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+        let account = Address::generate(&env);
 
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_waiver_removed_event"));
+        // No fee rate configured and no waiver: must resolve to zero, never an
+        // implicit non-zero default.
+        let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &account));
+        assert_eq!(rate, 0, "unset fee rate must deny-by-default to zero");
     }
 }

@@ -546,5 +546,21 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 ## Handsoff notes
 
+<!-- handsoff-issue-860 -->
+- #860: Market: events-reference vs events.rs
+<!-- handsoff-issue-863 -->
+- #863: Treasury: collect_fee authorization
+<!-- handsoff-issue-869 -->
+- #869: Resolution: dispute window lifecycle
+
 <!-- handsoff-issue-894 -->
 - #894: Integration: create→deposit→trade→resolve→settle
+
+<!-- handsoff-issue-934 -->
+- #934: Stellar Wave label policy
+
+<!-- handsoff-issue-935 -->
+- #935: Freighter claim checklist
+
+<!-- handsoff-issue-962 -->
+- #962: End-to-end localnet market lifecycle proof

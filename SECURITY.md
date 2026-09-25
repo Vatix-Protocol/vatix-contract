@@ -23,6 +23,28 @@ These invariants must hold on every network, including localnet:
 - Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
   require an explicit authorized signer and reject unauthenticated callers.
 - Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
+  failed dependency must never
+- `contracts/market` — market creation, trading, deposits, settlement
+- `contracts/treasury` — protocol fee custody and distribution
+- `contracts/resolution` — challenge-based outcome resolution
+- `contracts/outcome-token` — per-market YES/NO outcome tokens
+- Deployment/upgrade tooling under `scripts/` (e.g. `scripts/upgrade/`)
+- Issue/ops scripts under `scripts/issues/` — see
+  [`scripts/issues/README.md`](scripts/issues/README.md) for the quality bar
+  (idempotency, fail-closed writes, deny-by-default authz, no secrets in
+  repo or logs) that these scripts must meet
+- Documentation that describes on-chain invariants (`AUTH_TABLE.md`,
+  `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
+  inaccuracy could lead to a mistaken security assumption
+
+These invariants must hold on every network, including localnet:
+
+- The contract is the **source of truth** for balances, swaps, and admin state.
+  Clients (including the deploy scripts) never compute or cache authoritative
+  balances.
+- Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
+  require an explicit authorized signer and reject unauthenticated callers.
+- Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
   failed dependency must never be treated as success.
 - **No secrets** are committed to the repository or written to logs. Deploy
   scripts read keys from the environment or a local keystore only.

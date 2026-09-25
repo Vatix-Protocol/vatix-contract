@@ -1,41 +1,23 @@
-# Contributing to vatix-contract
+# Contributing to Vatix Protocol
 
-Guide for adding a new contract crate or working on an existing one
-(`market`, `treasury`, `resolution`, `outcome-token`).
+Thanks for contributing to the Vatix-Protocol monorepo. This guide covers the
+baseline expectations for every package, with a dedicated section for the
+`vatix-contract` issue scripts.
 
-## Workspace layout
+## Getting started
 
-- Each contract lives under `contracts/<name>/` as its own crate with its
-  own `Cargo.toml`, `src/lib.rs`, `src/test.rs` (or inline `#[cfg(test)]`
-  modules), and `rustfmt.toml`/`Makefile` where needed.
-- Root `Cargo.toml` uses `members = ["contracts/*"]`, so any new directory
-  under `contracts/` is picked up automatically — no manual registration
-  needed. Shared workspace dependency versions (e.g. `soroban-sdk`,
-  `ed25519-dalek`) are pinned once in `[workspace.dependencies]`; prefer
-  `{ workspace = true }` over restating a version in the crate's own
-  `Cargo.toml`.
-- Cross-contract integration tests live at the repo root under `tests/`
-  and are compiled as the `vatix-contract-tests` package (see root
-  `Cargo.toml`).
+1. Fork the repository and create a topic branch off `main`.
+2. Keep changes scoped to a single issue; avoid unrelated refactors.
+3. Run the package's test suite locally before opening a PR.
+4. Open a PR that links the issue it resolves and describes the rollback plan
+   for any money-path or mainnet-affecting change.
 
-## Soroban contract patterns
+## General expectations
 
-- `#![no_std]` at the crate root; use `soroban_sdk` types (`Vec`, `String`,
-  `Address`, ...) instead of `std` equivalents in contract code. `std` is
-  only pulled in inside `#[cfg(test)]` modules that need it (e.g. to read
-  a fixture file).
-- Public contract functions return `Result<T, ContractError>` — add new
-  error variants to `error.rs` rather than panicking.
-- Release builds compile with `panic = "abort"` (workspace `[profile.release]`
-  in the root `Cargo.toml`) since WASM has no stack-unwinding support — see
-  [README.md § Panic Strategy](README.md#panic-strategy-soroban-contract-builds)
-  for the smoke-test command and why `cargo test`'s `catch_unwind`-based
-  assertions don't carry over to a deployed contract.
-- Emit a `#[contractevent]` (see `events.rs` in any contract) for state
-  changes that off-chain indexers care about, following the existing
-  `EVENT_VERSION` topic-versioning pattern.
-- Validate inputs in `validation.rs` and keep math (fees, shares, payouts)
-  in small, pure, unit-testable functions.
+- Match existing patterns, types, and module structure.
+- Never commit secrets, tokens, or credentials.
+- Keep CI green; add a required check if a new surface is ungated.
+- Update docs and runbooks when behavior changes.
 
 ## Localnet deploy contributor path (#893)
 
@@ -130,124 +112,60 @@ kill-switch, with the rollback documented in the PR description.
 See [SECURITY.md § Localnet and privileged surfaces](SECURITY.md#localnet-and-privileged-surfaces)
 for the security rationale behind these invariants.
 
+## Issue scripts quality bar (`scripts/issues/`)
+
+Scripts under `scripts/issues/` are operational tooling that can touch
+money-path state. They must meet the bar below before merge. See
+[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
+
+### Invariants
+
+- **Idempotency.** Replayed or concurrent runs must be safe. Every write
+  entrypoint takes a stable idempotency key and must not double-apply effects.
+- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
+  error rather than partially applying
+
 ## Before opening a PR
 
-```bash
-# Format (per contract, uses that contract's rustfmt.toml)
-cd contracts/<name> && cargo fmt --check
+Scripts under `scripts/issues/` are operational tooling that can touch
+money-path state. They must meet the bar below before merge. See
+[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
 
-# Lint
-cd contracts/<name> && cargo clippy -- -D warnings
+### Invariants
 
-# Unit tests for the crate you touched
-cd contracts/<name> && cargo test
+- **Idempotency.** Replayed or concurrent runs must be safe. Every write
+  entrypoint takes a stable idempotency key and must not double-apply effects.
+- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
+  error rather than partially applying. Reads may degrade; writes must not.
+- **Deny-by-default authz.** Privileged surfaces require an explicit role and
+  reject untrusted callers. New privileged entrypoints start denied.
+- **No secrets.** Never log or commit secrets, keys, or tokens. Redact
+  sensitive fields in logs and metrics.
 
-# Workspace-wide compile check — catches drift between crates (#503)
-cargo check --workspace --all-targets
+### Error codes and correlation ids
 
-# Workspace integration tests
-cargo test --workspace --tests
-```
+- Use stable, documented error codes for script entrypoints; do not reuse a
+  code for a different failure mode.
+- Propagate a correlation id through every entrypoint and include it in logs
+  and error responses so operators can trace a run end to end.
 
-See [README.md § Workspace compile check](README.md#workspace-compile-check)
-for what that job guards against, [README.md § Clippy Lints](README.md#clippy-lints)
-for the lint policy, and `contracts/market/STORAGE_MIGRATION_GUIDE.md` /
-`contracts/market/MIGRATION.md` if your change touches persistent storage
-shape. If you add a regression test vector for math logic, add it to
-`test-vectors/` alongside a Rust test that loads and asserts it (see
-`contracts/market/src/tests_vectors.rs` for the pattern).
+### Observability
 
-## Reentrancy / CEI audit (#784)
+- Emit ops-safe metrics and logs on money paths (counts, latencies, outcomes)
+  without leaking secrets or user-identifying data.
+- Metrics must be actionable: alert on write failures and authz denials.
 
-**Required for every PR that adds or modifies a `TokenClient::transfer` call
-(or any other external token / cross-contract call that moves value).**
+### Safety
 
-All Vatix contracts follow the **Checks-Effects-Interactions (CEI)** pattern:
-all storage writes that gate re-entry must run *before* any external call that
-could trigger a callback into this contract.
+- Feature-flag or kill-switch any money-path or mainnet-affecting change.
+- Document the rollback strategy in the PR description.
+- Respect testnet vs mainnet address drift; never hardcode mainnet addresses
+  in scripts without an explicit, reviewed flag.
 
-### What to check
+## Pull request checklist
 
-For each new or modified `token_client.transfer(...)` call site:
-
-1. **Effects before Interactions**: Every storage write that a reentrant caller
-   could use to re-enter and claim value a second time (position balances,
-   `is_settled`, lock fields, token balances) must run *before* the transfer.
-2. **No post-transfer state writes that gate re-entry**: Confirm no storage
-   write that an attacker can exploit sits after the transfer call.
-3. **Regression test**: Add or cite a test that asserts the idempotency
-   boundary — a second call after the first succeeds must be rejected
-   (`InsufficientCollateral`, `PositionAlreadySettled`, etc.).
-4. **Audit doc**: Update `docs/reentrancy-cei-audit.md` with the new call
-   site, its CEI status, and a reference to the regression test.
-
-### PR template checkbox
-
-The `.github/PULL_REQUEST_TEMPLATE.md` contains a dedicated
-**Reentrancy / CEI audit** section that must be filled in for every PR
-touching a transfer call site. Reviewers must reject PRs that leave this
-section blank or unchecked.
-
-### Reference implementations
-
-| Function | File | Pattern |
-|---|---|---|
-| `deposit_collateral` | `contracts/market/src/deposit.rs` | State writes → `token.transfer(user → contract)` |
-| `withdraw_unused_collateral` | `contracts/market/src/withdraw.rs` | `set_position` → fee transfer → user transfer |
-| `withdraw_canceled_collateral` | `contracts/market/src/lib.rs` | `set_position` (zeroed) → `token.transfer(contract → user)` |
-| `settle_position` | `contracts/market/src/settlement.rs` | `set_position` (settled) → `burn_tokens` → `token.transfer` |
-
-See [`docs/reentrancy-cei-audit.md`](docs/reentrancy-cei-audit.md) for the
-complete per-function inventory across all four contracts.
-
-## Storage version reviewer checklist
-
-Any PR that **adds, removes, or renames a `StorageKey` variant** — or changes
-the type/semantics of a value stored under an existing key — **must** include a
-storage version bump.  Reviewers: reject the PR if the checklist below is not
-satisfied.
-
-> The automated CI guard lives in
-> [`contracts/market/src/storage.rs`](contracts/market/src/storage.rs) —
-> the test `test_storage_version_documented_in_migration_guide` will fail
-> `cargo test` if `STORAGE_VERSION` was bumped without updating
-> `STORAGE_MIGRATION_GUIDE.md`.  See
-> [`STORAGE_VERSION_CI_CHECK.md`](STORAGE_VERSION_CI_CHECK.md) for the
-> full rationale and how the guard works.
-
-### Reviewer checklist: `StorageKey` table drift
-
-- [ ] The `StorageKey` enum in `contracts/market/src/storage.rs` and the
-  **Storage layout** table in `contracts/market/src/lib.rs`'s module-level
-  doc comment are in sync — every variant has a row, and vice versa.
-- [ ] `STORAGE_VERSION` in `contracts/market/src/storage.rs` was incremented
-  when the storage layout changed (new key, removed key, type change, or
-  semantic change to an existing value).
-- [ ] A new `### Version {N} (Current)` section was added to
-  [`contracts/market/STORAGE_MIGRATION_GUIDE.md`](contracts/market/STORAGE_MIGRATION_GUIDE.md)
-  describing what changed and the migration path, and the previous
-  `(Current)` heading was demoted.
-- [ ] [`contracts/market/MIGRATION.md`](contracts/market/MIGRATION.md) has
-  an entry for this version bump with a brief changelog and the issue
-  reference.
-- [ ] `scripts/upgrade/version-matrix.json` `storageVersion` for `market`
-  matches the new constant value (the CI job
-  `cross-contract upgrade dry-run` enforces this via Phase A of
-  `scripts/upgrade/check-upgrade.sh`).
-- [ ] `cargo test -p vatix-market-contract version` passes locally
-  (exercises `test_storage_version_documented_in_migration_guide` and the
-  `UpgradeRequired` regression tests).
-
-For a complete step-by-step guide — including testnet/mainnet migration
-procedures, dual-read migration templates, rollback plans, and common
-pitfalls — see the
-[Storage Migration Guide](contracts/market/STORAGE_MIGRATION_GUIDE.md).
-
-## PR / issue hygiene
-
-- Keep PRs scoped to one issue; note in the PR description which
-  acceptance criteria it satisfies.
-- If an issue's scope is unclear, ask in the issue thread before
-  implementing.
-- Don't fix unrelated pre-existing issues in the same PR — file/flag them
-  separately instead.
+- [ ] Behavior matches the cited docs for the issue.
+- [ ] Authz, idempotency, and fail-closed behavior covered by tests.
+- [ ] Docs/runbooks updated; mainnet safety respected.
+- [ ] Observability is actionable; metrics on money paths.
+- [ ] Rollback/flag strategy documented in the PR description.
