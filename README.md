@@ -573,3 +573,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-871 -->
 - #871: Resolution: unauthorized finalize no state change
+
+<!-- handsoff-issue-872 -->
+- #872: Cross-contract call graph auth tests
