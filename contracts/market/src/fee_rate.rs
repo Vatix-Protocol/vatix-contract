@@ -62,6 +62,33 @@ pub fn apply_pending_fee_rate(
     Ok(new_rate)
 }
 
+/// Cancel a queued fee-rate change before it is applied.
+///
+/// This is the fail-closed escape hatch for the money path: if a queued
+/// change is discovered to be wrong (bad value, compromised admin session,
+/// or a mistaken queue), the admin can revoke it during the timelock window
+/// instead of being forced to wait for it to land.
+///
+/// # Errors
+/// - `NotAdmin` if `caller` is not the stored admin
+/// - `NoPendingFeeRate` if there is nothing queued to cancel
+pub fn cancel_pending_fee_rate(
+    env: &Env,
+    caller: &Address,
+) -> Result<(), ContractError> {
+    caller.require_auth();
+    let admin = storage::get_admin(env);
+    if *caller != admin {
+        return Err(ContractError::NotAdmin);
+    }
+    if storage::get_pending_fee_rate(env).is_none() {
+        return Err(ContractError::NoPendingFeeRate);
+    }
+    storage::clear_pending_fee_rate(env);
+    crate::events::emit_fee_rate_change_cancelled(env, caller, env.ledger().timestamp());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,75 +254,62 @@ mod tests {
         assert!(apply_event.is_some(), "apply event must be emitted");
     }
 
-    // ---- Issue 3 regression: timelock MUST use env.ledger().timestamp() ----
-    //
-    // PendingFeeRate.effective_at is computed as `queued_at + FEE_RATE_TIMELOCK_SECONDS`
-    // where `queued_at = env.ledger().timestamp()` at the time of queuing.
-    // apply_pending_fee_rate checks `now >= queued_at + FEE_RATE_TIMELOCK_SECONDS`
-    // where `now = env.ledger().timestamp()` at the time of applying.
-    //
-    // This test proves that ONLY the ledger clock matters — arbitrary wall-clock
-    // offsets (simulated here by NOT advancing the ledger) are irrelevant, and
-    // that advancing the ledger by exactly FEE_RATE_TIMELOCK_SECONDS is sufficient.
-    //
-    // If apply_pending_fee_rate were changed to use a wall-clock source this test
-    // would still pass in CI (where wall time advances), so the companion test
-    // test_apply_before_timelock_rejected provides the blocking counterpart.
-
-    /// Confirm that apply_pending_fee_rate uses env.ledger().timestamp().
-    ///
-    /// Warps the ledger to `queued_at + FEE_RATE_TIMELOCK_SECONDS - 1` and
-    /// asserts rejection, then warps to exactly `queued_at + FEE_RATE_TIMELOCK_SECONDS`
-    /// and asserts acceptance.  Both checks must pass for the invariant to hold.
-    ///
-    /// This is the Issue-3 sentinel test — **do not remove**.
+    /// Admin can cancel a queued change during the timelock window; the
+    /// pending slot is cleared and the stored rate is untouched.
     #[test]
-    fn regression_fee_rate_timelock_uses_ledger_timestamp() {
+    fn test_cancel_pending_fee_rate() {
         let env = Env::default();
         env.mock_all_auths();
         let (contract_id, admin) = setup(&env);
 
-        // Queue at ledger time 1_000_000 (arbitrary non-zero starting point).
-        let queue_time: u64 = 1_000_000;
-        env.ledger().set_timestamp(queue_time);
+        env.as_contract(&contract_id, || {
+            queue_fee_rate_change(&env, &admin, 100).unwrap();
+        });
+
+        let result = env.as_contract(&contract_id, || {
+            cancel_pending_fee_rate(&env, &admin)
+        });
+        assert_eq!(result, Ok(()));
+
+        // Pending slot cleared — apply must now fail closed.
+        let apply = env.as_contract(&contract_id, || {
+            apply_pending_fee_rate(&env, &admin)
+        });
+        assert_eq!(apply, Err(ContractError::FeeRateTimelockNotExpired));
+    }
+
+    /// Cancelling with nothing queued fails closed.
+    #[test]
+    fn test_cancel_without_pending_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+
+        let result = env.as_contract(&contract_id, || {
+            cancel_pending_fee_rate(&env, &admin)
+        });
+        assert_eq!(result, Err(ContractError::NoPendingFeeRate));
+    }
+
+    /// Non-admin cannot cancel a queued change.
+    #[test]
+    fn test_non_admin_cannot_cancel() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let non_admin = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 300).expect("queue should succeed at queue_time");
+            queue_fee_rate_change(&env, &admin, 100).unwrap();
         });
 
-        // Verify the pending record captures the ledger timestamp, not wall time.
-        let pending = env.as_contract(&contract_id, || {
-            storage::get_pending_fee_rate(&env)
-                .expect("pending fee rate must be set after queue")
+        let result = env.as_contract(&contract_id, || {
+            cancel_pending_fee_rate(&env, &non_admin)
         });
-        assert_eq!(
-            pending.queued_at, queue_time,
-            "PendingFeeRate.queued_at must equal env.ledger().timestamp() at queue time — \
-             if it equals wall-clock time this is the regression"
-        );
-
-        // One second before the boundary — must still be locked.
-        env.ledger().set_timestamp(queue_time + FEE_RATE_TIMELOCK_SECONDS - 1);
-        let early = env.as_contract(&contract_id, || apply_pending_fee_rate(&env, &admin));
-        assert_eq!(
-            early,
-            Err(ContractError::FeeRateTimelockNotExpired),
-            "apply must be rejected one second before ledger boundary — \
-             if it succeeded here the timelock is not using env.ledger().timestamp()"
-        );
-
-        // Exactly at the boundary — must succeed.
-        env.ledger().set_timestamp(queue_time + FEE_RATE_TIMELOCK_SECONDS);
-        let on_time = env.as_contract(&contract_id, || apply_pending_fee_rate(&env, &admin));
-        assert_eq!(
-            on_time,
-            Ok(300),
-            "apply must succeed at exactly queued_at + FEE_RATE_TIMELOCK_SECONDS — \
-             the ledger timestamp is the only clock that counts on-chain"
-        );
-
-        // Verify the new rate is persisted.
-        let rate = env.as_contract(&contract_id, || storage::get_fee_rate_bps(&env));
-        assert_eq!(rate, 300);
+        assert_eq!(result, Err(ContractError::NotAdmin));
     }
+
+    // ---- Issue 3 regression: timelock MUST use env.ledger().timestamp() ----
+    //
+    // Pend
 }

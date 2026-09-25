@@ -546,6 +546,8 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 ## Handsoff notes
 
+<!-- handsoff-issue-860 -->
+- #860: Market: events-reference vs events.rs
 <!-- handsoff-issue-863 -->
 - #863: Treasury: collect_fee authorization
 <!-- handsoff-issue-869 -->
