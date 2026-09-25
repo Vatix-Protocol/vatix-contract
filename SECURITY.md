@@ -1,14 +1,29 @@
 # Security Policy
 
-Vatix Protocol manages user funds through on-chain Soroban smart contracts.
-We take vulnerability reports seriously and ask that they be reported
-**privately**, not through public GitHub issues.
+## Reporting a Vulnerability
+
+Please report suspected vulnerabilities privately via GitHub Security Advisories
+("Report a vulnerability" under the repository's **Security** tab) or by emailing
+the maintainers listed in `CODEOWNERS`. Do not open a public issue for security
+reports. We aim to acknowledge reports within 72 hours.
 
 ## Scope
 
-This policy covers the smart contracts in this repository
-(`Vatix-Protocol/vatix-contract`):
+This policy covers the `vatix-contract` package and the localnet deploy path used
+by contributors. It does not cover third-party dependencies or the public Stellar
+networks themselves.
 
+## Invariants
+
+These invariants must hold on every network, including localnet:
+
+- The contract is the **source of truth** for balances, swaps, and admin state.
+  Clients (including the deploy scripts) never compute or cache authoritative
+  balances.
+- Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
+  require an explicit authorized signer and reject unauthenticated callers.
+- Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
+  failed dependency must never
 - `contracts/market` — market creation, trading, deposits, settlement
 - `contracts/treasury` — protocol fee custody and distribution
 - `contracts/resolution` — challenge-based outcome resolution
@@ -22,65 +37,33 @@ This policy covers the smart contracts in this repository
   `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
   inaccuracy could lead to a mistaken security assumption
 
-Out of scope: the `apps/web` frontend's UI/UX bugs that don't touch contract
-calls or key handling, third-party dependencies (report those upstream), and
-issues requiring physical access to a user's device or already-compromised
-keys.
+These invariants must hold on every network, including localnet:
 
-## Reporting a Vulnerability — do NOT open a public issue
+- The contract is the **source of truth** for balances, swaps, and admin state.
+  Clients (including the deploy scripts) never compute or cache authoritative
+  balances.
+- Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
+  require an explicit authorized signer and reject unauthenticated callers.
+- Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
+  failed dependency must never be treated as success.
+- **No secrets** are committed to the repository or written to logs. Deploy
+  scripts read keys from the environment or a local keystore only.
 
-**If you believe you have found a security vulnerability — especially one
-that is exploitable against funds, admin authorization, or contract
-upgrades — do not open a public GitHub issue, pull request, or discussion
-describing it.** Public disclosure before a fix is deployed can let an
-attacker exploit it against mainnet funds before we can respond.
+## Localnet Deploy
 
-Instead, report it privately through one of:
+The contributor localnet deploy path (build, deploy, initialize, smoke-verify)
+is documented in [`CONTRIBUTING.md`](./CONTRIBUTING.md#localnet-deploy-contributor-path).
+Contributors must:
 
-1. **GitHub Security Advisories (preferred):** open a private advisory via
-   this repository's **Security** tab → "Report a vulnerability". This
-   creates a private channel visible only to maintainers until we jointly
-   agree to disclose.
-2. **Email:** `security@vatix.example` — if possible, encrypt sensitive
-   details (e.g. proof-of-concept exploit code) and note that you'd like a
-   PGP key if we don't have one on file yet.
+- Use throwaway keys generated for localnet only; never reuse testnet or mainnet
+  keys on a local network, and never commit them.
+- Treat localnet as untrusted: the same authz and fail-closed rules that apply to
+  testnet/mainnet apply locally, so the path exercises the real policy.
+- Keep the deploy behind the documented feature flag/kill-switch when it touches
+  any money path, and record the rollback steps in the PR description.
 
-Please include, as available:
+## Mainnet Safety
 
-- A description of the vulnerability and its potential impact (funds at
-  risk, contract(s) affected, privilege level required).
-- Steps to reproduce, or a minimal proof-of-concept (test case, script, or
-  transaction trace).
-- The commit hash / tag / deployed contract address you tested against.
-- Whether the issue is already being exploited in the wild.
-
-## Our commitment (SLA)
-
-- **Acknowledgment:** we will acknowledge receipt of your report within
-  **48 hours**.
-- **Triage:** we will provide an initial severity assessment and expected
-  timeline within **5 business days** of acknowledgment.
-- **Fix timeline (target, may vary with complexity):**
-  - Critical (direct loss/theft of funds, admin takeover, consensus
-    bypass): fix or mitigation within **7 days**.
-  - High (fund loss requiring specific preconditions, DoS of core flows):
-    within **14 days**.
-  - Medium/Low: within **30 days**, or scheduled into the next regular
-    release.
-- **Disclosure:** we will coordinate public disclosure with you once a fix
-  is deployed (or a mitigation is in place), and are happy to credit
-  reporters who wish to be named.
-
-## Non-critical issues
-
-Bugs that are not security-sensitive (typos, non-exploitable logic errors,
-test flakiness, documentation gaps) are welcome as normal public GitHub
-issues — this private-reporting requirement applies specifically to
-exploitable vulnerabilities.
-
-## Bounty
-
-We do not currently run a formal bug bounty program. We may offer
-discretionary rewards for high-quality reports of critical/high-severity
-issues; this will be discussed directly with the reporter once a report is
-triaged.
+Irreversible mainnet changes require the readiness checklist and are out of scope
+for the localnet contributor path. Do not point localnet tooling at mainnet
+endpoints or keys.

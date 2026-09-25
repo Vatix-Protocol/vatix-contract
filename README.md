@@ -553,6 +553,9 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-869 -->
 - #869: Resolution: dispute window lifecycle
 
+<!-- handsoff-issue-894 -->
+- #894: Integration: create→deposit→trade→resolve→settle
+
 <!-- handsoff-issue-934 -->
 - #934: Stellar Wave label policy
 

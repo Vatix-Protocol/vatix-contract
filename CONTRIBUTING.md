@@ -19,7 +19,113 @@ baseline expectations for every package, with a dedicated section for the
 - Keep CI green; add a required check if a new surface is ungated.
 - Update docs and runbooks when behavior changes.
 
+## Localnet deploy contributor path (#893)
+
+End-to-end path for building, deploying, initializing, and smoke-verifying
+the `market` contract on a local Soroban network. Follow it before opening a
+PR that touches deploy scripts, constructor/`initialize` logic, or admin
+surfaces — it is the fastest way to reproduce a contributor-reported bug
+without touching testnet or mainnet.
+
+### Prerequisites
+
+- `stellar` CLI (Soroban-enabled) on `PATH`.
+- `wasm32-unknown-unknown` target installed (`rustup target add wasm32-unknown-unknown`).
+- A local Soroban network running (`stellar network start local` or the
+  `soroban-testnet`/`quickstart` container).
+
+### 1. Build
+
+```bash
+cd contracts/market
+cargo build --target wasm32-unknown-unknown --release
+```
+
+The artifact lands at
+`target/wasm32-unknown-unknown/release/vatix_market_contract.wasm`.
+
+### 2. Deploy
+
+```bash
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/vatix_market_contract.wasm \
+  --source <admin-identity> \
+  --network local
+```
+
+Record the returned contract id — every later step needs it.
+
+### 3. Initialize
+
+`initialize` is a **privileged entrypoint**: it sets the admin and the
+collateral token, and must be callable exactly once. The deploy path must
+invoke it from the admin identity only; a second call (or a call from any
+other identity) must fail closed with the contract's existing
+`AlreadyInitialized` / auth error rather than silently re-configuring state.
+
+```bash
+stellar contract invoke \
+  --id <contract-id> \
+  --source <admin-identity> \
+  --network local \
+  -- initialize \
+  --admin <admin-address> \
+  --collateral_token <token-address>
+```
+
+### 4. Smoke-verify
+
+```bash
+# Read back the admin — must equal the address passed to initialize.
+stellar contract invoke --id <contract-id> --network local -- get_admin
+
+# Negative check: a non-admin identity must be rejected on a privileged call.
+stellar contract invoke --id <contract-id> --source <non-admin-identity> \
+  --network local -- set_paused --paused true   # expect auth failure
+```
+
+### Invariants the localnet deploy must preserve
+
+- **Server/contract is the source of truth** for balances, swaps, and admin
+  state. The deploy path never writes balances or admin state out-of-band;
+  it only calls the contract's own entrypoints.
+- **Deny-by-default for privileged surfaces.** `initialize`, admin setters,
+  and pause/kill-switch calls are authorized against the stored admin. A
+  localnet deploy must not weaken this — no "skip auth on local" branches.
+- **Fail closed on dependency outage.** If the RPC/network is unreachable,
+  writes (deploy, initialize, admin calls) must abort rather than proceed
+  against stale state. Reads may retry; writes must not.
+- **No secrets in repo or logs.** Use named `stellar` identities backed by
+  the local keystore; never commit secret keys, mnemonics, or `.env` files
+  containing them, and never echo them in deploy output.
+- **Idempotency.** Re-running the deploy path against an already-initialized
+  contract must fail closed (not re-initialize). Re-running a read-only
+  smoke check is safe.
+
+### Testnet vs mainnet / address drift
+
+Localnet contract ids and token addresses differ from testnet and mainnet.
+Never copy a localnet id into a testnet/mainnet runbook or script. Any
+money-path or mainnet-affecting change must land behind a feature flag or
+kill-switch, with the rollback documented in the PR description.
+
+See [SECURITY.md § Localnet and privileged surfaces](SECURITY.md#localnet-and-privileged-surfaces)
+for the security rationale behind these invariants.
+
 ## Issue scripts quality bar (`scripts/issues/`)
+
+Scripts under `scripts/issues/` are operational tooling that can touch
+money-path state. They must meet the bar below before merge. See
+[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
+
+### Invariants
+
+- **Idempotency.** Replayed or concurrent runs must be safe. Every write
+  entrypoint takes a stable idempotency key and must not double-apply effects.
+- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
+  error rather than partially applying
+
+## Before opening a PR
 
 Scripts under `scripts/issues/` are operational tooling that can touch
 money-path state. They must meet the bar below before merge. See
