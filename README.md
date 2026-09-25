@@ -543,3 +543,8 @@ MIT License
 ---
 
 Part of the [Vatix Protocol](https://github.com/vatix-protocol)
+
+## Handsoff notes
+
+<!-- handsoff-issue-855 -->
+- #855: Market: oracle adapter ADR-001
