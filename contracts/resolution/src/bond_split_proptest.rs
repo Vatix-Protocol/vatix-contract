@@ -1,4 +1,4 @@
-//! #699: Property-based tests for `split_bond`'s forfeited-bond accounting.
+//! #699/#870: Property-based tests for `split_bond`'s forfeited-bond accounting.
 //!
 //! `split_bond` (see `lib.rs`) is the single place a forfeited proposer or
 //! challenger bond gets carved up: `REWARD_BPS` to the winner, `BURN_BPS`
@@ -19,6 +19,13 @@
 //!    `REWARD_BPS`/`BURN_BPS` split (5000/2500 of 10_000) up to integer
 //!    floor-division dust, and that dust — not more — lands in the
 //!    treasury/remainder leg.
+//! 4. **Idempotency / replay safety**: re-running the split for the same
+//!    `(market_id, round)` must not move additional value — the second
+//!    call is a fail-closed no-op, so concurrent or replayed finalize
+//!    requests cannot double-distribute a forfeited bond.
+//! 5. **Authz negatives**: an untrusted caller cannot drive the split
+//!    without the contract's own authorization; the deny-by-default
+//!    surface rejects unauthenticated entrypoints.
 
 use crate::storage;
 use proptest::prelude::*;
@@ -135,5 +142,67 @@ proptest! {
         let token_client = soroban_sdk::token::Client::new(&env, &token);
         prop_assert_eq!(token_client.balance(&winner), 0);
         prop_assert_eq!(token_client.balance(&contract_id), 0);
+    }
+
+    /// Invariant: the split is idempotent for a given `(market_id, round)`.
+    /// Replaying the same forfeited-bond settlement must not move any
+    /// additional value — the second call is a fail-closed no-op, so
+    /// concurrent or replayed finalize requests cannot double-distribute.
+    #[test]
+    fn prop_split_bond_replay_is_idempotent(
+        total in 1i128..=1_000_000_000_000i128,
+        market_id in 1u64..=1_000u64,
+        round in 1u32..=1_000u32,
+    ) {
+        let env = Env::default();
+        let (contract_id, token, loser, winner) = setup(&env, total);
+
+        env.as_contract(&contract_id, || {
+            crate::split_bond(&env, market_id, round, &token, &loser, &winner, total);
+        });
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        let winner_after_first = token_client.balance(&winner);
+        let contract_after_first = token_client.balance(&contract_id);
+
+        // Replay the exact same settlement: must be a no-op.
+        env.as_contract(&contract_id, || {
+            crate::split_bond(&env, market_id, round, &token, &loser, &winner, total);
+        });
+
+        prop_assert_eq!(token_client.balance(&winner), winner_after_first,
+            "replayed split moved additional reward to winner");
+        prop_assert_eq!(token_client.balance(&contract_id), contract_after_first,
+            "replayed split moved additional value out of contract");
+    }
+
+    /// Authz negative: without the contract's own authorization, an
+    /// untrusted caller cannot drive the split. `mock_all_auths` is not
+    /// enabled here, so the deny-by-default surface must reject the call
+    /// rather than silently distributing a forfeited bond.
+    #[test]
+    fn prop_split_bond_requires_authz(total in 1i128..=1_000_000_000_000i128) {
+        let env = Env::default();
+        let contract_id = env.register(crate::ResolutionContract, ());
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let token_address = token.address();
+        let loser = Address::generate(&env);
+        let winner = Address::generate(&env);
+
+        StellarAssetClient::new(&env, &token_address).mint(&contract_id, &total);
+
+        // No `mock_all_auths`: the split must fail closed for an
+        // unauthenticated caller instead of moving funds.
+        let result = env.try_as_contract(&contract_id, || {
+            crate::split_bond(&env, 1, 1, &token_address, &loser, &winner, total);
+        });
+        prop_assert!(result.is_err(), "unauthenticated split was not rejected");
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token_address);
+        prop_assert_eq!(token_client.balance(&winner), 0,
+            "unauthenticated split moved reward to winner");
+        prop_assert_eq!(token_client.balance(&contract_id), total,
+            "unauthenticated split moved value out of contract");
     }
 }
