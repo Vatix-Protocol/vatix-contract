@@ -570,3 +570,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-962 -->
 - #962: End-to-end localnet market lifecycle proof
+
+<!-- handsoff-issue-871 -->
+- #871: Resolution: unauthorized finalize no state change
