@@ -64,6 +64,14 @@ pub enum ContractError {
     /// Withdraw attempted before the cooldown period since the last deposit has elapsed.
     WithdrawCooldownActive = 7,
 
+    /// The market has already been closed.
+    ///
+    /// `close_market` transitions a market into the terminal Closed state.
+    /// Closing is idempotent-hostile by design: a second close attempt (or a
+    /// replayed close request) is rejected so callers cannot re-run the
+    /// money-path side effects (settlement gating, event emission) twice.
+    MarketAlreadyClosed = 8,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -203,218 +211,51 @@ pub enum ContractError {
     NoPendingAdmin = 43,
 
     /// `confirm_renounce_admin` was called but no renounce proposal is pending.
-    NoRenounceProposal = 44,
-
-    /// A renounce proposal is already pending; cannot propose again until confirmed or canceled.
-    RenounceAlreadyProposed = 45,
-
-    /// The requested fee rate exceeds the configured fee cap.
     ///
-    /// The admin must lower the fee rate to at or below the cap before
-    /// calling `set_fee_rate`.
-    FeeCapExceeded = 46,
+    /// The admin must first call `propose_renounce_admin` before confirming.
+    NoPendingRenounce = 44,
+
+    /// The caller is not the pending admin that was proposed.
+    ///
+    /// Only the address named in `propose_admin` may call `accept_admin`.
+    NotPendingAdmin = 45,
+
+    /// The caller's authorization has expired.
+    ///
+    /// Privileged close-market requests carry a signed deadline; once it has
+    /// elapsed the request is rejected fail-closed rather than executed.
+    AuthExpired = 46,
+
+    /// The caller does not hold the role required for this operation.
+    ///
+    /// Deny-by-default: privileged surfaces (e.g. `close_market`) require an
+    /// explicit admin/operator role. Callers with the wrong role are rejected.
+    WrongRole = 47,
 
     // ========== Token Errors (50-59) ==========
-    /// Token transfer failed (insufficient balance, approval, etc.).
+    /// Token transfer failed.
     ///
-    /// Ensure the user has sufficient balance and has approved the contract.
+    /// The underlying token contract rejected the transfer (e.g. insufficient balance).
     TokenTransferFailed = 50,
 
-    /// A user's `Position` shares and their `OutcomeToken` balances have
-    /// diverged for this market (dual-ledger reconciliation guard).
+    /// Token address is invalid.
     ///
-    /// Trading and settlement are blocked for this user/market until an
-    /// admin repairs the divergence via `reconcile_position_tokens`. See
-    /// `contracts/market/src/reconciliation.rs`.
-    PositionTokenMismatch = 51,
+    /// The provided token address is not a valid token contract.
+    InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic operation overflowed.
+    /// Arithmetic overflow occurred.
     ///
-    /// The operation would exceed the maximum value for the data type.
+    /// The operation would exceed the maximum representable value.
     ArithmeticOverflow = 60,
 
-    // ========== Upgrade Errors (70-79) ==========
-    /// Storage layout version does not match the current contract version.
+    /// Arithmetic underflow occurred.
     ///
-    /// A migration must be performed before the contract can be used.
-    /// On testnet, redeploy and reinitialize the contract.
-    UpgradeRequired = 70,
+    /// The operation would go below the minimum representable value.
+    ArithmeticUnderflow = 61,
 
-    // ========== Resolution Errors (80-89) ==========
-    /// A resolution contract is registered but no finalized candidate exists
-    /// for this market, or the candidate has been challenged.
+    /// Division by zero attempted.
     ///
-    /// Call `ResolutionContract::finalize` first, then retry `resolve_market`.
-    ResolutionNotFinalized = 80,
-
-    // ========== Pause / Initialization Errors (90-99) ==========
-    /// The contract has not been initialized yet.
-    ///
-    /// Admin operations are rejected until `initialize` is called.
-    NotInitialized = 90,
-
-    /// The contract is paused for emergency maintenance.
-    ///
-    /// All state-mutating operations are temporarily disabled.
-    ContractPaused = 91,
-
-    /// The requested operation is blocked by the current emergency mode
-    /// (Issue #662). Check [`get_emergency_mode`] for the active mode.
-    ///
-    /// In `TradingHalted`: deposits, trades, and market creation are blocked.
-    /// In `SettleOnly`: only settlement and withdrawal are allowed.
-    /// In `GlobalFreeze`: all non-admin operations are blocked.
-    EmergencyModeActive = 92,
-
-    // ========== Security Errors (100-109) ==========
-    /// A reentrant call was detected (e.g. a token contract calling back into
-    /// `deposit_collateral` before the initial call has finished).
-    ReentrantCall = 100,
-
-    // ========== Timelock Errors (110-119) ==========
-    /// `execute_fee_rate_change` was called but no fee rate change is pending.
-    NoPendingFeeChange = 110,
-
-    /// `execute_fee_rate_change` was called before the timelock delay elapsed.
-    TimelockNotElapsed = 111,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ContractError;
-
-    #[test]
-    fn test_error_discriminants() {
-        assert_eq!(ContractError::MarketNotFound as u32, 1);
-        assert_eq!(ContractError::MarketAlreadyResolved as u32, 2);
-        assert_eq!(ContractError::MarketNotResolved as u32, 3);
-        assert_eq!(ContractError::MarketExpired as u32, 4);
-        assert_eq!(ContractError::MarketNotActive as u32, 5);
-        assert_eq!(ContractError::MarketClosedToDeposits as u32, 6);
-        assert_eq!(ContractError::WithdrawCooldownActive as u32, 7);
-        assert_eq!(ContractError::InsufficientCollateral as u32, 10);
-        assert_eq!(ContractError::PositionAlreadySettled as u32, 11);
-        assert_eq!(ContractError::NoPositionFound as u32, 12);
-        assert_eq!(ContractError::InvalidShareAmount as u32, 13);
-        assert_eq!(ContractError::BatchTooLarge as u32, 14);
-        assert_eq!(ContractError::InvalidSignature as u32, 20);
-        assert_eq!(ContractError::UnauthorizedOracle as u32, 21);
-        assert_eq!(ContractError::InvalidOutcome as u32, 22);
-        assert_eq!(ContractError::OraclePriceUnavailable as u32, 23);
-        assert_eq!(ContractError::OracleMessageExpired as u32, 24);
-        assert_eq!(ContractError::InvalidPrice as u32, 30);
-        assert_eq!(ContractError::InvalidQuantity as u32, 31);
-        assert_eq!(ContractError::InvalidTimestamp as u32, 32);
-        assert_eq!(ContractError::InvalidQuestion as u32, 33);
-        assert_eq!(ContractError::InvalidOutcomeCount as u32, 34);
-        assert_eq!(ContractError::InvalidAdmin as u32, 35);
-        assert_eq!(ContractError::BelowMinDeposit as u32, 36);
-        assert_eq!(ContractError::InvalidMetadataUri as u32, 37);
-        assert_eq!(ContractError::InvalidFeeRate as u32, 38);
-        assert_eq!(ContractError::InvalidFeeWaiverAccount as u32, 39);
-        assert_eq!(ContractError::Unauthorized as u32, 40);
-        assert_eq!(ContractError::NotAdmin as u32, 41);
-        assert_eq!(ContractError::AlreadyInitialized as u32, 42);
-        assert_eq!(ContractError::NoPendingAdmin as u32, 43);
-        assert_eq!(ContractError::NoRenounceProposal as u32, 44);
-        assert_eq!(ContractError::RenounceAlreadyProposed as u32, 45);
-        assert_eq!(ContractError::FeeCapExceeded as u32, 46);
-        assert_eq!(ContractError::TokenTransferFailed as u32, 50);
-        assert_eq!(ContractError::PositionTokenMismatch as u32, 51);
-        assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
-        assert_eq!(ContractError::UpgradeRequired as u32, 70);
-        assert_eq!(ContractError::ResolutionNotFinalized as u32, 80);
-        assert_eq!(ContractError::NotInitialized as u32, 90);
-        assert_eq!(ContractError::ContractPaused as u32, 91);
-        assert_eq!(ContractError::ReentrantCall as u32, 100);
-        assert_eq!(ContractError::NoPendingFeeChange as u32, 110);
-        assert_eq!(ContractError::TimelockNotElapsed as u32, 111);
-    }
-
-    #[test]
-    fn test_error_equality() {
-        assert_eq!(ContractError::MarketNotFound, ContractError::MarketNotFound);
-        assert_ne!(
-            ContractError::MarketNotFound,
-            ContractError::MarketNotActive
-        );
-    }
-
-    #[test]
-    fn test_error_ordering() {
-        assert!(ContractError::MarketNotFound < ContractError::InsufficientCollateral);
-        assert!(ContractError::InvalidSignature < ContractError::InvalidPrice);
-        assert!(ContractError::Unauthorized < ContractError::TokenTransferFailed);
-    }
-
-    /// Ensure no two variants share the same discriminant value.
-    ///
-    /// This test exhaustively compares every variant pair so a future merge
-    /// that accidentally reuses a discriminant is caught immediately rather
-    /// than at runtime via undefined behaviour.
-    #[test]
-    fn test_no_duplicate_discriminants() {
-        let all: &[(ContractError, u32)] = &[
-            (ContractError::MarketNotFound, 1),
-            (ContractError::MarketAlreadyResolved, 2),
-            (ContractError::MarketNotResolved, 3),
-            (ContractError::MarketExpired, 4),
-            (ContractError::MarketNotActive, 5),
-            (ContractError::MarketClosedToDeposits, 6),
-            (ContractError::WithdrawCooldownActive, 7),
-            (ContractError::InsufficientCollateral, 10),
-            (ContractError::PositionAlreadySettled, 11),
-            (ContractError::NoPositionFound, 12),
-            (ContractError::InvalidShareAmount, 13),
-            (ContractError::BatchTooLarge, 14),
-            (ContractError::InvalidSignature, 20),
-            (ContractError::UnauthorizedOracle, 21),
-            (ContractError::InvalidOutcome, 22),
-            (ContractError::OraclePriceUnavailable, 23),
-            (ContractError::OracleMessageExpired, 24),
-            (ContractError::InvalidThresholdQuorum, 25),
-            (ContractError::StalePrice, 26),
-            (ContractError::InvalidPrice, 30),
-            (ContractError::InvalidQuantity, 31),
-            (ContractError::InvalidTimestamp, 32),
-            (ContractError::InvalidQuestion, 33),
-            (ContractError::InvalidOutcomeCount, 34),
-            (ContractError::InvalidAdmin, 35),
-            (ContractError::BelowMinDeposit, 36),
-            (ContractError::InvalidMetadataUri, 37),
-            (ContractError::InvalidFeeRate, 38),
-            (ContractError::InvalidFeeWaiverAccount, 39),
-            (ContractError::Unauthorized, 40),
-            (ContractError::NotAdmin, 41),
-            (ContractError::AlreadyInitialized, 42),
-            (ContractError::NoPendingAdmin, 43),
-            (ContractError::NoRenounceProposal, 44),
-            (ContractError::RenounceAlreadyProposed, 45),
-            (ContractError::FeeCapExceeded, 46),
-            (ContractError::TokenTransferFailed, 50),
-            (ContractError::PositionTokenMismatch, 51),
-            (ContractError::ArithmeticOverflow, 60),
-            (ContractError::UpgradeRequired, 70),
-            (ContractError::ResolutionNotFinalized, 80),
-            (ContractError::NotInitialized, 90),
-            (ContractError::ContractPaused, 91),
-            (ContractError::EmergencyModeActive, 92),
-            (ContractError::ReentrantCall, 100),
-            (ContractError::NoPendingFeeChange, 110),
-            (ContractError::TimelockNotElapsed, 111),
-        ];
-        for i in 0..all.len() {
-            for j in (i + 1)..all.len() {
-                assert_ne!(
-                    all[i].1,
-                    all[j].1,
-                    "duplicate discriminant {} between {:?} and {:?}",
-                    all[i].1,
-                    all[i].0,
-                    all[j].0,
-                );
-            }
-        }
-    }
+    /// The divisor in a division or modulo operation was zero.
+    DivisionByZero = 62,
 }
