@@ -552,3 +552,12 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 - #863: Treasury: collect_fee authorization
 <!-- handsoff-issue-869 -->
 - #869: Resolution: dispute window lifecycle
+
+<!-- handsoff-issue-934 -->
+- #934: Stellar Wave label policy
+
+<!-- handsoff-issue-935 -->
+- #935: Freighter claim checklist
+
+<!-- handsoff-issue-962 -->
+- #962: End-to-end localnet market lifecycle proof
