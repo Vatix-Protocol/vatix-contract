@@ -188,7 +188,13 @@ impl OutcomeTokenContract {
     /// the current `name`/`symbol` is a no-op that succeeds without emitting
     /// a change event. Empty values are rejected fail-closed.
     ///
+    /// #868: Access is deny-by-default. The caller must authenticate as the
+    /// persisted admin (`require_auth` on the stored admin address) and the
+    /// supplied `admin` must match it before any state write. Missing config
+    /// (not initialized) fails closed with [`ContractError::NotInitialized`].
+    ///
     /// # Errors
+    /// - [`ContractError::NotInitialized`] — contract has no stored config.
     /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
     /// - [`ContractError::EmptyMetadata`] — `name` or `symbol` is empty.
     pub fn set_metadata(
@@ -197,39 +203,30 @@ impl OutcomeTokenContract {
         name: String,
         symbol: String,
     ) -> Result<(), ContractError> {
-        admin.require_auth();
         storage::assert_version(&env)?;
+        // #868: fail closed when the contract has not been initialized.
+        if !storage::has_config(&env) {
+            return Err(ContractError::NotInitialized);
+        }
         let mut config = storage::get_config(&env);
+        // #868: deny-by-default — the caller must be the persisted admin.
         if admin != config.admin {
             return Err(ContractError::Unauthorized);
         }
+        // #868: authenticate the stored admin, not the caller-supplied value.
+        config.admin.require_auth();
         // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
         if name.is_empty() || symbol.is_empty() {
             return Err(ContractError::EmptyMetadata);
         }
-        // #867: idempotency — no-op when metadata is unchanged.
+        // #867: idempotent — no state write or event when nothing changed.
         if config.name == name && config.symbol == symbol {
             return Ok(());
         }
-        config.name = name;
-        config.symbol = symbol;
+        config.name = name.clone();
+        config.symbol = symbol.clone();
         storage::set_config(&env, &config);
+        events::emit_metadata_updated(&env, &name, &symbol);
         Ok(())
-    }
-
-    // ── SAC metadata getters ──────────────────────────────────────────────────
-
-    pub fn name(env: Env) -> String {
-        storage::get_config(&env).name
-    }
-
-    pub fn symbol(env: Env) -> String {
-        storage::get_config(&env).symbol
-    }
-
-    /// SAC-compatible decimals. Compile-time constant (7) per the outcome
-    /// token README; never stored, so it cannot drift from the invariant.
-    pub fn decimals(_env: Env) -> u32 {
-        7
     }
 }

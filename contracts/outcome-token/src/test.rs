@@ -73,6 +73,37 @@ fn non_admin_cannot_update_metadata() {
 
 #[test]
 #[should_panic]
+fn wrong_admin_cannot_update_metadata() {
+    let env = Env::default();
+    let (client, _admin) = setup(&env);
+
+    // Only a different, non-admin address authorizes the call; the stored
+    // admin check must still reject it (deny-by-default).
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_metadata",
+            args: (
+                String::from_str(&env, "Hijacked"),
+                String::from_str(&env, "HJK"),
+                7u32,
+            )
+                .into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.set_metadata(
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+        &7,
+    );
+}
+
+#[test]
+#[should_panic]
 fn metadata_rejects_empty_name() {
     let env = Env::default();
     let (client, _admin) = setup(&env);

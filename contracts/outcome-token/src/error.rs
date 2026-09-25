@@ -50,4 +50,12 @@ pub enum ContractError {
     /// without truncation or unbounded storage growth.  Oversized values are
     /// rejected at `initialize` and `set_metadata` (Issue #867).
     MetadataTooLong = 15,
+    /// `set_metadata` was called by an address that is not the persisted
+    /// admin.
+    ///
+    /// Metadata is a privileged surface: only the stored admin may mutate
+    /// `name`, `symbol`, or `decimals`.  The caller must authenticate via
+    /// `require_auth` and match the persisted admin exactly; any other caller
+    /// is denied by default (Issue #868).
+    NotAdmin = 16,
 }
