@@ -543,3 +543,8 @@ MIT License
 ---
 
 Part of the [Vatix Protocol](https://github.com/vatix-protocol)
+
+## Handsoff notes
+
+<!-- handsoff-issue-860 -->
+- #860: Market: events-reference vs events.rs
