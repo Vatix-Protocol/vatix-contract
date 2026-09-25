@@ -23,31 +23,30 @@ These invariants must hold on every network, including localnet:
 - Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
   require an explicit authorized signer and reject unauthenticated callers.
 - Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
-  failed dependency must never
-- `contracts/market` — market creation, trading, deposits, settlement
-- `contracts/treasury` — protocol fee custody and distribution
-- `contracts/resolution` — challenge-based outcome resolution
-- `contracts/outcome-token` — per-market YES/NO outcome tokens
-- Deployment/upgrade tooling under `scripts/` (e.g. `scripts/upgrade/`)
-- Issue/ops scripts under `scripts/issues/` — see
-  [`scripts/issues/README.md`](scripts/issues/README.md) for the quality bar
-  (idempotency, fail-closed writes, deny-by-default authz, no secrets in
-  repo or logs) that these scripts must meet
-- Documentation that describes on-chain invariants (`AUTH_TABLE.md`,
-  `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
-  inaccuracy could lead to a mistaken security assumption
-
-These invariants must hold on every network, including localnet:
-
-- The contract is the **source of truth** for balances, swaps, and admin state.
-  Clients (including the deploy scripts) never compute or cache authoritative
-  balances.
-- Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
-  require an explicit authorized signer and reject unauthenticated callers.
-- Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
   failed dependency must never be treated as success.
 - **No secrets** are committed to the repository or written to logs. Deploy
   scripts read keys from the environment or a local keystore only.
+
+## Freighter Wallet Integration
+
+The browser wallet integration is documented in
+[`docs/freighter-integration-guide.md`](docs/freighter-integration-guide.md).
+Freighter is an **untrusted client**: it holds signing keys and proposes
+signatures, but it is never authoritative for protocol state.
+
+- The contract remains the **source of truth** for balances, swaps, and admin.
+  Wallet-reported balances, network, and addresses are display hints only and
+  must be re-verified against the contract before any money-path action.
+- Every signed transaction is **authorized on-chain**; a signature from a
+  connected wallet does not by itself grant a role or bypass policy. Wrong-role
+  or expired-auth submissions are rejected by the contract, not the client.
+- Writes **fail closed** when the RPC is unavailable or the wallet returns an
+  unexpected network/address. Never treat a client-side success as settlement.
+- **No secrets** are stored in the repo or logs. Freighter keys never leave the
+  extension; the app must not log signed XDR, keys, or raw signatures.
+- Testnet vs mainnet **address drift** is a security concern: verify the
+  connected network and contract id before signing, and refuse to sign when they
+  do not match the configured deployment.
 
 ## Localnet Deploy
 
@@ -58,7 +57,7 @@ Contributors must:
 - Use throwaway keys generated for localnet only; never reuse testnet or mainnet
   keys on a local network, and never commit them.
 - Treat localnet as untrusted: the same authz and fail-closed rules that apply to
-  testnet/mainnet apply locally, so the path exercises the real policy.
+testnet/mainnet apply locally, so the path exercises the real policy.
 - Keep the deploy behind the documented feature flag/kill-switch when it touches
   any money path, and record the rollback steps in the PR description.
 
