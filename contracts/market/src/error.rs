@@ -11,6 +11,7 @@ use soroban_sdk::contracterror;
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
+/// - Reconciliation Errors: 80-89
 ///
 /// # Example
 /// ```ignore
@@ -197,106 +198,99 @@ pub enum ContractError {
     InvalidTreasury = 40,
 
     // ========== Authorization Errors (41-49) ==========
-    /// Caller is not authorized to perform this action.
+    /// Caller is not authorized to perform this operation.
     ///
-    /// The caller must be the market creator or have appropriate permissions.
+    /// The caller must be the admin or an address explicitly granted the
+    /// required role. Deny-by-default: any privileged entrypoint rejects
+    /// callers that do not hold the required authorization.
     Unauthorized = 41,
 
-    /// Caller is not the admin for this operation.
+    /// The caller is not the contract admin.
     ///
-    /// Only the contract admin can perform this action.
+    /// Admin-only entrypoints (configuration, treasury, fee waivers, pause)
+    /// reject any caller other than the stored admin address.
     NotAdmin = 42,
 
-    /// Contract has already been initialized.
+    /// The contract is paused and money-path operations are disabled.
     ///
-    /// `initialize(admin)` may only be called once. A replayed or duplicate
-    /// initialization attempt is rejected so the admin cannot be silently
-    /// overwritten by an untrusted caller.
-    AlreadyInitialized = 43,
-
-    /// Contract has not been initialized yet.
-    ///
-    /// Privileged entrypoints (including the admin setters for treasury,
-    /// outcome, and resolution) fail closed with this code when no admin has
-    /// been configured, rather than defaulting to an open/allow-all policy.
-    NotInitialized = 44,
-
-    /// `confirm_renounce_admin` was called but no `renounce_admin` proposal is
-    /// pending, or the confirmation window has already elapsed.
-    NoPendingRenounce = 44,
-
-    /// The admin renounce confirmation window has not yet elapsed.
-    ///
-    /// `confirm_renounce_admin` must be called only after the configured delay
-    /// following `renounce_admin`, so a compromised admin key cannot instantly
-    /// abandon the contract.
-    RenounceNotReady = 45,
-
-    /// The caller's authorization has expired or is otherwise no longer valid.
-    ///
-    /// Privileged setters reject stale/expired auth with this stable code so
-    /// untrusted clients cannot bypass policy by replaying an old signature.
-    AuthExpired = 46,
-
-    /// The caller's role does not permit this operation.
-    ///
-    /// Distinct from `NotAdmin`: the caller is authenticated but holds the
-    /// wrong role for the requested privileged setter. Deny-by-default.
-    WrongRole = 47,
+    /// The admin kill-switch halts deposits, trades, and settlement until the
+    /// contract is unpaused. Reads remain available.
+    ContractPaused = 43,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g., insufficient
-    /// balance or allowance).
+    /// The underlying token contract rejected the transfer (insufficient
+    /// balance, frozen account, or a failing token implementation).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid or not configured.
+    /// Token address is invalid or unsupported.
     ///
-    /// The contract must be initialized with a valid token address before any
-    /// collateral operations can occur.
+    /// The configured collateral token must be a valid token contract.
     InvalidToken = 51,
-
-    /// Token minting failed.
-    ///
-    /// The underlying token contract rejected the mint operation.
-    TokenMintFailed = 52,
-
-    /// Token burning failed.
-    ///
-    /// The underlying token contract rejected the burn operation.
-    TokenBurnFailed = 53,
 
     // ========== Arithmetic Errors (60-69) ==========
     /// Arithmetic overflow occurred during a calculation.
     ///
-    /// The operation would exceed the maximum representable value.
+    /// Inputs were too large for the intermediate result to fit in the
+    /// target integer type. Callers should reduce magnitudes or split work.
     ArithmeticOverflow = 60,
 
     /// Arithmetic underflow occurred during a calculation.
     ///
-    /// The operation would go below the minimum representable value.
+    /// A subtraction would have produced a negative value where only
+    /// non-negative results are valid.
     ArithmeticUnderflow = 61,
 
     /// Division by zero was attempted.
     ///
-    /// The divisor in a division or modulo operation was zero.
+    /// The divisor evaluated to zero; callers must guard against zero
+    /// denominators before performing the division.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
-    /// The treasury has not been initialized or configured.
+    /// Treasury withdrawal failed.
     ///
-    /// `withdraw_treasury` was called before the treasury balance/recipient
-    /// configuration was established. Fail-closed: no funds are moved.
-    TreasuryNotInitialized = 70,
+    /// The treasury could not release the requested amount (insufficient
+    /// balance or a failing token transfer).
+    TreasuryWithdrawFailed = 70,
 
-    /// The requested treasury withdrawal amount is invalid (zero or negative).
+    /// The requested treasury amount exceeds the available balance.
     ///
-    /// Treasury withdrawals must move a strictly positive amount.
-    InvalidTreasuryAmount = 71,
+    /// Withdrawals are capped at the currently accrued treasury balance.
+    InsufficientTreasuryBalance = 71,
 
-    /// The treasury balance is insufficient to cover the requested withdrawal.
+    // ========== Reconciliation Errors (80-89) ==========
+    /// The reconciliation request was rejected because the caller is not
+    /// authorized to run reconciliation for this market.
     ///
-    /// The admin cannot withdraw more than the accumulated treasury/fee balance.
-    InsufficientTreasuryBalance = 72,
+    /// Reconciliation is a privileged, deny-by-default surface: only the
+    /// admin (or an explicitly authorized reconciler) may invoke it. Untrusted
+    /// clients cannot bypass this policy.
+    ReconciliationUnauthorized = 80,
+
+    /// The reconciliation request was replayed or is already in progress.
+    ///
+    /// Reconciliation entrypoints are idempotent: a request carrying a
+    /// correlation id that has already been processed (or is currently being
+    /// processed) is rejected so money-path side effects cannot run twice.
+    ReconciliationAlreadyProcessed = 81,
+
+    /// The reconciliation inputs are inconsistent with on-chain state.
+    ///
+    /// The supplied balances/positions do not match the contract's recorded
+    /// state, so the reconciliation is refused rather than silently applied.
+    /// The contract remains the source of truth for balances and swaps.
+    ReconciliationMismatch = 82,
+
+    /// Reconciliation could not complete because a required dependency
+    /// (RPC/DB/Redis or oracle feed) is unavailable.
+    ///
+    /// Writes fail closed: no partial reconciliation is persisted when a
+    /// dependency is down.
+    ReconciliationDependencyUnavailable = 83,
+
+    /// The reconciliation batch was empty or exceeded the configured maximum
+    /// size, and was rejected to surface caller bugs and prevent griefing.
+    ReconciliationBatchInvalid = 84,
 }
