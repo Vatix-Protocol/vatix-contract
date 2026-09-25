@@ -551,3 +551,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-935 -->
 - #935: Freighter claim checklist
+
+<!-- handsoff-issue-962 -->
+- #962: End-to-end localnet market lifecycle proof
