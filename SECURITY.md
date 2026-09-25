@@ -14,6 +14,10 @@ This policy covers the smart contracts in this repository
 - `contracts/resolution` — challenge-based outcome resolution
 - `contracts/outcome-token` — per-market YES/NO outcome tokens
 - Deployment/upgrade tooling under `scripts/` (e.g. `scripts/upgrade/`)
+- Issue/ops scripts under `scripts/issues/` — see
+  [`scripts/issues/README.md`](scripts/issues/README.md) for the quality bar
+  (idempotency, fail-closed writes, deny-by-default authz, no secrets in
+  repo or logs) that these scripts must meet
 - Documentation that describes on-chain invariants (`AUTH_TABLE.md`,
   `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
   inaccuracy could lead to a mistaken security assumption
