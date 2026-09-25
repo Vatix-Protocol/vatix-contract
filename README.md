@@ -546,6 +546,12 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 ## Handsoff notes
 
+<!-- handsoff-issue-855 -->
+- #855: Market: oracle adapter ADR-001
+
+<!-- handsoff-issue-856 -->
+- #856: Market: resolve gated by resolution finalize
+
 <!-- handsoff-issue-860 -->
 - #860: Market: events-reference vs events.rs
 <!-- handsoff-issue-863 -->

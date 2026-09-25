@@ -65,6 +65,14 @@ pub enum ContractError {
     /// Withdraw attempted before the cooldown period since the last deposit has elapsed.
     WithdrawCooldownActive = 7,
 
+    /// The market has already been closed.
+    ///
+    /// `close_market` transitions a market into the terminal Closed state.
+    /// Closing is idempotent-hostile by design: a second close attempt (or a
+    /// replayed close request) is rejected so callers cannot re-run the
+    /// money-path side effects (settlement gating, event emission) twice.
+    MarketAlreadyClosed = 8,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -180,28 +188,38 @@ pub enum ContractError {
     /// cannot quietly exempt itself from withdrawal fees it controls (#584).
     InvalidFeeWaiverAccount = 39,
 
-    // ========== Authorization Errors (40-49) ==========
+    /// Treasury address is invalid (e.g. contract address or zero address).
+    ///
+    /// The admin-only `set_treasury` setter (#857) must receive a valid user
+    /// account address. Contract addresses and reserved/zero addresses are
+    /// rejected so fees cannot be routed to an address the admin does not
+    /// actually control.
+    InvalidTreasury = 40,
+
+    // ========== Authorization Errors (41-49) ==========
     /// Caller is not authorized to perform this action.
     ///
     /// The caller must be the market creator or have appropriate permissions.
-    Unauthorized = 40,
+    Unauthorized = 41,
 
     /// Caller is not the admin for this operation.
     ///
     /// Only the contract admin can perform this action.
-    NotAdmin = 41,
+    NotAdmin = 42,
 
     /// Contract has already been initialized.
     ///
-    /// `initialize(admin)` may only be called once. Replaying it would allow
-    /// an attacker to hijack the admin slot after initial deploy.
-    AlreadyInitialized = 42,
+    /// `initialize(admin)` may only be called once. A replayed or duplicate
+    /// initialization attempt is rejected so the admin cannot be silently
+    /// overwritten by an untrusted caller.
+    AlreadyInitialized = 43,
 
-    /// No pending admin transfer exists.
+    /// Contract has not been initialized yet.
     ///
-    /// `accept_admin` was called but `propose_admin` has not been issued yet,
-    /// or the previous proposal was already accepted.
-    NoPendingAdmin = 43,
+    /// Privileged entrypoints (including the admin setters for treasury,
+    /// outcome, and resolution) fail closed with this code when no admin has
+    /// been configured, rather than defaulting to an open/allow-all policy.
+    NotInitialized = 44,
 
     /// `confirm_renounce_admin` was called but no `renounce_admin` proposal is
     /// pending, or the confirmation window has already elapsed.
@@ -213,6 +231,18 @@ pub enum ContractError {
     /// following `renounce_admin`, so a compromised admin key cannot instantly
     /// abandon the contract.
     RenounceNotReady = 45,
+
+    /// The caller's authorization has expired or is otherwise no longer valid.
+    ///
+    /// Privileged setters reject stale/expired auth with this stable code so
+    /// untrusted clients cannot bypass policy by replaying an old signature.
+    AuthExpired = 46,
+
+    /// The caller's role does not permit this operation.
+    ///
+    /// Distinct from `NotAdmin`: the caller is authenticated but holds the
+    /// wrong role for the requested privileged setter. Deny-by-default.
+    WrongRole = 47,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
