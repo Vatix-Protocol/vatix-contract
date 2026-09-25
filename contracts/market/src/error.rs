@@ -187,75 +187,76 @@ pub enum ContractError {
     /// cannot quietly exempt itself from withdrawal fees it controls (#584).
     InvalidFeeWaiverAccount = 39,
 
-    // ========== Authorization Errors (40-49) ==========
+    /// Treasury address is invalid (e.g. contract address or zero address).
+    ///
+    /// The admin-only `set_treasury` setter (#857) must receive a valid user
+    /// account address. Contract addresses and reserved/zero addresses are
+    /// rejected so fees cannot be routed to an address the admin does not
+    /// actually control.
+    InvalidTreasury = 40,
+
+    // ========== Authorization Errors (41-49) ==========
     /// Caller is not authorized to perform this action.
     ///
     /// The caller must be the market creator or have appropriate permissions.
-    Unauthorized = 40,
+    Unauthorized = 41,
 
     /// Caller is not the admin for this operation.
     ///
     /// Only the contract admin can perform this action.
-    NotAdmin = 41,
+    NotAdmin = 42,
 
     /// Contract has already been initialized.
     ///
-    /// `initialize(admin)` may only be called once. Replaying it would allow
-    /// an attacker to hijack the admin slot after initial deploy.
-    AlreadyInitialized = 42,
+    /// `initialize(admin)` may only be called once. A replayed or duplicate
+    /// initialization attempt is rejected so the admin cannot be silently
+    /// overwritten by an untrusted caller.
+    AlreadyInitialized = 43,
 
-    /// No pending admin transfer exists.
+    /// Contract has not been initialized yet.
     ///
-    /// `accept_admin` was called but `propose_admin` has not been issued yet,
-    /// or the previous proposal was already accepted.
-    NoPendingAdmin = 43,
+    /// Privileged entrypoints (including the admin setters for treasury,
+    /// outcome, and resolution) fail closed with this code when no admin has
+    /// been configured, rather than defaulting to an open/allow-all policy.
+    NotInitialized = 44,
 
-    /// `confirm_renounce_admin` was called but no renounce proposal is pending.
+    /// The caller's authorization has expired or is otherwise no longer valid.
     ///
-    /// The admin must first call `propose_renounce_admin` before confirming.
-    NoPendingRenounce = 44,
+    /// Privileged setters reject stale/expired auth with this stable code so
+    /// untrusted clients cannot bypass policy by replaying an old signature.
+    AuthExpired = 45,
 
-    /// The caller is not the pending admin that was proposed.
+    /// The caller's role does not permit this operation.
     ///
-    /// Only the address named in `propose_admin` may call `accept_admin`.
-    NotPendingAdmin = 45,
-
-    /// The caller's authorization has expired.
-    ///
-    /// Privileged close-market requests carry a signed deadline; once it has
-    /// elapsed the request is rejected fail-closed rather than executed.
-    AuthExpired = 46,
-
-    /// The caller does not hold the role required for this operation.
-    ///
-    /// Deny-by-default: privileged surfaces (e.g. `close_market`) require an
-    /// explicit admin/operator role. Callers with the wrong role are rejected.
-    WrongRole = 47,
+    /// Distinct from `NotAdmin`: the caller is authenticated but holds the
+    /// wrong role for the requested privileged setter. Deny-by-default.
+    WrongRole = 46,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g. insufficient balance).
+    /// The underlying token contract rejected the transfer (e.g. insufficient
+    /// balance or allowance).
     TokenTransferFailed = 50,
 
     /// Token address is invalid.
     ///
-    /// The provided token address is not a valid token contract.
+    /// The supplied token address is not a valid SEP-41 token contract.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
     /// Arithmetic overflow occurred.
     ///
-    /// The operation would exceed the maximum representable value.
-    ArithmeticOverflow = 60,
+    /// An addition or multiplication exceeded the representable range.
+    Overflow = 60,
 
     /// Arithmetic underflow occurred.
     ///
-    /// The operation would go below the minimum representable value.
-    ArithmeticUnderflow = 61,
+    /// A subtraction produced a value below zero where non-negative was required.
+    Underflow = 61,
 
-    /// Division by zero attempted.
+    /// Division by zero was attempted.
     ///
-    /// The divisor in a division or modulo operation was zero.
+    /// The divisor must be non-zero for all division operations.
     DivisionByZero = 62,
 }
