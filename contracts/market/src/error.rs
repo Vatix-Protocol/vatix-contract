@@ -75,6 +75,15 @@ pub enum ContractError {
     /// money-path side effects (settlement gating, event emission) twice.
     MarketAlreadyClosed = 8,
 
+    /// A settlement claim was submitted before the market was resolved.
+    ///
+    /// Claims are only valid once the oracle has resolved the market. This is
+    /// enforced contract-side (not by clients) so an untrusted caller cannot
+    /// bypass the resolve gate and drain liquidity against an unresolved
+    /// outcome. Fail-closed: the claim is rejected outright rather than
+    /// silently deferred.
+    ClaimBeforeResolve = 9,
+
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
     ///
@@ -202,26 +211,63 @@ pub enum ContractError {
     /// Caller is not authorized to perform this operation.
     ///
     /// The caller must be the admin or an address explicitly granted the
-    /// required role. Deny-by-default
+    /// required role. Untrusted clients cannot bypass this check.
     Unauthorized = 41,
 
-    // ========== Conservation Errors (90-99) ==========
-    /// The YES+NO vs collateral conservation invariant was violated (#887).
+    /// Caller is not the admin.
     ///
-    /// For every market, the total outstanding YES shares plus the total
-    /// outstanding NO shares must equal the total collateral held (per unit
-    /// payout). Any mint/split, merge/redeem, deposit, or settlement path
-    /// that would leave `total_yes + total_no != total_collateral` is rejected
-    /// fail-closed with this error rather than panicking or silently
-    /// continuing with a corrupted ledger.
-    ConservationViolation = 90,
+    /// Admin-only entrypoints (configuration, treasury, fee waivers) reject
+    /// any caller other than the stored admin address.
+    NotAdmin = 42,
 
-    /// A conservation re-check failed after a state mutation was applied.
+    /// The caller's authorization has expired or is otherwise no longer valid.
     ///
-    /// Used by the post-mutation assertion in the money-path entrypoints: the
-    /// operation is rolled back (the whole transaction reverts) so the market
-    /// can never persist a state that breaks the YES+NO == collateral
-    /// invariant. Distinct from `ConservationViolation`, which is raised when
-    /// the *requested* operation would break conservation before any write.
-    ConservationCheckFailed = 91,
+    /// Re-authenticate and retry; privileged surfaces are deny-by-default.
+    AuthorizationExpired = 43,
+
+    // ========== Token Errors (50-59) ==========
+    /// Token transfer failed.
+    ///
+    /// The underlying token contract rejected the transfer (e.g. insufficient
+    /// balance or a frozen account).
+    TokenTransferFailed = 50,
+
+    /// Token address is invalid.
+    ///
+    /// The token must be a valid, supported asset contract.
+    InvalidToken = 51,
+
+    // ========== Arithmetic Errors (60-69) ==========
+    /// Arithmetic overflow occurred.
+    ///
+    /// The operation would exceed the maximum representable value.
+    ArithmeticOverflow = 60,
+
+    /// Arithmetic underflow occurred.
+    ///
+    /// The operation would go below the minimum representable value.
+    ArithmeticUnderflow = 61,
+
+    /// Division by zero.
+    ///
+    /// The divisor must be non-zero.
+    DivisionByZero = 62,
+
+    // ========== Treasury Errors (70-79) ==========
+    /// Treasury operation failed.
+    ///
+    /// The treasury rejected the operation (e.g. insufficient balance).
+    TreasuryOperationFailed = 70,
+
+    // ========== Reconciliation Errors (80-89) ==========
+    /// Reconciliation check failed.
+    ///
+    /// On-chain balances did not match the expected accounting.
+    ReconciliationFailed = 80,
+
+    // ========== Conservation Errors (90-99) ==========
+    /// Conservation invariant violated.
+    ///
+    /// Total collateral in must equal total collateral out plus locked value.
+    ConservationViolated = 90,
 }
