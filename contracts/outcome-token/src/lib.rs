@@ -182,174 +182,51 @@ impl OutcomeTokenContract {
     }
 
     /// Update the SAC metadata (name and symbol). Admin only.
+    ///
+    /// #867: SAC metadata invariants are enforced here so untrusted clients
+    /// cannot bypass metadata policy. The call is idempotent: re-submitting
+    /// the current `name`/`symbol` is a no-op that succeeds without emitting
+    /// a change event. Empty values are rejected fail-closed.
+    ///
+    /// #868: Access is deny-by-default. The caller must authenticate as the
+    /// persisted admin (`require_auth` on the stored admin address) and the
+    /// supplied `admin` must match it before any state write. Missing config
+    /// (not initialized) fails closed with [`ContractError::NotInitialized`].
+    ///
+    /// # Errors
+    /// - [`ContractError::NotInitialized`] — contract has no stored config.
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    /// - [`ContractError::EmptyMetadata`] — `name` or `symbol` is empty.
     pub fn set_metadata(
         env: Env,
         admin: Address,
         name: String,
         symbol: String,
     ) -> Result<(), ContractError> {
-        admin.require_auth();
         storage::assert_version(&env)?;
+        // #868: fail closed when the contract has not been initialized.
+        if !storage::has_config(&env) {
+            return Err(ContractError::NotInitialized);
+        }
         let mut config = storage::get_config(&env);
+        // #868: deny-by-default — the caller must be the persisted admin.
         if admin != config.admin {
             return Err(ContractError::Unauthorized);
         }
+        // #868: authenticate the stored admin, not the caller-supplied value.
+        config.admin.require_auth();
         // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
         if name.is_empty() || symbol.is_empty() {
             return Err(ContractError::EmptyMetadata);
         }
-        config.name = name;
-        config.symbol = symbol;
+        // #867: idempotent — no state write or event when nothing changed.
+        if config.name == name && config.symbol == symbol {
+            return Ok(());
+        }
+        config.name = name.clone();
+        config.symbol = symbol.clone();
         storage::set_config(&env, &config);
+        events::emit_metadata_updated(&env, &name, &symbol);
         Ok(())
-    }
-
-    // ── SAC metadata getters ──────────────────────────────────────────────────
-
-    pub fn name(env: Env) -> String {
-        storage::get_config(&env).name
-    }
-
-    pub fn symbol(env: Env) -> String {
-        storage::get_config(&env).symbol
-    }
-
-    /// Number of decimal places (SAC standard: 7).
-    pub fn decimals(_env: Env) -> u32 {
-        7
-    }
-
-    /// Mint `amount` tokens of `kind` (Yes or No) for `user` in `market_id`.
-    ///
-    /// Only the registered market contract may call this function.
-    pub fn mint(
-        env: Env,
-        market_id: u32,
-        user: Address,
-        kind: TokenKind,
-        amount: i128,
-    ) -> Result<(), ContractError> {
-        if amount <= 0 {
-            return Err(ContractError::InvalidAmount);
-        }
-        if storage::is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-        // Storage-version guard (Issue #696): a stale/partially-upgraded
-        // deployment must fail closed here rather than let `mint` write
-        // balances/supply under a storage layout the compiled contract no
-        // longer understands.
-        storage::assert_version(&env)?;
-        let config = storage::get_config(&env);
-        config.market_contract.require_auth();
-
-        let balance = storage::get_balance(&env, market_id, &user, &kind);
-        let new_balance = balance.checked_add(amount).ok_or(ContractError::Overflow)?;
-        storage::set_balance(&env, market_id, &user, &kind, new_balance);
-
-        let supply = storage::get_total_supply(&env, market_id, &kind);
-        let new_supply = supply.checked_add(amount).ok_or(ContractError::Overflow)?;
-        storage::set_total_supply(&env, market_id, &kind, new_supply);
-
-        events::emit_token_minted(&env, market_id, &user, kind, amount, new_balance);
-        Ok(())
-    }
-
-    /// Burn `amount` tokens of `kind` from `user` in `market_id`.
-    ///
-    /// Only the registered market contract may call this function. Returns
-    /// [`ContractError::InsufficientBalance`] if the user holds fewer tokens
-    /// than `amount`.
-    pub fn burn(
-        env: Env,
-        market_id: u32,
-        user: Address,
-        kind: TokenKind,
-        amount: i128,
-    ) -> Result<(), ContractError> {
-        if amount <= 0 {
-            return Err(ContractError::InvalidAmount);
-        }
-        if storage::is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-        storage::assert_version(&env)?;
-        let config = storage::get_config(&env);
-        config.market_contract.require_auth();
-
-        let balance = storage::get_balance(&env, market_id, &user, &kind);
-        if balance < amount {
-            return Err(ContractError::InsufficientBalance);
-        }
-        let new_balance = balance - amount;
-        storage::set_balance(&env, market_id, &user, &kind, new_balance);
-
-        let supply = storage::get_total_supply(&env, market_id, &kind);
-        let new_supply = supply - amount;
-        storage::set_total_supply(&env, market_id, &kind, new_supply);
-
-        events::emit_token_burned(&env, market_id, &user, kind, amount, new_balance);
-        Ok(())
-    }
-
-    /// Transfer `amount` tokens of `kind` from `from` to `to` within `market_id`.
-    ///
-    /// Before resolution, positions can only change through [`mint`]/[`burn`]
-    /// driven by the market contract itself, so a direct peer-to-peer
-    /// transfer is rejected with [`ContractError::MarketNotResolved`] — this
-    /// keeps a market's price-discovery phase free of secondary-market
-    /// transfers of unsettled claims.
-    ///
-    /// Once the market has resolved, peer-to-peer transfer is *also*
-    /// rejected — this time with
-    /// [`ContractError::TransferBlockedAfterResolve`] — because the market
-    /// contract's settlement logic (`settlement.rs`) pays out against the
-    /// `Position` record it stores for the *original* depositor's address,
-    /// not against whichever address currently holds the outcome-token
-    /// balance (see `reconciliation.rs`, which only reconciles a single
-    /// user's own Position/token divergence and cannot repair a transfer to
-    /// a *different* address). Allowing a transfer here would let a holder
-    /// move their balance to a fresh address post-resolution while the
-    /// original Position still entitles them to the full payout — the same
-    /// claim paid out twice (Issue #690). Closing that gap by blocking the
-    /// transfer entirely is far simpler and safer than trying to atomically
-    /// migrate the `Position` record across a cross-contract call.
-    pub fn transfer(
-        env: Env,
-        market_id: u32,
-        from: Address,
-        _to: Address,
-        _kind: TokenKind,
-        amount: i128,
-    ) -> Result<(), ContractError> {
-        if amount <= 0 {
-            return Err(ContractError::InvalidAmount);
-        }
-        from.require_auth();
-        if storage::is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-        storage::assert_version(&env)?;
-
-        let config = storage::get_config(&env);
-        let status: MarketStatus = env.invoke_contract(
-            &config.market_contract,
-            &Symbol::new(&env, "get_market_status"),
-            soroban_sdk::vec![&env, market_id.into_val(&env)],
-        );
-        if status == MarketStatus::Resolved {
-            return Err(ContractError::TransferBlockedAfterResolve);
-        }
-        Err(ContractError::MarketNotResolved)
-    }
-
-    /// Return the token balance for a specific `(market_id, user, kind)` triple.
-    pub fn balance(env: Env, market_id: u32, user: Address, kind: TokenKind) -> i128 {
-        storage::get_balance(&env, market_id, &user, &kind)
-    }
-
-    /// Return the total outstanding supply for a `(market_id, kind)` pair.
-    pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
-        storage::get_total_supply(&env, market_id, &kind)
     }
 }
