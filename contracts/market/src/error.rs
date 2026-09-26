@@ -13,6 +13,14 @@ use soroban_sdk::contracterror;
 /// - Treasury Errors: 70-79
 /// - Reconciliation Errors: 80-89
 ///
+/// # Stable not-found codes
+///
+/// Market lookups that fail because the requested market does not exist MUST
+/// return [`ContractError::MarketNotFound`] (`= 1`). This code is part of the
+/// public ABI: clients (e.g. `apps/web/lib/errors.ts`) map it to a stable,
+/// user-facing "market not found" error. Do not renumber or reuse it, and do
+/// not substitute a generic validation error for a missing market.
+///
 /// # Example
 /// ```ignore
 /// use vatix_market::error::ContractError;
@@ -32,6 +40,11 @@ pub enum ContractError {
     /// The requested market does not exist in storage.
     ///
     /// Returned when attempting to access a market with an invalid or non-existent ID.
+    ///
+    /// This is the single, stable not-found code for market lookups. Every
+    /// market entrypoint that resolves a `market_id` to a stored market MUST
+    /// return this variant when the lookup misses, so clients can rely on a
+    /// deterministic code instead of a generic failure.
     MarketNotFound = 1,
 
     /// Attempted to resolve a market that has already been resolved.
@@ -201,96 +214,4 @@ pub enum ContractError {
     /// Caller is not authorized to perform this operation.
     ///
     /// The caller must be the admin or an address explicitly granted the
-    /// required role. Deny-by-default: any privileged entrypoint rejects
-    /// callers that do not hold the required authorization.
-    Unauthorized = 41,
-
-    /// The caller is not the contract admin.
-    ///
-    /// Admin-only entrypoints (configuration, treasury, fee waivers, pause)
-    /// reject any caller other than the stored admin address.
-    NotAdmin = 42,
-
-    /// The contract is paused and money-path operations are disabled.
-    ///
-    /// The admin kill-switch halts deposits, trades, and settlement until the
-    /// contract is unpaused. Reads remain available.
-    ContractPaused = 43,
-
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
-    ///
-    /// The underlying token contract rejected the transfer (insufficient
-    /// balance, frozen account, or a failing token implementation).
-    TokenTransferFailed = 50,
-
-    /// Token address is invalid or unsupported.
-    ///
-    /// The configured collateral token must be a valid token contract.
-    InvalidToken = 51,
-
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// Inputs were too large for the intermediate result to fit in the
-    /// target integer type. Callers should reduce magnitudes or split work.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// A subtraction would have produced a negative value where only
-    /// non-negative results are valid.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero was attempted.
-    ///
-    /// The divisor evaluated to zero; callers must guard against zero
-    /// denominators before performing the division.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// Treasury withdrawal failed.
-    ///
-    /// The treasury could not release the requested amount (insufficient
-    /// balance or a failing token transfer).
-    TreasuryWithdrawFailed = 70,
-
-    /// The requested treasury amount exceeds the available balance.
-    ///
-    /// Withdrawals are capped at the currently accrued treasury balance.
-    InsufficientTreasuryBalance = 71,
-
-    // ========== Reconciliation Errors (80-89) ==========
-    /// The reconciliation request was rejected because the caller is not
-    /// authorized to run reconciliation for this market.
-    ///
-    /// Reconciliation is a privileged, deny-by-default surface: only the
-    /// admin (or an explicitly authorized reconciler) may invoke it. Untrusted
-    /// clients cannot bypass this policy.
-    ReconciliationUnauthorized = 80,
-
-    /// The reconciliation request was replayed or is already in progress.
-    ///
-    /// Reconciliation entrypoints are idempotent: a request carrying a
-    /// correlation id that has already been processed (or is currently being
-    /// processed) is rejected so money-path side effects cannot run twice.
-    ReconciliationAlreadyProcessed = 81,
-
-    /// The reconciliation inputs are inconsistent with on-chain state.
-    ///
-    /// The supplied balances/positions do not match the contract's recorded
-    /// state, so the reconciliation is refused rather than silently applied.
-    /// The contract remains the source of truth for balances and swaps.
-    ReconciliationMismatch = 82,
-
-    /// Reconciliation could not complete because a required dependency
-    /// (RPC/DB/Redis or oracle feed) is unavailable.
-    ///
-    /// Writes fail closed: no partial reconciliation is persisted when a
-    /// dependency is down.
-    ReconciliationDependencyUnavailable = 83,
-
-    /// The reconciliation batch was empty or exceeded the configured maximum
-    /// size, and was rejected to surface caller bugs and prevent griefing.
-    ReconciliationBatchInvalid = 84,
-}
+    /// required role. Deny-by-default
