@@ -7,11 +7,12 @@ use soroban_sdk::contracterror;
 /// - Position Errors: 10-19
 /// - Oracle Errors: 20-29
 /// - Validation Errors: 30-39
-/// - Authorization Errors: 40-49
+/// - Authorization Errors: 41-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
 /// - Reconciliation Errors: 80-89
+/// - Deployment Errors: 90-99
 ///
 /// # Example
 /// ```ignore
@@ -201,96 +202,46 @@ pub enum ContractError {
     /// Caller is not authorized to perform this operation.
     ///
     /// The caller must be the admin or an address explicitly granted the
-    /// required role. Deny-by-default: any privileged entrypoint rejects
-    /// callers that do not hold the required authorization.
+    /// required role. Deny-by-default: any privileged entrypoint that cannot
+    /// positively confirm the caller's role returns this error rather than
+    /// proceeding.
     Unauthorized = 41,
 
-    /// The caller is not the contract admin.
+    // ========== Deployment Errors (90-99) ==========
+    /// The supplied deployment ID is not registered for this network.
     ///
-    /// Admin-only entrypoints (configuration, treasury, fee waivers, pause)
-    /// reject any caller other than the stored admin address.
-    NotAdmin = 42,
+    /// Deployment IDs are fail-closed: an unknown, unregistered, or
+    /// mismatched ID is rejected outright rather than silently defaulted to
+    /// a built-in deployment. Callers must supply an ID that has been
+    /// explicitly registered for the active network (testnet vs mainnet).
+    UnknownDeploymentId = 90,
 
-    /// The contract is paused and money-path operations are disabled.
+    /// The supplied deployment ID is registered but does not match the
+    /// active network (e.g. a testnet ID used on mainnet).
     ///
-    /// The admin kill-switch halts deposits, trades, and settlement until the
-    /// contract is unpaused. Reads remain available.
-    ContractPaused = 43,
+    /// Address drift between networks is a money-path hazard, so a mismatch
+    /// is rejected instead of being coerced to the local network's default.
+    DeploymentIdNetworkMismatch = 91,
 
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
+    /// The deployment ID is malformed (empty, wrong length, or contains
+    /// characters outside the allowed set).
     ///
-    /// The underlying token contract rejected the transfer (insufficient
-    /// balance, frozen account, or a failing token implementation).
-    TokenTransferFailed = 50,
+    /// Rejected before any registry lookup so adversarial input cannot be
+    /// used to probe or grief the deployment registry.
+    InvalidDeploymentId = 92,
 
-    /// Token address is invalid or unsupported.
+    /// The deployment registry is unavailable (RPC/DB/Redis outage) and the
+    /// requested write cannot be safely validated.
     ///
-    /// The configured collateral token must be a valid token contract.
-    InvalidToken = 51,
+    /// Fail-closed: when the registry cannot be read, deployment-ID-gated
+    /// writes are rejected rather than assumed valid.
+    DeploymentRegistryUnavailable = 93,
 
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
+    /// The deployment ID has already been registered and cannot be
+    /// overwritten.
     ///
-    /// Inputs were too large for the intermediate result to fit in the
-    /// target integer type. Callers should reduce magnitudes or split work.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// A subtraction would have produced a negative value where only
-    /// non-negative results are valid.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero was attempted.
-    ///
-    /// The divisor evaluated to zero; callers must guard against zero
-    /// denominators before performing the division.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// Treasury withdrawal failed.
-    ///
-    /// The treasury could not release the requested amount (insufficient
-    /// balance or a failing token transfer).
-    TreasuryWithdrawFailed = 70,
-
-    /// The requested treasury amount exceeds the available balance.
-    ///
-    /// Withdrawals are capped at the currently accrued treasury balance.
-    InsufficientTreasuryBalance = 71,
-
-    // ========== Reconciliation Errors (80-89) ==========
-    /// The reconciliation request was rejected because the caller is not
-    /// authorized to run reconciliation for this market.
-    ///
-    /// Reconciliation is a privileged, deny-by-default surface: only the
-    /// admin (or an explicitly authorized reconciler) may invoke it. Untrusted
-    /// clients cannot bypass this policy.
-    ReconciliationUnauthorized = 80,
-
-    /// The reconciliation request was replayed or is already in progress.
-    ///
-    /// Reconciliation entrypoints are idempotent: a request carrying a
-    /// correlation id that has already been processed (or is currently being
-    /// processed) is rejected so money-path side effects cannot run twice.
-    ReconciliationAlreadyProcessed = 81,
-
-    /// The reconciliation inputs are inconsistent with on-chain state.
-    ///
-    /// The supplied balances/positions do not match the contract's recorded
-    /// state, so the reconciliation is refused rather than silently applied.
-    /// The contract remains the source of truth for balances and swaps.
-    ReconciliationMismatch = 82,
-
-    /// Reconciliation could not complete because a required dependency
-    /// (RPC/DB/Redis or oracle feed) is unavailable.
-    ///
-    /// Writes fail closed: no partial reconciliation is persisted when a
-    /// dependency is down.
-    ReconciliationDependencyUnavailable = 83,
-
-    /// The reconciliation batch was empty or exceeded the configured maximum
-    /// size, and was rejected to surface caller bugs and prevent griefing.
-    ReconciliationBatchInvalid = 84,
+    /// Registration is idempotency-hostile by design: replayed or concurrent
+    /// register requests are rejected so an untrusted caller cannot override
+    /// an existing deployment mapping.
+    DeploymentIdAlreadyRegistered = 94,
 }
