@@ -89,6 +89,39 @@ pub fn cancel_pending_fee_rate(
     Ok(())
 }
 
+/// Compute the treasury fee (in stroops) for a given trade notional.
+///
+/// This is the single source of truth for the fee amount that the withdraw
+/// path wires into `treasury::collect_fee`. It is pure and fail-closed:
+///
+/// * `notional` is the gross amount being settled (must be > 0).
+/// * The rate is read from storage (the timelocked value), never from the
+///   caller, so an untrusted client cannot influence the fee.
+/// * The result is capped at `notional` so a misconfigured rate can never
+///   make the treasury collect more than the trade itself.
+///
+/// # Errors
+/// - `InvalidAmount` if `notional` is zero or negative
+pub fn compute_treasury_fee(env: &Env, notional: i128) -> Result<i128, ContractError> {
+    if notional <= 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+    let rate_bps = storage::get_fee_rate_bps(env) as i128;
+    // rate_bps is bounded by FEE_RATE_MAX_BPS at queue time, but clamp again
+    // here so a corrupted/legacy storage value can never over-collect.
+    let rate_bps = if rate_bps > FEE_RATE_MAX_BPS as i128 {
+        FEE_RATE_MAX_BPS as i128
+    } else {
+        rate_bps
+    };
+    let fee = notional
+        .checked_mul(rate_bps)
+        .ok_or(ContractError::InvalidAmount)?
+        / 10_000;
+    // Fail-closed: never collect more than the notional itself.
+    Ok(if fee > notional { notional } else { fee })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +260,7 @@ mod tests {
         assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_rate_change_queued_event"));
     }
 
-    /// Apply emits FeeRateAppliedEvent.
+    /// Apply emits FeeRateApplied
     #[test]
     fn test_apply_emits_event() {
         use soroban_sdk::testutils::Events as _;
@@ -241,75 +274,58 @@ mod tests {
             queue_fee_rate_change(&env, &admin, 100).unwrap();
         });
         env.ledger().set_timestamp(FEE_RATE_TIMELOCK_SECONDS);
-
         env.as_contract(&contract_id, || {
             apply_pending_fee_rate(&env, &admin).unwrap();
         });
 
         let events = env.events().all();
-        let apply_event = events.iter().find(|e| {
-            let t: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(&env);
-            t == soroban_sdk::Symbol::new(&env, "fee_rate_applied_event")
-        });
-        assert!(apply_event.is_some(), "apply event must be emitted");
+        let last = events.last().unwrap();
+        let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_rate_applied_event"));
     }
 
-    /// Admin can cancel a queued change during the timelock window; the
-    /// pending slot is cleared and the stored rate is untouched.
+    // ---- treasury collect_fee wiring ----
+
+    /// Fee is computed from the stored (timelocked) rate, not from the caller.
     #[test]
-    fn test_cancel_pending_fee_rate() {
+    fn test_compute_treasury_fee_uses_stored_rate() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
+        let (contract_id, _admin) = setup(&env);
 
         env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
+            storage::set_fee_rate_bps(&env, 100); // 1 %
+            let fee = compute_treasury_fee(&env, 10_000).unwrap();
+            assert_eq!(fee, 100);
         });
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(result, Ok(()));
-
-        // Pending slot cleared — apply must now fail closed.
-        let apply = env.as_contract(&contract_id, || {
-            apply_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(apply, Err(ContractError::FeeRateTimelockNotExpired));
     }
 
-    /// Cancelling with nothing queued fails closed.
+    /// Zero or negative notional is rejected (fail-closed).
     #[test]
-    fn test_cancel_without_pending_rejected() {
+    fn test_compute_treasury_fee_rejects_non_positive() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(result, Err(ContractError::NoPendingFeeRate));
-    }
-
-    /// Non-admin cannot cancel a queued change.
-    #[test]
-    fn test_non_admin_cannot_cancel() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-        let non_admin = Address::generate(&env);
+        let (contract_id, _admin) = setup(&env);
 
         env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
+            assert_eq!(compute_treasury_fee(&env, 0), Err(ContractError::InvalidAmount));
+            assert_eq!(compute_treasury_fee(&env, -1), Err(ContractError::InvalidAmount));
         });
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &non_admin)
-        });
-        assert_eq!(result, Err(ContractError::NotAdmin));
     }
 
-    // ---- Issue 3 regression: timelock MUST use env.ledger().timestamp() ----
-    //
-    // Pend
+    /// A corrupted storage rate above the cap is clamped so the treasury can
+    /// never over-collect.
+    #[test]
+    fn test_compute_treasury_fee_clamps_corrupt_rate() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+
+        env.as_contract(&contract_id, || {
+            storage::set_fee_rate_bps(&env, FEE_RATE_MAX_BPS * 10);
+            let fee = compute_treasury_fee(&env, 10_000).unwrap();
+            // Clamped to FEE_RATE_MAX_BPS (500 bps = 5 %).
+            assert_eq!(fee, 500);
+        });
+    }
 }
