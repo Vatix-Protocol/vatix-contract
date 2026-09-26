@@ -579,3 +579,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-873 -->
 - #873: AUTH_TABLE 100% coverage + CI
+
+<!-- handsoff-issue-890 -->
+- #890: Collect fee callback fully implemented

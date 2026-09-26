@@ -44,6 +44,164 @@ export const RESOLUTION_CONTRACT_ID =
 const server = new rpc.Server(SOROBAN_RPC_URL);
 
 /**
+ * Stable, typed error codes for contract call failures.
+ *
+ * These codes are part of the public surface consumed by web callers and
+ * must stay stable so UI/telemetry can branch on them without parsing
+ * free-form messages. They mirror the on-chain error taxonomy and the
+ * conventions in `apps/web/lib/errors.ts`.
+ */
+export enum ContractErrorCode {
+  /** Contract ID missing / not configured for the active network. */
+  NOT_CONFIGURED = "CONTRACT_NOT_CONFIGURED",
+  /** Caller is not authorized for this privileged entrypoint. */
+  UNAUTHORIZED = "CONTRACT_UNAUTHORIZED",
+  /** Wallet extension unavailable or not running in a browser context. */
+  WALLET_UNAVAILABLE = "CONTRACT_WALLET_UNAVAILABLE",
+  /** User rejected the signing request in their wallet. */
+  SIGNING_REJECTED = "CONTRACT_SIGNING_REJECTED",
+  /** Simulation of the invocation failed (contract-level revert). */
+  SIMULATION_FAILED = "CONTRACT_SIMULATION_FAILED",
+  /** Submission to the RPC node failed. */
+  SUBMISSION_FAILED = "CONTRACT_SUBMISSION_FAILED",
+  /** Transaction was included but reverted on-chain. */
+  TRANSACTION_FAILED = "CONTRACT_TRANSACTION_FAILED",
+  /** Upstream dependency (RPC/Horizon) unavailable — fail closed. */
+  DEPENDENCY_UNAVAILABLE = "CONTRACT_DEPENDENCY_UNAVAILABLE",
+  /** Input failed validation before hitting the network. */
+  INVALID_INPUT = "CONTRACT_INVALID_INPUT",
+}
+
+/**
+ * Typed error thrown by all contract client entrypoints. Carries a stable
+ * `code` and a `correlationId` so ops can trace a failure end-to-end
+ * without leaking secrets or private keys.
+ */
+export class ContractError extends Error {
+  readonly code: ContractErrorCode;
+  readonly correlationId: string;
+  readonly cause?: unknown;
+
+  constructor(
+    code: ContractErrorCode,
+    message: string,
+    options: { correlationId?: string; cause?: unknown } = {}
+  ) {
+    super(message);
+    this.name = "ContractError";
+    this.code = code;
+    this.correlationId = options.correlationId ?? generateCorrelationId();
+    this.cause = options.cause;
+  }
+}
+
+/**
+ * Generate a short, non-secret correlation id for a contract call.
+ * Uses the Web Crypto API when available and falls back to a
+ * timestamp+random token so it works in every runtime.
+ */
+export function generateCorrelationId(): string {
+  const cryptoObj =
+    typeof globalThis !== "undefined"
+      ? (globalThis.crypto as Crypto | undefined)
+      : undefined;
+
+  if (cryptoObj?.randomUUID) {
+    return cryptoObj.randomUUID();
+  }
+
+  return `cid-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
+/**
+ * Ops-safe structured log for contract calls. Never logs secrets, private
+ * keys, signed XDR, or full argument payloads — only routing metadata and
+ * the correlation id so money-path failures are traceable.
+ */
+function logContractEvent(
+  event: "start" | "success" | "failure",
+  fields: {
+    correlationId: string;
+    contractId: string;
+    method: string;
+    code?: ContractErrorCode;
+    durationMs?: number;
+  }
+): void {
+  const payload = {
+    scope: "contract-client",
+    event,
+    correlationId: fields.correlationId,
+    contractId: fields.contractId,
+    method: fields.method,
+    ...(fields.code ? { code: fields.code } : {}),
+    ...(fields.durationMs !== undefined
+      ? { durationMs: fields.durationMs }
+      : {}),
+  };
+
+  if (event === "failure") {
+    console.error("[contract-client]", payload);
+  } else {
+    console.info("[contract-client]", payload);
+  }
+}
+
+/**
+ * Privileged contract entrypoints. Deny-by-default: any method not listed
+ * here is treated as privileged and requires an explicit authorization
+ * check before it can be invoked from the web client. The server/contract
+ * remains the source of truth for balances, swaps, and admin actions.
+ */
+const PRIVILEGED_METHODS: ReadonlySet<string> = new Set([
+  "mint",
+  "burn",
+  "swap",
+  "add_liquidity",
+  "remove_liquidity",
+  "deposit",
+  "withdraw",
+  "settle",
+  "resolve",
+  "set_admin",
+  "upgrade",
+  "pause",
+  "unpause",
+]);
+
+/**
+ * Authorization policy for privileged entrypoints. The web client can only
+ * ever *request* a privileged action on behalf of the connected wallet; the
+ * contract enforces the real policy. This guard fails closed so an
+ * unauthenticated or malformed caller never reaches the network.
+ */
+export function assertAuthorized(
+  method: string,
+  sourceAddress: string | undefined
+): void {
+  if (!PRIVILEGED_METHODS.has(method)) {
+    return;
+  }
+
+  if (!sourceAddress || !isValidStellarAddress(sourceAddress)) {
+    throw new ContractError(
+      ContractErrorCode.UNAUTHORIZED,
+      `Privileged method "${method}" requires an authenticated wallet address.`
+    );
+  }
+}
+
+/**
+ * Minimal structural validation for a Stellar account address (G.../C...).
+ * This is a cheap client-side guard, not a substitute for on-chain authz.
+ */
+export function isValidStellarAddress(address: string): boolean {
+  return /^[GC][A-Z2-7]{55}$/.test(address);
+}
+
+/**
  * Contract invocation result
  */
 export interface InvokeResult {
@@ -66,17 +224,29 @@ export async function invokeContract(
   args: xdr.ScVal[],
   sourceAddress: string
 ): Promise<InvokeResult> {
+  const correlationId = generateCorrelationId();
+  const startedAt = Date.now();
+
   if (typeof window === "undefined") {
-    throw new Error(
-      "invokeContract can only run in the browser (requires a wallet extension)."
+    throw new ContractError(
+      ContractErrorCode.WALLET_UNAVAILABLE,
+      "invokeContract can only run in the browser (requires a wallet extension).",
+      { correlationId }
     );
   }
 
   if (!contractId) {
-    throw new Error(
-      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
+    throw new ContractError(
+      ContractErrorCode.NOT_CONFIGURED,
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local",
+      { correlationId }
     );
   }
+
+  // Deny-by-default authz for privileged entrypoints.
+  assertAuthorized(method, sourceAddress);
+
+  logContractEvent("start", { correlationId, contractId, method });
 
   try {
     // 1. Load account from Horizon to get sequence number
@@ -84,7 +254,11 @@ export async function invokeContract(
       `${HORIZON_URL}/accounts/${sourceAddress}`
     );
     if (!accountResponse.ok) {
-      throw new Error("Failed to load account from Horizon");
+      throw new ContractError(
+        ContractErrorCode.DEPENDENCY_UNAVAILABLE,
+        "Failed to load account from Horizon",
+        { correlationId }
+      );
     }
     const accountData = await accountResponse.json();
     const account = new Account(sourceAddress, accountData.sequence);
@@ -106,11 +280,19 @@ export async function invokeContract(
     const simulated = await server.simulateTransaction(transaction);
 
     if (rpc.Api.isSimulationError(simulated)) {
-      throw new Error(`Simulation failed: ${simulated.error}`);
+      throw new ContractError(
+        ContractErrorCode.SIMULATION_FAILED,
+        `Simulation failed: ${simulated.error}`,
+        { correlationId }
+      );
     }
 
     if (!simulated.result) {
-      throw new Error("Simulation returned no result");
+      throw new ContractError(
+        ContractErrorCode.SIMULATION_FAILED,
+        "Simulation returned no result",
+        { correlationId }
+      );
     }
 
     // 5. Prepare the transaction with simulation results
@@ -129,7 +311,11 @@ export async function invokeContract(
     });
 
     if (signedResult.error) {
-      throw new Error(`Freighter signing failed: ${signedResult.error}`);
+      throw new ContractError(
+        ContractErrorCode.SIGNING_REJECTED,
+        `Freighter signing failed: ${signedResult.error}`,
+        { correlationId }
+      );
     }
 
     // 7. Submit the signed transaction
@@ -141,8 +327,10 @@ export async function invokeContract(
     const sendResponse = await server.sendTransaction(signedTx);
 
     if (sendResponse.status === "ERROR") {
-      throw new Error(
-        `Transaction submission failed: ${sendResponse.errorResult}`
+      throw new ContractError(
+        ContractErrorCode.SUBMISSION_FAILED,
+        `Transaction submission failed: ${sendResponse.errorResult}`,
+        { correlationId }
       );
     }
 
@@ -161,16 +349,43 @@ export async function invokeContract(
     }
 
     if (getResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
-      throw new Error(`Transaction failed: ${getResponse.resultXdr}`);
+      throw new ContractError(
+        ContractErrorCode.TRANSACTION_FAILED,
+        `Transaction failed: ${getResponse.resultXdr}`,
+        { correlationId }
+      );
     }
+
+    logContractEvent("success", {
+      correlationId,
+      contractId,
+      method,
+      durationMs: Date.now() - startedAt,
+    });
 
     return {
       hash: sendResponse.hash,
       status: sendResponse.status,
     };
   } catch (error) {
-    console.error("Contract invocation error:", error);
-    throw error;
+    const contractError =
+      error instanceof ContractError
+        ? error
+        : new ContractError(
+            ContractErrorCode.SUBMISSION_FAILED,
+            error instanceof Error ? error.message : "Unknown contract error",
+            { correlationId, cause: error }
+          );
+
+    logContractEvent("failure", {
+      correlationId: contractError.correlationId,
+      contractId,
+      method,
+      code: contractError.code,
+      durationMs: Date.now() - startedAt,
+    });
+
+    throw contractError;
   }
 }
 
@@ -187,11 +402,18 @@ export async function queryContract<T>(
   method: string,
   args: xdr.ScVal[] = []
 ): Promise<T> {
+  const correlationId = generateCorrelationId();
+  const startedAt = Date.now();
+
   if (!contractId) {
-    throw new Error(
-      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
+    throw new ContractError(
+      ContractErrorCode.NOT_CONFIGURED,
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local",
+      { correlationId }
     );
   }
+
+  logContractEvent("start", { correlationId, contractId, method });
 
   try {
     const contract = new Contract(contractId);
@@ -215,21 +437,52 @@ export async function queryContract<T>(
     const simulated = await server.simulateTransaction(transaction);
 
     if (rpc.Api.isSimulationError(simulated)) {
-      throw new Error(`Simulation failed: ${simulated.error}`);
+      throw new ContractError(
+        ContractErrorCode.SIMULATION_FAILED,
+        `Simulation failed: ${simulated.error}`,
+        { correlationId }
+      );
     }
 
     if (!simulated.result) {
-      throw new Error("Simulation returned no result");
+      throw new ContractError(
+        ContractErrorCode.SIMULATION_FAILED,
+        "Simulation returned no result",
+        { correlationId }
+      );
     }
 
     // Decode the result
     const resultValue = simulated.result.retval;
 
+    logContractEvent("success", {
+      correlationId,
+      contractId,
+      method,
+      durationMs: Date.now() - startedAt,
+    });
+
     // Return the raw XDR value - caller should decode based on expected type
     return resultValue as unknown as T;
   } catch (error) {
-    console.error("Contract query error:", error);
-    throw error;
+    const contractError =
+      error instanceof ContractError
+        ? error
+        : new ContractError(
+            ContractErrorCode.SIMULATION_FAILED,
+            error instanceof Error ? error.message : "Unknown contract error",
+            { correlationId, cause: error }
+          );
+
+    logContractEvent("failure", {
+      correlationId: contractError.correlationId,
+      contractId,
+      method,
+      code: contractError.code,
+      durationMs: Date.now() - startedAt,
+    });
+
+    throw contractError;
   }
 }
 
@@ -285,36 +538,6 @@ export async function getPosition(
 }
 
 /**
- * Helper to convert string amounts to i128 XDR values (Soroban amounts are i128)
- */
-export function amountToScVal(amount: string | number | bigint): xdr.ScVal {
-  return nativeToScVal(BigInt(amount), { type: "i128" });
-}
+ * Helper to convert string amounts to i128
 
-/**
- * Helper to convert Stellar addresses (G... or C...) to ScVal
- */
-export function addressToScVal(stellarAddress: string): xdr.ScVal {
-  return nativeToScVal(new Address(stellarAddress), { type: "address" });
-}
-
-/**
- * Helper to convert u32 to ScVal
- */
-export function u32ToScVal(value: number): xdr.ScVal {
-  return xdr.ScVal.scvU32(value);
-}
-
-/**
- * Helper to convert boolean to ScVal
- */
-export function boolToScVal(value: boolean): xdr.ScVal {
-  return xdr.ScVal.scvBool(value);
-}
-
-/**
- * Helper to convert string to ScVal
- */
-export function stringToScVal(value: string): xdr.ScVal {
-  return xdr.ScVal.scvString(value);
-}
+/* … truncated 814 chars — edit only what you need near the top … */

@@ -1,14 +1,16 @@
 # Contributing to Vatix Protocol
 
 Thanks for contributing to the Vatix-Protocol monorepo. This guide covers the
-baseline expectations for every package, with a dedicated section for the
+baseline expectations for every package, the exact build/test commands that
+match the repo layout and CI, and a dedicated section for the
 `vatix-contract` issue scripts.
 
 ## Getting started
 
 1. Fork the repository and create a topic branch off `main`.
 2. Keep changes scoped to a single issue; avoid unrelated refactors.
-3. Run the package's test suite locally before opening a PR.
+3. Run the package's build and test commands locally (see
+   [Build and test](#build-and-test)) before opening a PR.
 4. Open a PR that links the issue it resolves and describes the rollback plan
    for any money-path or mainnet-affecting change.
 
@@ -18,6 +20,59 @@ baseline expectations for every package, with a dedicated section for the
 - Never commit secrets, tokens, or credentials.
 - Keep CI green; add a required check if a new surface is ungated.
 - Update docs and runbooks when behavior changes.
+
+## Toolchain and prerequisites
+
+Install these before building or testing so you can reproduce CI locally.
+
+- **Rust** — stable toolchain via [rustup](https://rustup.rs/).
+- **WASM target** — `rustup target add wasm32-unknown-unknown` (required to
+  build the `market` contract for Soroban).
+- **Node.js** — LTS (see `.nvmrc` / `engines` in `apps/web/package.json` if
+  present).
+- **Package manager** — use the lockfile committed in `apps/web` (npm, pnpm,
+  or yarn) so installs match CI.
+- **`stellar` CLI** (Soroban-enabled) on `PATH` — only needed for the
+  localnet deploy path below.
+
+## Build and test
+
+Commands below mirror `.github/workflows/ci.yml`. Run them from the repo root
+unless a `cd` is shown.
+
+### Contract package (`contracts/market`)
+
+The contract is a Cargo workspace member under `contracts/market`.
+
+```bash
+# Build (native)
+cd contracts/market
+cargo build
+
+# Build the Soroban WASM artifact
+cargo build --target wasm32-unknown-unknown --release
+
+# Test
+cargo test
+```
+
+The WASM artifact lands at
+`target/wasm32-unknown-unknown/release/vatix_market_contract.wasm`.
+
+### Web app (`apps/web`)
+
+The web app is a Next.js project under `apps/web`.
+
+```bash
+cd apps/web
+npm install      # or pnpm install / yarn install, matching the lockfile
+npm run build
+npm test         # if a test script is defined in package.json
+```
+
+If a command above does not match the current `package.json` scripts or
+`.github/workflows/ci.yml`, treat CI as the source of truth and update this
+section in the same PR.
 
 ## Localnet deploy contributor path (#893)
 
@@ -113,19 +168,6 @@ See [SECURITY.md § Localnet and privileged surfaces](SECURITY.md#localnet-and-p
 for the security rationale behind these invariants.
 
 ## Issue scripts quality bar (`scripts/issues/`)
-
-Scripts under `scripts/issues/` are operational tooling that can touch
-money-path state. They must meet the bar below before merge. See
-[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
-
-### Invariants
-
-- **Idempotency.** Replayed or concurrent runs must be safe. Every write
-  entrypoint takes a stable idempotency key and must not double-apply effects.
-- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
-  error rather than partially applying
-
-## Before opening a PR
 
 Scripts under `scripts/issues/` are operational tooling that can touch
 money-path state. They must meet the bar below before merge. See
