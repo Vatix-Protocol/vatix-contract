@@ -188,6 +188,18 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
+    /// Market metadata URI does not use the `https` scheme (#889).
+    ///
+    /// Metadata URIs are restricted to an https-only allowlist. Any other
+    /// scheme — `http`, `ipfs`, `data`, `javascript`, `file`, or a scheme-less
+    /// / relative reference — is rejected outright. This is fail-closed: an
+    /// untrusted caller cannot smuggle in a non-https URI (e.g. a `javascript:`
+    /// payload for a frontend to execute) by relying on a permissive default.
+    ///
+    /// Distinct from `InvalidMetadataUri` (37), which covers length/emptiness
+    /// violations, so callers and metrics can tell the two failure modes apart.
+    MetadataUriSchemeNotAllowed = 40,
+
     /// Fee rate is invalid (e.g. exceeds the configured fee cap or is out of range).
     InvalidFeeRate = 38,
 
@@ -201,73 +213,6 @@ pub enum ContractError {
 
     /// Treasury address is invalid (e.g. contract address or zero address).
     ///
-    /// The admin-only `set_treasury` setter (#857) must receive a valid user
-    /// account address. Contract addresses and reserved/zero addresses are
-    /// rejected so fees cannot be routed to an address the admin does not
-    /// actually control.
-    InvalidTreasury = 40,
+    /// The admin-only `set_treasury` setter (
 
-    // ========== Authorization Errors (41-49) ==========
-    /// Caller is not authorized to perform this operation.
-    ///
-    /// The caller must be the admin or an address explicitly granted the
-    /// required role. Untrusted clients cannot bypass this check.
-    Unauthorized = 41,
-
-    /// Caller is not the admin.
-    ///
-    /// Admin-only entrypoints (configuration, treasury, fee waivers) reject
-    /// any caller other than the stored admin address.
-    NotAdmin = 42,
-
-    /// The caller's authorization has expired or is otherwise no longer valid.
-    ///
-    /// Re-authenticate and retry; privileged surfaces are deny-by-default.
-    AuthorizationExpired = 43,
-
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
-    ///
-    /// The underlying token contract rejected the transfer (e.g. insufficient
-    /// balance or a frozen account).
-    TokenTransferFailed = 50,
-
-    /// Token address is invalid.
-    ///
-    /// The token must be a valid, supported asset contract.
-    InvalidToken = 51,
-
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred.
-    ///
-    /// The operation would exceed the maximum representable value.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred.
-    ///
-    /// The operation would go below the minimum representable value.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero.
-    ///
-    /// The divisor must be non-zero.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// Treasury operation failed.
-    ///
-    /// The treasury rejected the operation (e.g. insufficient balance).
-    TreasuryOperationFailed = 70,
-
-    // ========== Reconciliation Errors (80-89) ==========
-    /// Reconciliation check failed.
-    ///
-    /// On-chain balances did not match the expected accounting.
-    ReconciliationFailed = 80,
-
-    // ========== Conservation Errors (90-99) ==========
-    /// Conservation invariant violated.
-    ///
-    /// Total collateral in must equal total collateral out plus locked value.
-    ConservationViolated = 90,
-}
+/* … truncated 2349 chars — edit only what you need near the top … */
