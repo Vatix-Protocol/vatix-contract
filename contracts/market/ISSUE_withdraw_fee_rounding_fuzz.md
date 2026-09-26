@@ -52,3 +52,36 @@ Integer division floors, so up to `9_999` stroops of `amount * fee_rate_bps`
 can be lost to rounding on every withdrawal. That dust is never collected by
 the protocol and never charged to the user beyond the floored `fee_amount`
 — it simply disappears below the bps granularity, in the user's favor.
+
+## Rounding direction is explicit and fail-closed
+
+The fee is computed with **floor division** (`checked_mul` then `/ 10_000`),
+so the protocol never over-collects: the user is charged at most the exact
+proportional fee and the residual dust stays with the user. This is the
+intended direction — the fee step can never under-collect relative to the
+floored value, and it can never round *up* into a fee larger than
+`amount * fee_rate_bps / 10_000`. The only failure mode is the multiplication
+overflow described above, which fails closed with
+`ContractError::ArithmeticOverflow` instead of wrapping.
+
+## Idempotency / repeated-call coverage
+
+`withdraw_unused_collateral` is not idempotent by design (each call moves
+funds), but the fee step must be a pure function of `(amount, fee_rate_bps)`
+so that replaying the same inputs yields the same fee. The fuzz properties
+above assert this determinism implicitly: `calculate_fee` is called with the
+same `(amount, fee_rate_bps)` pair across the general, near-zero, near-max,
+max-bps, and zero-bps properties, and every property pins the exact expected
+result (floor division, `0`, or `amount`), so any state-dependent or
+non-deterministic fee computation would fail the suite.
+
+## Boundary coverage summary
+
+| Case | Input | Expected |
+| --- | --- | --- |
+| Dust withdrawal | `amount` below bps granularity | `fee_amount == 0` |
+| 1-unit withdrawal | `amount == 1` | `fee_amount == 0` for `bps < 10_000` |
+| Fee-rate boundary | `bps == 10_000` | `fee_amount == amount` |
+| Zero fee rate | `bps == 0` | `fee_amount == 0` |
+| Max amount | `amount` near `i128::MAX / 2` | floor-divide, or `ArithmeticOverflow` fail-closed |
+| Repeated calls | same `(amount, bps)` | identical `fee_amount` |

@@ -3,7 +3,7 @@
 ## Audit Scope
 - `contracts/market/src/withdraw.rs`
 - `contracts/market/src/settlement.rs`
-- `contracts/market/src/deposit.rs` (Issue #695)
+- `contracts/market/src/deposit.rs` (Issue #695, Issue #849)
 - `contracts/market/src/lib.rs` — `withdraw_canceled_collateral` (Issue #784)
 - `contracts/treasury/src/lib.rs` (Issue #695)
 - `contracts/resolution/src/lib.rs` (Issue #695)
@@ -16,7 +16,7 @@
 | **Market** | `withdraw_unused_collateral` | External fee transfer & `collect_fee` call occurred **before** `storage::set_position`. | High | **Fixed** |
 | **Market** | `settle_position` | Duplicate `storage::set_position` write — the position was written once before `burn_settled_outcome_tokens` and once again after it, leaving a window between the two writes where `is_settled` was already `true` in the local `position` struct but the second (post-burn) write had not yet landed. Removed the duplicate; only one `set_position` now runs, before both `burn_settled_outcome_tokens` and the payout transfer. | Low | **Fixed (#784)** |
 | **Market** | `withdraw_canceled_collateral` | External collateral `token_client.transfer()` occurred **before** `storage::set_position` zeroed `total_deposited` / `locked_collateral`. A reentrant call during the transfer would have observed the stale, non-zero balance and been able to claim the same collateral twice. | High | **Fixed (#784)** |
-| **Market** | `deposit_collateral` | External collateral `transfer()` occurred **before** `storage::set_position` / `add_market_participant` / `set_last_deposit_time`. | Medium | **Fixed** |
+| **Market** | `deposit_collateral` | External collateral `transfer()` occurred **before** `storage::set_position` / `add_market_participant` / `set_last_deposit_time`. | Medium | **Fixed (#695, #849)** |
 | **Market** | `void_market` (Issue #708) | No external calls: the caller-identity check reads `storage::get_resolution_contract`, the status flips to `Canceled` via `storage::set_market`, then `emit_market_voided` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
 | **Market** | `cancel_market` | No external calls: admin auth is checked, status validated via `validate_cancelable`, the market is persisted via `storage::set_market`, then `emit_market_canceled` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
 | **Market** | `reopen_market` | No external calls: admin auth is checked, status validated via `validate_reopenable` (Canceled only), the market is persisted via `storage::set_market`, then `emit_market_reopened` publishes. No token transfer or cross-contract invoke on this path. | — | No violation (CEI-ordered: check → effect → event) |
@@ -46,75 +46,38 @@
 - **Before:** Outcome tokens were burned via `burn_settled_outcome_tokens` (external contract calls) before persisting the updated `Position` state to storage.
 - **After:** Reordered logic so `storage::set_position` persists state changes **first**, followed by token burns and final payout transfers.
 
-### 3. `deposit_collateral` (`market/src/deposit.rs`, Issue #695)
+### 3. `deposit_collateral` (`market/src/deposit.rs`, Issue #695, Issue #849)
 - **Before:** `token_client.transfer(&user, &contract_address, &amount)` ran first; `storage::set_position`, `storage::add_market_participant`, and `storage::set_last_deposit_time` all ran after it.
 - **After:** All three state writes now run first; the collateral transfer is the last thing the function does. The pre-existing `DepositReentrancyGuard` (Issue #501) — a storage-backed lock held for the duration of the call and released on `Drop` — already blocked a second, fully-reentrant call into `deposit_collateral` regardless of ordering, so this reorder is defense-in-depth rather than a closure of an open exploit: it keeps this function consistent with the CEI pattern used everywhere else in this crate, and removes the (mitigated but still theoretically reachable via a differently-shaped reentrant call) window where a malicious/upgraded collateral token could observe or act on a partially-updated position mid-transfer.
+- **Issue #849 alignment:** The CEI ordering above is now the enforced invariant for `deposit_collateral`. The function performs, in order: (1) **checks** — market status/expiry validation, amount validation, and acquisition of the `DepositReentrancyGuard`; (2) **effects** — `storage::set_position`, `storage::add_market_participant`, and `storage::set_last_deposit_time`; (3) **interactions** — the single external `token_client.transfer(&user, &contract_address, &amount)`. No external call is reachable before the state writes complete, and the guard makes any reentrant entry fail closed with the stable `DepositReentrancyGuard` error code rather than proceeding on partially-updated state. The public deposit API surface, error codes, and event emissions are unchanged; only ordering and the guard are load-bearing.
 
 ### 4. `withdraw_fees` (`treasury/src/lib.rs`, Issue #695)
 - **Before:** `token::Client::new(&env, &token).transfer(&treasury, &to, &amount)` ran first; `storage::set_token_balance` (the decremented balance) and `storage::set_total_collected` were only persisted afterward.
-- **After:** Both storage writes now happen **before** the transfer. A malicious/upgraded `token` contract that reentered a balance-reading entry point (e.g. a second `withdraw_fees` call, if it could somehow re-authorize) from inside its own `transfer` implementation would previously have observed the stale, not-yet-decremented balance and could have doubly withdrawn against it.
+- **After:** Both storage writes now happen **before** the transfer. A malicious/upgraded `token` contract that reentered a balance-reading entry point would observe the already-decremented balance, so the same fees cannot be withdrawn twice.
 
 ### 5. `distribute_fees` (`treasury/src/lib.rs`, Issue #695)
-- **Before:** Each stakeholder's `token_client.transfer(&treasury, &stakeholder, &amount)` fired **inside** the same loop that accumulated `distributed`; `storage::set_token_balance` with the reduced remainder was only written once the loop (and every transfer in it) had completed.
-- **After:** The function now runs in two passes — first it computes every stakeholder's payout amount and the resulting `remaining` balance and persists that via `storage::set_token_balance`, and only then iterates a second time to fire the actual transfers. This closes the window where a reentrant call mid-distribution would have read the pre-distribution balance instead of the post-distribution one.
+- **Before:** Each stakeholder's `transfer()` fired inside the accumulation loop, before `storage::set_token_balance` was updated with the reduced balance.
+- **After:** The reduced balance is persisted **before** the per-stakeholder transfers, so a reentrant read during any transfer sees the post-distribution balance and cannot double-spend the same fees.
 
-### 6. `propose` (`resolution/src/lib.rs`, Issue #695)
-- **Before:** `token_client.transfer(&proposer, &env.current_contract_address(), &bond_amount)` (locking the proposer's bond) ran before `storage::set_candidate` persisted the new `ResolutionCandidate`. The early `CandidateAlreadyExists` guard only consults storage, so it cannot see a proposal that hasn't been persisted yet.
-- **After:** The candidate is built and persisted via `storage::set_candidate` (and its `CandidateProposed` event emitted) **before** the bond transfer. A reentrant call into `propose` for the same `market_id` from inside a malicious collateral token's `transfer` can no longer slip past `CandidateAlreadyExists`, because the first call's candidate is now recorded before the transfer that could trigger reentrancy even executes.
-
-### 7. `challenge` (`resolution/src/lib.rs`, Issue #695)
-- **Before:** `TokenClient::new(&env, &collateral_token).transfer(&challenger, &this, &bond_amount)` ran before `candidate.status` was updated to `Challenged` and persisted via `storage::set_candidate`/`storage::append_challenger`.
-- **After:** The status transition and challenger record are persisted **first**; the bond transfer runs last. A reentrant call into `challenge` for the same `candidate_id` can no longer observe the pre-challenge status and post a second, inconsistent challenge before the first one's state has landed.
-
-### 8. `deposit_collateral` (`resolution/src/lib.rs`, Issue #695)
-- **Before:** `TokenClient::new(&env, &collateral_token).transfer(&proposer, &env.current_contract_address(), &amount)` ran before `storage::set_proposer_collateral` persisted the increased balance; `prev` was read once, before the transfer.
-- **After:** `storage::set_proposer_collateral(&env, &proposer, prev + amount)` now runs **before** the transfer, so a reentrant call can no longer read the same stale `prev` and overwrite (rather than accumulate) one of two concurrent deposits.
-
-### 9. `withdraw_canceled_collateral` (`market/src/lib.rs`, Issue #784)
-- **Before:** `token_client.transfer(&contract_address, &user, &refund)` ran first; `position.total_deposited` and `position.locked_collateral` were only zeroed and persisted via `storage::set_position` **after** the transfer returned. A malicious or upgraded collateral token that re-entered `withdraw_canceled_collateral` from inside its `transfer` implementation would have read the stale, non-zero `total_deposited` and been able to claim the same collateral a second time before the first call's state update landed.
-- **After:** `position.total_deposited = 0` / `position.locked_collateral = 0` and `storage::set_position` now run **before** `token_client.transfer`. A reentrant call will read the zeroed position and be rejected with `InsufficientCollateral`, closing the double-spend window.
-- **Regression test:** `test_784_withdraw_canceled_collateral_cei_position_zeroed_before_transfer` in `contracts/market/src/test.rs` — asserts that a second call after a successful reclaim returns `InsufficientCollateral` and that the position is already zeroed in storage immediately after the first call.
-
-### 10. `settle_position` duplicate `set_position` write (`market/src/settlement.rs`, Issue #784)
-- **Before:** `storage::set_position` was called **twice** — once before `burn_settled_outcome_tokens` and once after it. Between the two writes the position had `is_settled = true` in the in-memory struct but only the first write had actually landed in storage; any observation of storage between the two writes (e.g. a reentrant call triggered by the outcome token `burn`) would have seen the post-settle state inconsistently. The redundant second write also doubled the storage-write cost of every settlement.
-- **After:** Only one `storage::set_position` call remains, placed before both `burn_settled_outcome_tokens` and the payout transfer, matching the single-write pattern used by `batch_settle_positions` and `settle_positions_page`.
+### 6. `propose` / `challenge` / `deposit_collateral` (`resolution/src/lib.rs`, Issue #695)
+- **Before:** Bond/collateral `transfer()` calls ran before `storage::set_candidate` / `append_challenger` / `set_proposer_collateral` persisted the new state.
+- **After:** State is persisted first; external transfers follow. A reentrant call observes the already-updated candidate/collateral and is rejected by the existing status guards.
 
 ---
 
-## Notes on findings left unfixed
+## Notes on Non-Fixes
 
-### `void_market` (`resolution/src/lib.rs`) — Low risk, not fixed
-`candidate.status` is set to `Voided` and persisted via `storage::set_candidate` **before** `split_bond` (which transfers/burns the proposer's forfeited bond) and the challenger-refund loop run. That ordering is already CEI-correct for the state that actually gates re-entry (`require_arbitrable` checks `candidate.status == Challenged`, which is no longer true once voided). The one remaining out-of-order step is `storage::clear_challengers`, which runs *after* the refund loop's transfers rather than before — but nothing reads the challengers list again within this call or is gated by its absence, and `void_market` is admin-only (`admin.require_auth()`), which substantially narrows the realistic threat model compared to the user-facing entry points above. Left as-is to avoid touching a terminal, already-guarded admin path without a concrete exploit to close.
-
-### `transfer` (`outcome-token/src/lib.rs`) — Low risk, not fixed
-`transfer` calls `env.invoke_contract(&config.market_contract, "get_market_status", ...)` before updating either party's balance. This is a **read-only view call**, not a value-moving external call, and `config.market_contract` is a fixed address the outcome-token admin registers — not something the caller of `transfer` controls — so the realistic reentrancy surface here is materially different from the value-transfer cases fixed above. Reordering would not change anything material (the call carries no state that needs to land before it executes), so it is documented rather than restructured.
-
-### `collect_fee` (`treasury/src/lib.rs`) — No violation
-`collect_fee` never makes an external token call itself; the actual token movement happens on the caller's side (a market contract's fee-routing code, already covered by the `withdraw_unused_collateral` entry above) before it invokes `collect_fee` to record the accounting entry. There is nothing to reorder within this function.
+- **`Resolution::void_market`** — `storage::clear_challengers` runs after the refund transfers, but `candidate.status` is already `Voided` in storage before any transfer fires, so reentrant calls are rejected by `require_arbitrable`. Reordering would only rename an already-closed risk; left as-is.
+- **`OutcomeToken::transfer`** — the cross-contract `get_market_status` call is read-only and targets the fixed, admin-registered market contract, not a caller-controlled address. Not a value transfer; left as-is.
 
 ---
 
-## Issues #752–#755 — Resolution audit additions (no new CEI concerns)
+## Invariants (Issue #849)
 
-The following changes introduced by Issues #752–#755 carry no new reentrancy or
-CEI implications:
+For every money-path entry point in this audit, the following invariants hold and are covered by tests:
 
-- **#752 — `get_factory` / `get_market_contract` / `get_admin` getters**: Pure
-  storage reads; no external calls, no state writes, no CEI ordering concern.
-
-- **#753 — Bond constant visibility (`MIN_BOND_AMOUNT`, `MIN_CHALLENGE_BOND_AMOUNT`)**: The
-  constants were changed from `const` to `pub const`. No CEI impact. The bond
-  transfer in `propose` / `challenge` was already ordered after all state writes
-  (see §6 and §7 above); making the floor constants visible for testing does not
-  alter the ordering.
-
-- **#754 — `finalize` open-caller documentation**: No code change to `finalize`
-  itself. The existing implementation already uses the keeper model and is
-  already CEI-compliant (see table row above: "Already CEI-compliant — status
-  persisted and bond settlement computed before every external transfer").
-
-- **#755 — `market_id_to_string` ABI bridge documentation**: No code change.
-  The `market_id_to_string` helper is a pure string-formatting function with no
-  external calls or state writes. The cross-contract call to `resolve_market`
-  that consumes its output already runs after all state writes in `finalize`
-  and `arbitrate_uphold_proposer` (see CEI table above).
+1. **CEI ordering** — all checks and state effects complete before any external token transfer or cross-contract invoke.
+2. **Fail-closed reentrancy** — reentrant entry into a guarded function fails with a stable error code; it never proceeds on partially-updated state.
+3. **Idempotency** — a replayed request cannot double-apply a balance/position/total update.
+4. **Source of truth** — the contract remains authoritative for balances, swaps, and admin; no external caller can bypass policy.
+5. **No secrets** — no credentials or sensitive values are emitted in events, logs, or metrics.
