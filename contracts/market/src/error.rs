@@ -7,11 +7,12 @@ use soroban_sdk::contracterror;
 /// - Position Errors: 10-19
 /// - Oracle Errors: 20-29
 /// - Validation Errors: 30-39
-/// - Authorization Errors: 40-49
+/// - Authorization Errors: 41-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
 /// - Reconciliation Errors: 80-89
+/// - Conservation Errors: 90-99
 ///
 /// # Example
 /// ```ignore
@@ -201,96 +202,26 @@ pub enum ContractError {
     /// Caller is not authorized to perform this operation.
     ///
     /// The caller must be the admin or an address explicitly granted the
-    /// required role. Deny-by-default: any privileged entrypoint rejects
-    /// callers that do not hold the required authorization.
+    /// required role. Deny-by-default
     Unauthorized = 41,
 
-    /// The caller is not the contract admin.
+    // ========== Conservation Errors (90-99) ==========
+    /// The YES+NO vs collateral conservation invariant was violated (#887).
     ///
-    /// Admin-only entrypoints (configuration, treasury, fee waivers, pause)
-    /// reject any caller other than the stored admin address.
-    NotAdmin = 42,
+    /// For every market, the total outstanding YES shares plus the total
+    /// outstanding NO shares must equal the total collateral held (per unit
+    /// payout). Any mint/split, merge/redeem, deposit, or settlement path
+    /// that would leave `total_yes + total_no != total_collateral` is rejected
+    /// fail-closed with this error rather than panicking or silently
+    /// continuing with a corrupted ledger.
+    ConservationViolation = 90,
 
-    /// The contract is paused and money-path operations are disabled.
+    /// A conservation re-check failed after a state mutation was applied.
     ///
-    /// The admin kill-switch halts deposits, trades, and settlement until the
-    /// contract is unpaused. Reads remain available.
-    ContractPaused = 43,
-
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
-    ///
-    /// The underlying token contract rejected the transfer (insufficient
-    /// balance, frozen account, or a failing token implementation).
-    TokenTransferFailed = 50,
-
-    /// Token address is invalid or unsupported.
-    ///
-    /// The configured collateral token must be a valid token contract.
-    InvalidToken = 51,
-
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// Inputs were too large for the intermediate result to fit in the
-    /// target integer type. Callers should reduce magnitudes or split work.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// A subtraction would have produced a negative value where only
-    /// non-negative results are valid.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero was attempted.
-    ///
-    /// The divisor evaluated to zero; callers must guard against zero
-    /// denominators before performing the division.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// Treasury withdrawal failed.
-    ///
-    /// The treasury could not release the requested amount (insufficient
-    /// balance or a failing token transfer).
-    TreasuryWithdrawFailed = 70,
-
-    /// The requested treasury amount exceeds the available balance.
-    ///
-    /// Withdrawals are capped at the currently accrued treasury balance.
-    InsufficientTreasuryBalance = 71,
-
-    // ========== Reconciliation Errors (80-89) ==========
-    /// The reconciliation request was rejected because the caller is not
-    /// authorized to run reconciliation for this market.
-    ///
-    /// Reconciliation is a privileged, deny-by-default surface: only the
-    /// admin (or an explicitly authorized reconciler) may invoke it. Untrusted
-    /// clients cannot bypass this policy.
-    ReconciliationUnauthorized = 80,
-
-    /// The reconciliation request was replayed or is already in progress.
-    ///
-    /// Reconciliation entrypoints are idempotent: a request carrying a
-    /// correlation id that has already been processed (or is currently being
-    /// processed) is rejected so money-path side effects cannot run twice.
-    ReconciliationAlreadyProcessed = 81,
-
-    /// The reconciliation inputs are inconsistent with on-chain state.
-    ///
-    /// The supplied balances/positions do not match the contract's recorded
-    /// state, so the reconciliation is refused rather than silently applied.
-    /// The contract remains the source of truth for balances and swaps.
-    ReconciliationMismatch = 82,
-
-    /// Reconciliation could not complete because a required dependency
-    /// (RPC/DB/Redis or oracle feed) is unavailable.
-    ///
-    /// Writes fail closed: no partial reconciliation is persisted when a
-    /// dependency is down.
-    ReconciliationDependencyUnavailable = 83,
-
-    /// The reconciliation batch was empty or exceeded the configured maximum
-    /// size, and was rejected to surface caller bugs and prevent griefing.
-    ReconciliationBatchInvalid = 84,
+    /// Used by the post-mutation assertion in the money-path entrypoints: the
+    /// operation is rolled back (the whole transaction reverts) so the market
+    /// can never persist a state that breaks the YES+NO == collateral
+    /// invariant. Distinct from `ConservationViolation`, which is raised when
+    /// the *requested* operation would break conservation before any write.
+    ConservationCheckFailed = 91,
 }
