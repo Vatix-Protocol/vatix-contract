@@ -7,23 +7,26 @@ Please report suspected vulnerabilities privately via GitHub Security Advisories
 the maintainers listed in `CODEOWNERS`. Do not open a public issue for security
 reports. We aim to acknowledge reports within 72 hours.
 
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the contributor workflow and
+[`README.md`](./README.md) for the project overview and supported versions.
+
+## Supported Versions
+
+Security fixes are provided for the following versions:
+
+| Version | Supported          |
+| ------- | ------------------ |
+| 0.1.x   | :white_check_mark: |
+| < 0.1   | :x:                |
+
 ## Scope
 
 This policy covers the `vatix-contract` package and the localnet deploy path used
 by contributors. It does not cover third-party dependencies or the public Stellar
 networks themselves.
 
-## Invariants
+In-scope components:
 
-These invariants must hold on every network, including localnet:
-
-- The contract is the **source of truth** for balances, swaps, and admin state.
-  Clients (including the deploy scripts) never compute or cache authoritative
-  balances.
-- Privileged surfaces are **deny-by-default**: admin/initialization entrypoints
-  require an explicit authorized signer and reject unauthenticated callers.
-- Writes **fail closed** when a dependency (RPC/DB/Redis) is unavailable; a
-  failed dependency must never
 - `contracts/market` — market creation, trading, deposits, settlement
 - `contracts/treasury` — protocol fee custody and distribution
 - `contracts/resolution` — challenge-based outcome resolution
@@ -36,6 +39,8 @@ These invariants must hold on every network, including localnet:
 - Documentation that describes on-chain invariants (`AUTH_TABLE.md`,
   `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
   inaccuracy could lead to a mistaken security assumption
+
+## Invariants
 
 These invariants must hold on every network, including localnet:
 

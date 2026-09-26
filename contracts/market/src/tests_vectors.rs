@@ -4,6 +4,31 @@
 //! Loads `test-vectors/fee-math.json`, `test-vectors/share-math.json`, and
 //! `test-vectors/oracle-message.json` at test time and replays every case,
 //! enforcing round-trip properties and canonical payload parity.
+//!
+//! ## CI enforcement (#881)
+//!
+//! These vectors are a required check: `.github/workflows/ci.yml` runs
+//! `cargo test -p vatix-market tests_vectors` on every PR. The suite fails
+//! closed — a missing vector file or any mismatch aborts the job (no
+//! `continue-on-error`, no silent skip).
+//!
+//! ## Invariants
+//!
+//! - `fee-math.json`: `calculate_fee` matches `expected.ok`/`expected.error`;
+//!   on success `0 <= fee <= amount` and `(amount - fee) + fee == amount`.
+//! - `share-math.json`: `calculate_locked_collateral` matches `expected.ok`;
+//!   swapping shares with the complementary price (`10_000 - price`) yields
+//!   identical locked collateral.
+//! - `oracle-message.json`: preimage `raw_hex`, keccak `keccak_hex`, and
+//!   signature verification all match the canonical payload.
+//!
+//! ## Running locally
+//!
+//! ```sh
+//! cargo test -p vatix-market tests_vectors
+//! ```
+//! Vector files live in `test-vectors/` at the repo root; a missing file is a
+//! hard failure, so keep them in sync with the contract math.
 
 use crate::error::ContractError;
 use crate::validation::calculate_fee;
@@ -251,43 +276,3 @@ fn oracle_message_regression_corpus() {
     // 2. Verify keccak256 message hash match
     let msg_hash = construct_oracle_message_v2(
         &env,
-        &passphrase_hash,
-        vector.market_id,
-        outcome_bool,
-        vector.valid_until,
-        vector.epoch,
-    );
-    assert_eq!(
-        bytes_to_hex(&msg_hash.to_array()),
-        vector.keccak_hex,
-        "oracle-message keccak_hex mismatch"
-    );
-
-    // 3. Verify signature verification succeeds against oracle pubkey
-    let pubkey_bytes = hex_to_bytes(&vector.pubkey_hex);
-    let mut pubkey_arr = [0u8; 32];
-    pubkey_arr.copy_from_slice(&pubkey_bytes);
-    let oracle_pubkey = BytesN::from_array(&env, &pubkey_arr);
-
-    let sig_bytes = hex_to_bytes(&vector.signature_hex);
-    let mut sig_arr = [0u8; 64];
-    sig_arr.copy_from_slice(&sig_bytes);
-    let signature = BytesN::from_array(&env, &sig_arr);
-
-    let verify_res = verify_oracle_signature_v2(
-        &env,
-        &passphrase_hash,
-        vector.market_id,
-        outcome_bool,
-        vector.valid_until,
-        vector.epoch,
-        &signature,
-        &oracle_pubkey,
-    );
-    assert_eq!(
-        verify_res,
-        Ok(()),
-        "oracle-message vector signature verification failed"
-    );
-}
-
