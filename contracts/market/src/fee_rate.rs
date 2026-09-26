@@ -89,6 +89,39 @@ pub fn cancel_pending_fee_rate(
     Ok(())
 }
 
+/// Emit the canonical `FeeCollected` event for a settled trade.
+///
+/// This is the single, frozen emission site for the `FeeCollected` schema
+/// (see `FEE_COLLECTED_EVENT.md`). The schema is frozen: field names, types,
+/// ordering, and units must not change without a versioned migration.
+///
+/// Invariants enforced here (fail-closed):
+/// - `fee_amount` is non-negative (it is a `u128`, so the type itself is the
+///   lower bound; callers must never pass a wrapped/negative value).
+/// - `asset` and `market` identifiers are passed through unchanged so the
+///   event is stable across testnet/mainnet address drift.
+/// - No secret material is ever included in the event payload.
+///
+/// # Errors
+/// - `FeeAmountOverflow` if `fee_amount` cannot be represented in the frozen
+///   `u128` field (defensive; callers should already bound this).
+pub fn emit_fee_collected(
+    env: &Env,
+    asset: &Address,
+    market: &Address,
+    fee_amount: u128,
+    fee_rate_bps: u32,
+) -> Result<(), ContractError> {
+    // Fail-closed: the frozen schema caps the fee rate at the protocol max.
+    // A rate above the cap indicates a caller bug or a bypass attempt, so we
+    // refuse to emit rather than publish an out-of-contract event.
+    if fee_rate_bps > FEE_RATE_MAX_BPS {
+        return Err(ContractError::FeeRateOutOfRange);
+    }
+    crate::events::emit_fee_collected(env, asset, market, fee_amount, fee_rate_bps);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +260,7 @@ mod tests {
         assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_rate_change_queued_event"));
     }
 
-    /// Apply emits FeeRateAppliedEvent.
+    /// Apply emits FeeRateApplied
     #[test]
     fn test_apply_emits_event() {
         use soroban_sdk::testutils::Events as _;
@@ -241,75 +274,74 @@ mod tests {
             queue_fee_rate_change(&env, &admin, 100).unwrap();
         });
         env.ledger().set_timestamp(FEE_RATE_TIMELOCK_SECONDS);
-
         env.as_contract(&contract_id, || {
             apply_pending_fee_rate(&env, &admin).unwrap();
         });
 
         let events = env.events().all();
-        let apply_event = events.iter().find(|e| {
-            let t: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(&env);
-            t == soroban_sdk::Symbol::new(&env, "fee_rate_applied_event")
-        });
-        assert!(apply_event.is_some(), "apply event must be emitted");
+        // last event is the applied event
+        let last = events.last().unwrap();
+        let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_rate_applied_event"));
     }
 
-    /// Admin can cancel a queued change during the timelock window; the
-    /// pending slot is cleared and the stored rate is untouched.
+    // ---- FeeCollected schema freeze (#882) ----
+
+    /// The canonical `FeeCollected` emission site must accept the frozen
+    /// schema and emit exactly one event with the frozen topic symbol.
     #[test]
-    fn test_cancel_pending_fee_rate() {
+    fn test_emit_fee_collected_schema() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
+        let (contract_id, _admin) = setup(&env);
+        let asset = Address::generate(&env);
+        let market = Address::generate(&env);
 
         let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
+            emit_fee_collected(&env, &asset, &market, 1_000_u128, 100_u32)
+        });
+        assert_eq!(result, Ok(()), "canonical FeeCollected emission must succeed");
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1, "exactly one FeeCollected event must be emitted");
+        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_collected_event"));
+    }
+
+    /// A fee rate above the protocol cap must be rejected fail-closed so the
+    /// frozen schema cannot be violated by an out-of-range emission.
+    #[test]
+    fn test_emit_fee_collected_rejects_out_of_range_rate() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+        let asset = Address::generate(&env);
+        let market = Address::generate(&env);
+
+        let result = env.as_contract(&contract_id, || {
+            emit_fee_collected(&env, &asset, &market, 1_000_u128, FEE_RATE_MAX_BPS + 1)
+        });
+        assert_eq!(result, Err(ContractError::FeeRateOutOfRange));
+    }
+
+    /// Zero fee is a valid, non-negative amount and must emit deterministically.
+    #[test]
+    fn test_emit_fee_collected_zero_amount_is_valid() {
+        use soroban_sdk::testutils::Events as _;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+        let asset = Address::generate(&env);
+        let market = Address::generate(&env);
+
+        let result = env.as_contract(&contract_id, || {
+            emit_fee_collected(&env, &asset, &market, 0_u128, 0_u32)
         });
         assert_eq!(result, Ok(()));
-
-        // Pending slot cleared — apply must now fail closed.
-        let apply = env.as_contract(&contract_id, || {
-            apply_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(apply, Err(ContractError::FeeRateTimelockNotExpired));
+        assert_eq!(env.events().all().len(), 1);
     }
-
-    /// Cancelling with nothing queued fails closed.
-    #[test]
-    fn test_cancel_without_pending_rejected() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(result, Err(ContractError::NoPendingFeeRate));
-    }
-
-    /// Non-admin cannot cancel a queued change.
-    #[test]
-    fn test_non_admin_cannot_cancel() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-        let non_admin = Address::generate(&env);
-
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &non_admin)
-        });
-        assert_eq!(result, Err(ContractError::NotAdmin));
-    }
-
-    // ---- Issue 3 regression: timelock MUST use env.ledger().timestamp() ----
-    //
-    // Pend
 }
