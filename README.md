@@ -570,3 +570,12 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-962 -->
 - #962: End-to-end localnet market lifecycle proof
+
+<!-- handsoff-issue-871 -->
+- #871: Resolution: unauthorized finalize no state change
+
+<!-- handsoff-issue-872 -->
+- #872: Cross-contract call graph auth tests
+
+<!-- handsoff-issue-873 -->
+- #873: AUTH_TABLE 100% coverage + CI
