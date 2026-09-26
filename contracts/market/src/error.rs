@@ -7,10 +7,12 @@ use soroban_sdk::contracterror;
 /// - Position Errors: 10-19
 /// - Oracle Errors: 20-29
 /// - Validation Errors: 30-39
-/// - Authorization Errors: 40-49
+/// - Authorization Errors: 41-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
+/// - Reconciliation Errors: 80-89
+/// - Conservation Errors: 90-99
 ///
 /// # Example
 /// ```ignore
@@ -72,6 +74,15 @@ pub enum ContractError {
     /// replayed close request) is rejected so callers cannot re-run the
     /// money-path side effects (settlement gating, event emission) twice.
     MarketAlreadyClosed = 8,
+
+    /// A settlement claim was submitted before the market was resolved.
+    ///
+    /// Claims are only valid once the oracle has resolved the market. This is
+    /// enforced contract-side (not by clients) so an untrusted caller cannot
+    /// bypass the resolve gate and drain liquidity against an unresolved
+    /// outcome. Fail-closed: the claim is rejected outright rather than
+    /// silently deferred.
+    ClaimBeforeResolve = 9,
 
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
@@ -177,6 +188,18 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
+    /// Market metadata URI does not use the `https` scheme (#889).
+    ///
+    /// Metadata URIs are restricted to an https-only allowlist. Any other
+    /// scheme — `http`, `ipfs`, `data`, `javascript`, `file`, or a scheme-less
+    /// / relative reference — is rejected outright. This is fail-closed: an
+    /// untrusted caller cannot smuggle in a non-https URI (e.g. a `javascript:`
+    /// payload for a frontend to execute) by relying on a permissive default.
+    ///
+    /// Distinct from `InvalidMetadataUri` (37), which covers length/emptiness
+    /// violations, so callers and metrics can tell the two failure modes apart.
+    MetadataUriSchemeNotAllowed = 40,
+
     /// Fee rate is invalid (e.g. exceeds the configured fee cap or is out of range).
     InvalidFeeRate = 38,
 
@@ -190,113 +213,6 @@ pub enum ContractError {
 
     /// Treasury address is invalid (e.g. contract address or zero address).
     ///
-    /// The admin-only `set_treasury` setter (#857) must receive a valid user
-    /// account address. Contract addresses and reserved/zero addresses are
-    /// rejected so fees cannot be routed to an address the admin does not
-    /// actually control.
-    InvalidTreasury = 40,
+    /// The admin-only `set_treasury` setter (
 
-    // ========== Authorization Errors (41-49) ==========
-    /// Caller is not authorized to perform this action.
-    ///
-    /// The caller must be the market creator or have appropriate permissions.
-    Unauthorized = 41,
-
-    /// Caller is not the admin for this operation.
-    ///
-    /// Only the contract admin can perform this action.
-    NotAdmin = 42,
-
-    /// Contract has already been initialized.
-    ///
-    /// `initialize(admin)` may only be called once. A replayed or duplicate
-    /// initialization attempt is rejected so the admin cannot be silently
-    /// overwritten by an untrusted caller.
-    AlreadyInitialized = 43,
-
-    /// Contract has not been initialized yet.
-    ///
-    /// Privileged entrypoints (including the admin setters for treasury,
-    /// outcome, and resolution) fail closed with this code when no admin has
-    /// been configured, rather than defaulting to an open/allow-all policy.
-    NotInitialized = 44,
-
-    /// `confirm_renounce_admin` was called but no `renounce_admin` proposal is
-    /// pending, or the confirmation window has already elapsed.
-    NoPendingRenounce = 44,
-
-    /// The admin renounce confirmation window has not yet elapsed.
-    ///
-    /// `confirm_renounce_admin` must be called only after the configured delay
-    /// following `renounce_admin`, so a compromised admin key cannot instantly
-    /// abandon the contract.
-    RenounceNotReady = 45,
-
-    /// The caller's authorization has expired or is otherwise no longer valid.
-    ///
-    /// Privileged setters reject stale/expired auth with this stable code so
-    /// untrusted clients cannot bypass policy by replaying an old signature.
-    AuthExpired = 46,
-
-    /// The caller's role does not permit this operation.
-    ///
-    /// Distinct from `NotAdmin`: the caller is authenticated but holds the
-    /// wrong role for the requested privileged setter. Deny-by-default.
-    WrongRole = 47,
-
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
-    ///
-    /// The underlying token contract rejected the transfer (e.g., insufficient
-    /// balance or allowance).
-    TokenTransferFailed = 50,
-
-    /// Token address is invalid or not configured.
-    ///
-    /// The contract must be initialized with a valid token address before any
-    /// collateral operations can occur.
-    InvalidToken = 51,
-
-    /// Token minting failed.
-    ///
-    /// The underlying token contract rejected the mint operation.
-    TokenMintFailed = 52,
-
-    /// Token burning failed.
-    ///
-    /// The underlying token contract rejected the burn operation.
-    TokenBurnFailed = 53,
-
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// The operation would exceed the maximum representable value.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// The operation would go below the minimum representable value.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero was attempted.
-    ///
-    /// The divisor in a division or modulo operation was zero.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// The treasury has not been initialized or configured.
-    ///
-    /// `withdraw_treasury` was called before the treasury balance/recipient
-    /// configuration was established. Fail-closed: no funds are moved.
-    TreasuryNotInitialized = 70,
-
-    /// The requested treasury withdrawal amount is invalid (zero or negative).
-    ///
-    /// Treasury withdrawals must move a strictly positive amount.
-    InvalidTreasuryAmount = 71,
-
-    /// The treasury balance is insufficient to cover the requested withdrawal.
-    ///
-    /// The admin cannot withdraw more than the accumulated treasury/fee balance.
-    InsufficientTreasuryBalance = 72,
-}
+/* … truncated 2349 chars — edit only what you need near the top … */

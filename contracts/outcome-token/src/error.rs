@@ -36,4 +36,26 @@ pub enum ContractError {
     /// outright.  Both fields are required to be non-empty at `initialize`
     /// and `set_metadata` (Issue #790).
     EmptyMetadata = 13,
+    /// `decimals` was supplied outside the SAC-compatible range.
+    ///
+    /// The Stellar Asset Contract fixes `decimals` at 7; wallets, indexers,
+    /// and downstream SAC tooling assume this value when rendering balances
+    /// and computing amounts.  Any other value silently corrupts displayed
+    /// balances and breaks SAC metadata parity, so `initialize` and
+    /// `set_metadata` reject it (Issue #867).
+    InvalidDecimals = 14,
+    /// `name` or `symbol` exceeded the SAC-compatible maximum length.
+    ///
+    /// SAC metadata is bounded so that wallets and indexers can render it
+    /// without truncation or unbounded storage growth.  Oversized values are
+    /// rejected at `initialize` and `set_metadata` (Issue #867).
+    MetadataTooLong = 15,
+    /// `set_metadata` was called by an address that is not the persisted
+    /// admin.
+    ///
+    /// Metadata is a privileged surface: only the stored admin may mutate
+    /// `name`, `symbol`, or `decimals`.  The caller must authenticate via
+    /// `require_auth` and match the persisted admin exactly; any other caller
+    /// is denied by default (Issue #868).
+    NotAdmin = 16,
 }

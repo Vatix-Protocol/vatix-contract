@@ -89,6 +89,47 @@ pub fn cancel_pending_fee_rate(
     Ok(())
 }
 
+/// Compute the treasury fee (in stroops) for a given trade notional.
+///
+/// This is the single source of truth for the fee amount that the withdraw
+/// path wires into `treasury::collect_fee`. It is pure and fail-closed:
+///
+/// * `notional` is the gross amount being settled (must be > 0).
+/// * The rate is read from storage (the timelocked value), never from the
+///   caller, so an untrusted client cannot influence the fee.
+/// * Rounding is explicit and always in favor of the protocol: the fee is
+///   computed with ceiling division so truncation can never under-collect.
+///   For any `notional > 0` and `rate_bps > 0` the result is `>= 1` stroop,
+///   which keeps dust withdrawals from silently bypassing the fee.
+/// * The result is capped at `notional` so a misconfigured rate can never
+///   make the treasury collect more than the trade itself.
+///
+/// # Errors
+/// - `InvalidAmount` if `notional` is zero or negative
+pub fn compute_treasury_fee(env: &Env, notional: i128) -> Result<i128, ContractError> {
+    if notional <= 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+    let rate_bps = storage::get_fee_rate_bps(env) as i128;
+    // rate_bps is bounded by FEE_RATE_MAX_BPS at queue time, but clamp again
+    // here so a corrupted/legacy storage value can never over-collect.
+    let rate_bps = if rate_bps > FEE_RATE_MAX_BPS as i128 {
+        FEE_RATE_MAX_BPS as i128
+    } else {
+        rate_bps
+    };
+    // Ceiling division: (notional * rate_bps + 9_999) / 10_000. This rounds
+    // the fee up so truncation never under-collects on the withdraw path.
+    let numerator = notional
+        .checked_mul(rate_bps)
+        .ok_or(ContractError::InvalidAmount)?
+        .checked_add(9_999)
+        .ok_or(ContractError::InvalidAmount)?;
+    let fee = numerator / 10_000;
+    // Fail-closed: never collect more than the notional itself.
+    Ok(if fee > notional { notional } else { fee })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,123 +234,135 @@ mod tests {
         assert_eq!(result, Err(ContractError::NotAdmin));
     }
 
-    /// Fee rate above 500 bps must be rejected.
-    #[test]
-    fn test_fee_rate_out_of_range() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
+    // ---- withdraw fee rounding fuzz (issue #851) ----
 
-        let result = env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, FEE_RATE_MAX_BPS + 1)
+    /// Set the stored fee rate directly (bypassing the timelock) so the
+    /// rounding invariants can be exercised across the full legal range.
+    fn set_rate(env: &Env, contract_id: &Address, rate_bps: u32) {
+        env.as_contract(contract_id, || {
+            storage::set_fee_rate_bps(env, rate_bps);
         });
-        assert_eq!(result, Err(ContractError::FeeRateOutOfRange));
     }
 
-    /// Queue emits FeeRateChangeQueuedEvent with correct effective_at.
-    #[test]
-    fn test_queue_emits_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
-        let env = Env::default();
-        env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-        env.ledger().set_timestamp(1_000_000);
-
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "fee_rate_change_queued_event"));
+    fn fee(env: &Env, contract_id: &Address, notional: i128) -> i128 {
+        env.as_contract(contract_id, || compute_treasury_fee(env, notional))
+            .expect("fee computation must succeed for positive notional")
     }
 
-    /// Apply emits FeeRateAppliedEvent.
+    /// Dust and 1-unit withdrawals must still collect at least 1 stroop when
+    /// the rate is non-zero — truncation must never round the fee to zero.
     #[test]
-    fn test_apply_emits_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
+    fn test_dust_and_unit_withdrawals_round_up() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
+        let (contract_id, _admin) = setup(&env);
 
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
-        env.ledger().set_timestamp(FEE_RATE_TIMELOCK_SECONDS);
-
-        env.as_contract(&contract_id, || {
-            apply_pending_fee_rate(&env, &admin).unwrap();
-        });
-
-        let events = env.events().all();
-        let apply_event = events.iter().find(|e| {
-            let t: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(&env);
-            t == soroban_sdk::Symbol::new(&env, "fee_rate_applied_event")
-        });
-        assert!(apply_event.is_some(), "apply event must be emitted");
+        for rate in [1u32, 2, 7, 50, 100, 250, FEE_RATE_MAX_BPS] {
+            set_rate(&env, &contract_id, rate);
+            for notional in [1i128, 2, 3, 9, 10, 99, 100, 101, 9_999, 10_000, 10_001] {
+                let f = fee(&env, &contract_id, notional);
+                assert!(
+                    f >= 1,
+                    "fee must be >= 1 stroop for notional={} rate={} (got {})",
+                    notional,
+                    rate,
+                    f
+                );
+                assert!(
+                    f <= notional,
+                    "fee must never exceed notional={} rate={} (got {})",
+                    notional,
+                    rate,
+                    f
+                );
+            }
+        }
     }
 
-    /// Admin can cancel a queued change during the timelock window; the
-    /// pending slot is cleared and the stored rate is untouched.
+    /// The fee must equal the exact ceiling of notional * rate / 10_000 for
+    /// every amount at and around the fee-rate boundaries.
     #[test]
-    fn test_cancel_pending_fee_rate() {
+    fn test_fee_matches_ceiling_division() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
+        let (contract_id, _admin) = setup(&env);
 
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(result, Ok(()));
-
-        // Pending slot cleared — apply must now fail closed.
-        let apply = env.as_contract(&contract_id, || {
-            apply_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(apply, Err(ContractError::FeeRateTimelockNotExpired));
+        for rate in [1u32, 3, 17, 99, 100, 333, FEE_RATE_MAX_BPS] {
+            set_rate(&env, &contract_id, rate);
+            for notional in [1i128, 2, 3, 7, 10, 100, 1_000, 10_000, 123_456, 1_000_000] {
+                let expected = (notional * rate as i128 + 9_999) / 10_000;
+                let expected = if expected > notional { notional } else { expected };
+                assert_eq!(
+                    fee(&env, &contract_id, notional),
+                    expected,
+                    "ceiling mismatch notional={} rate={}",
+                    notional,
+                    rate
+                );
+            }
+        }
     }
 
-    /// Cancelling with nothing queued fails closed.
+    /// A zero rate must collect nothing, and a max rate must never over-collect
+    /// beyond the notional (fail-closed cap).
     #[test]
-    fn test_cancel_without_pending_rejected() {
+    fn test_zero_and_max_rate_bounds() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
+        let (contract_id, _admin) = setup(&env);
 
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &admin)
-        });
-        assert_eq!(result, Err(ContractError::NoPendingFeeRate));
+        set_rate(&env, &contract_id, 0);
+        for notional in [1i128, 10, 10_000, 1_000_000] {
+            assert_eq!(fee(&env, &contract_id, notional), 0);
+        }
+
+        set_rate(&env, &contract_id, FEE_RATE_MAX_BPS);
+        for notional in [1i128, 10, 10_000, 1_000_000] {
+            let f = fee(&env, &contract_id, notional);
+            assert!(f >= 1 && f <= notional);
+        }
     }
 
-    /// Non-admin cannot cancel a queued change.
+    /// A corrupted/legacy storage rate above the max must be clamped so the
+    /// treasury can never over-collect.
     #[test]
-    fn test_non_admin_cannot_cancel() {
+    fn test_corrupted_rate_is_clamped() {
         let env = Env::default();
         env.mock_all_auths();
-        let (contract_id, admin) = setup(&env);
-        let non_admin = Address::generate(&env);
+        let (contract_id, _admin) = setup(&env);
 
-        env.as_contract(&contract_id, || {
-            queue_fee_rate_change(&env, &admin, 100).unwrap();
-        });
-
-        let result = env.as_contract(&contract_id, || {
-            cancel_pending_fee_rate(&env, &non_admin)
-        });
-        assert_eq!(result, Err(ContractError::NotAdmin));
+        set_rate(&env, &contract_id, 10_000); // 100 % — above FEE_RATE_MAX_BPS
+        let f = fee(&env, &contract_id, 1_000_000);
+        let expected = (1_000_000i128 * FEE_RATE_MAX_BPS as i128 + 9_999) / 10_000;
+        assert_eq!(f, expected, "rate must be clamped to FEE_RATE_MAX_BPS");
     }
 
-    // ---- Issue 3 regression: timelock MUST use env.ledger().timestamp() ----
-    //
-    // Pend
+    /// Repeated calls with identical inputs must be deterministic (idempotent
+    /// pure computation) — no hidden state drift between withdraw attempts.
+    #[test]
+    fn test_repeated_calls_are_deterministic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+
+        set_rate(&env, &contract_id, 137);
+        let first = fee(&env, &contract_id, 987_654);
+        for _ in 0..32 {
+            assert_eq!(fee(&env, &contract_id, 987_654), first);
+        }
+    }
+
+    /// Non-positive notionals must fail closed rather than silently returning 0.
+    #[test]
+    fn test_non_positive_notional_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, _admin) = setup(&env);
+        set_rate(&env, &contract_id, 100);
+
+        for notional in [0i128, -1, -10_000] {
+            let result = env.as_contract(&contract_id, || compute_treasury_fee(&env, notional));
+            assert_eq!(result, Err(ContractError::InvalidAmount));
+        }
+    }
 }

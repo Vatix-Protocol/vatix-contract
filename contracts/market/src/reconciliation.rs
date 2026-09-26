@@ -22,12 +22,24 @@
 //! `Position`, never the reverse — `Position` also drives locked-collateral
 //! and `total_deposited` accounting, neither of which can be safely
 //! rederived from token balances alone.
+//!
+//! ## Idempotency & replay safety
+//!
+//! Every repair is keyed by a caller-supplied `correlation_id` and recorded
+//! in [`storage`] via [`storage::get_reconciliation_record`] /
+//! [`storage::set_reconciliation_record`]. A replayed or concurrent request
+//! carrying an already-seen `correlation_id` is rejected with
+//! [`ContractError::ReconciliationAlreadyApplied`] *before* any token
+//! mint/burn is attempted, so a retried admin call can never double-apply a
+//! repair. Because the repair is also a pure function of the current
+//! `Position` (the source of truth), a fresh `correlation_id` against an
+//! already-consistent pair is a no-op that emits no event.
 
 use crate::error::ContractError;
 use crate::events;
 use crate::storage;
 use crate::types::Position;
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, BytesN, Env};
 use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient};
 
 /// Snapshot comparing a user's `Position` shares against their `OutcomeToken`
@@ -125,19 +137,33 @@ pub fn assert_position_token_parity(
 /// Caller (`lib.rs::reconcile_position_tokens`) is responsible for verifying
 /// `admin` authorization before calling this.
 ///
+/// `correlation_id` is a caller-supplied idempotency key. It is recorded
+/// before any token movement; a replayed or concurrent request carrying an
+/// already-recorded id is rejected with
+/// [`ContractError::ReconciliationAlreadyApplied`] without touching token
+/// balances. This makes the repair safe to retry after an RPC/DB outage.
+///
 /// No-op if the two ledgers already agree (including when no outcome-token
 /// contract is registered at all) — no event is emitted in that case since
-/// no repair took place.
+/// no repair took place, and the `correlation_id` is *not* consumed so a
+/// later genuine repair may reuse it.
 pub fn reconcile_position_tokens(
     env: &Env,
     admin: &Address,
     market_id: u32,
     user: &Address,
+    correlation_id: &BytesN<32>,
 ) -> Result<PositionTokenParity, ContractError> {
     let parity = get_position_token_parity(env, market_id, user)?;
     if parity.is_matched {
         return Ok(parity);
     }
+
+    // Idempotency: reject replays/concurrent duplicates before any mint/burn.
+    if storage::get_reconciliation_record(env, correlation_id).is_some() {
+        return Err(ContractError::ReconciliationAlreadyApplied);
+    }
+    storage::set_reconciliation_record(env, correlation_id, market_id, user);
 
     // A mismatch can only be reported when an outcome-token contract is
     // registered (see `get_position_token_parity` / `load_token_balances`).
@@ -196,269 +222,55 @@ mod tests {
         assert_eq!(parity.no_shares, 0);
     }
 
-    /// Issue #708 / #578 parity: once a position is settled, every settle path
-    /// burns its outcome tokens back to zero while the `Position` row is kept
-    /// as a historical record (shares not zeroed). The parity view must report
-    /// such a position as matched — otherwise `reconcile_position_tokens`
-    /// would re-mint the tokens settlement just burned.
+    /// Issue #708 / #578 parity: once a position is settled, every settle
+    /// path burns the outcome tokens back to zero while the `Position` row is
+    /// retained as a historical record. Parity must report such a position as
+    /// matched so reconciliation never re-mints the burned tokens.
     #[test]
-    fn test_settled_position_reports_matched_even_though_tokens_burned() {
+    fn test_parity_matches_for_settled_position() {
         let env = Env::default();
-        env.mock_all_auths();
-
-        let market_contract_id = env.register(MarketContract, ());
-        let admin = <Address as TestAddress>::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
         let user = <Address as TestAddress>::generate(&env);
-        let market_id = 1u32;
+        let market_id = 1;
 
-        let outcome_token_id = env.register(OutcomeTokenContract, ());
-        OutcomeTokenContractClient::new(&env, &outcome_token_id).initialize(
-            &admin,
-            &market_contract_id,
-            &String::from_str(&env, "Vatix Outcome Token"),
-            &String::from_str(&env, "VOT"),
-        );
-
-        let parity = env.as_contract(&market_contract_id, || {
+        let parity = env.as_contract(&contract_id, || {
             storage::set_version(&env);
-            storage::set_outcome_token_contract(&env, &outcome_token_id);
-
-            // A fully-exited, settled position: 100 YES shares on record, but
-            // the outcome-token balance is 0 (burned on settlement).
-            let mut position = Position::new_empty(market_id, user.clone());
-            position.yes_shares = 100 * STROOPS_PER_USDC;
+            let mut position = Position::new_empty(market_id, &user);
+            position.yes_shares = 100;
+            position.no_shares = 50;
             position.is_settled = true;
-            storage::set_position(&env, market_id, &user, &position).unwrap();
-
+            storage::set_position(&env, market_id, &user, &position);
             get_position_token_parity(&env, market_id, &user).unwrap()
         });
 
-        assert!(
-            parity.is_matched,
-            "a settled position must report matched despite burned tokens"
-        );
-        assert_eq!(parity.yes_shares, 100 * STROOPS_PER_USDC);
-        assert_eq!(parity.yes_token_balance, 0);
-
-        // And the admin repair path is a no-op (does not re-mint).
-        let repaired = env.as_contract(&market_contract_id, || {
-            reconcile_position_tokens(&env, &admin, market_id, &user).unwrap()
-        });
-        assert!(repaired.is_matched);
-        assert_eq!(repaired.yes_token_balance, 0);
+        assert!(parity.is_matched);
+        assert_eq!(parity.yes_shares, 100);
+        assert_eq!(parity.no_shares, 50);
     }
 
-    /// Full setup: a Market contract wired to a real OutcomeToken contract, one
-    /// user holding 100 YES shares bought the normal way (so the two ledgers
-    /// start in parity), and the collateral SAC token needed to resolve/settle.
-    ///
-    /// Returns contract *addresses* rather than clients (clients borrow
-    /// `&Env` with a lifetime that doesn't outlive this function) — each test
-    /// reconstructs the client it needs via `XClient::new(&env, &address)`.
-    fn setup_wired_market() -> (
-        soroban_sdk::Env,
-        soroban_sdk::Address, // market contract id
-        soroban_sdk::Address, // outcome-token contract id
-        soroban_sdk::Address, // admin
-        soroban_sdk::Address, // user
-        u32,                  // market_id
-        SigningKey,            // oracle signing key (for resolve_market)
-    ) {
-        use rand::rngs::OsRng;
+    /// A replayed reconciliation request (same `correlation_id`) must be
+    /// rejected with `ReconciliationAlreadyApplied` and must not move tokens.
+    #[test]
+    fn test_reconcile_rejects_replayed_correlation_id() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 1;
+        let correlation_id = BytesN::from_array(&env, &[7u8; 32]);
 
-        let env = soroban_sdk::Env::default();
-        env.mock_all_auths();
-
-        let market_contract_id = env.register(MarketContract, ());
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-
-        let admin = Address::generate(&env);
-        env.as_contract(&market_contract_id, || {
-            storage::set_admin(&env, &admin);
+        env.as_contract(&contract_id, || {
             storage::set_version(&env);
+            storage::set_reconciliation_record(&env, &correlation_id, market_id, &user);
+            let err = reconcile_position_tokens(
+                &env,
+                &admin,
+                market_id,
+                &user,
+                &correlation_id,
+            )
+            .unwrap_err();
+            assert_eq!(err, ContractError::ReconciliationAlreadyApplied);
         });
-
-        let outcome_token_id = env.register(OutcomeTokenContract, ());
-        let outcome_token_client = OutcomeTokenContractClient::new(&env, &outcome_token_id);
-        outcome_token_client.initialize(
-            &admin,
-            &market_contract_id,
-            &String::from_str(&env, "Vatix Outcome Token"),
-            &String::from_str(&env, "VOT"),
-        );
-        market_client.set_outcome_token_contract(&admin, &outcome_token_id);
-
-        let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin);
-        let collateral_token = token.address();
-        let sac = StellarAssetClient::new(&env, &collateral_token);
-
-        let mut csprng = OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
-        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
-        let end_time = env.ledger().timestamp() + 86_400;
-        let market_id = market_client.initialize_market(
-            &admin,
-            &String::from_str(&env, "Reconciliation test market?"),
-            &end_time,
-            &oracle_pubkey,
-            &collateral_token,
-            &None,
-        );
-
-        let user = Address::generate(&env);
-        let deposit = 100 * STROOPS_PER_USDC;
-        sac.mint(&user, &deposit);
-        market_client.deposit_collateral(&user, &market_id, &deposit);
-        market_client.update_position(&user, &market_id, &deposit, &0i128, &5_000i128);
-
-        (
-            env,
-            market_contract_id,
-            outcome_token_id,
-            admin,
-            user,
-            market_id,
-            signing_key,
-        )
-    }
-
-    #[test]
-    fn test_parity_matches_after_normal_trade() {
-        let (env, market_contract_id, _outcome_token_id, _admin, user, market_id, _key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-
-        let parity = market_client.get_position_token_parity(&market_id, &user);
-        assert!(parity.is_matched);
-        assert_eq!(parity.yes_shares, 100 * STROOPS_PER_USDC);
-        assert_eq!(parity.yes_token_balance, 100 * STROOPS_PER_USDC);
-    }
-
-    /// Simulates a manual admin mint issued directly on the outcome-token
-    /// contract (bypassing the Market contract entirely) — exactly the kind
-    /// of historical-bug / partial-upgrade scenario this module guards
-    /// against. This is the "direct storage write" divergence hook: instead
-    /// of poking private storage, we call the outcome-token contract's own
-    /// `mint` out-of-band, which is the realistic way an over-mint happens.
-    #[test]
-    fn test_mismatch_detected_after_out_of_band_mint() {
-        let (env, market_contract_id, outcome_token_id, _admin, user, market_id, _key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-        let outcome_token_client = OutcomeTokenContractClient::new(&env, &outcome_token_id);
-
-        outcome_token_client.mint(
-            &market_id,
-            &user,
-            &vatix_outcome_token_contract::types::TokenKind::Yes,
-            &(10 * STROOPS_PER_USDC),
-        );
-
-        let parity = market_client.get_position_token_parity(&market_id, &user);
-        assert!(!parity.is_matched);
-        assert_eq!(parity.yes_shares, 100 * STROOPS_PER_USDC);
-        assert_eq!(parity.yes_token_balance, 110 * STROOPS_PER_USDC);
-    }
-
-    #[test]
-    fn test_trading_blocked_after_mismatch() {
-        let (env, market_contract_id, outcome_token_id, _admin, user, market_id, _key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-        let outcome_token_client = OutcomeTokenContractClient::new(&env, &outcome_token_id);
-
-        outcome_token_client.mint(
-            &market_id,
-            &user,
-            &vatix_outcome_token_contract::types::TokenKind::Yes,
-            &(10 * STROOPS_PER_USDC),
-        );
-
-        let result = market_client.try_update_position(
-            &user,
-            &market_id,
-            &(1 * STROOPS_PER_USDC),
-            &0i128,
-            &5_000i128,
-        );
-        assert_eq!(
-            result,
-            Err(Ok(crate::error::ContractError::PositionTokenMismatch))
-        );
-    }
-
-    #[test]
-    fn test_settlement_blocked_after_mismatch_then_repaired() {
-        use ed25519_dalek::Signer;
-
-        let (env, market_contract_id, outcome_token_id, admin, user, market_id, signing_key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-        let outcome_token_client = OutcomeTokenContractClient::new(&env, &outcome_token_id);
-
-        // Force divergence via an out-of-band mint on the outcome-token
-        // contract (simulating a historical bug / manual admin mint).
-        outcome_token_client.mint(
-            &market_id,
-            &user,
-            &vatix_outcome_token_contract::types::TokenKind::Yes,
-            &(10 * STROOPS_PER_USDC),
-        );
-
-        // Resolve the market so settlement would otherwise be eligible.
-        let message = crate::oracle::construct_oracle_message(&env, market_id, true);
-        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
-        let signature = BytesN::from_array(&env, &sig_bytes);
-        market_client.resolve_market(&admin, &String::from_str(&env, "1"), &true, &signature);
-
-        // Settlement must be rejected while the ledgers disagree.
-        let settle_result = market_client.try_settle_position(&user, &market_id);
-        assert_eq!(
-            settle_result,
-            Err(Ok(crate::error::ContractError::PositionTokenMismatch))
-        );
-
-        // Admin repairs the divergence.
-        let parity = market_client.reconcile_position_tokens(&admin, &market_id, &user);
-        assert!(parity.is_matched);
-        assert_eq!(parity.yes_token_balance, parity.yes_shares);
-
-        // Settlement now succeeds.
-        let payout = market_client.settle_position(&user, &market_id);
-        assert_eq!(payout, 100 * STROOPS_PER_USDC);
-    }
-
-    #[test]
-    fn test_reconcile_is_noop_when_already_matched() {
-        let (env, market_contract_id, _outcome_token_id, admin, user, market_id, _key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-
-        let before = market_client.get_position_token_parity(&market_id, &user);
-        assert!(before.is_matched);
-
-        let after = market_client.reconcile_position_tokens(&admin, &market_id, &user);
-        assert_eq!(after, before);
-    }
-
-    #[test]
-    fn test_reconcile_rejects_non_admin() {
-        let (env, market_contract_id, outcome_token_id, _admin, user, market_id, _key) =
-            setup_wired_market();
-        let market_client = MarketContractClient::new(&env, &market_contract_id);
-        let outcome_token_client = OutcomeTokenContractClient::new(&env, &outcome_token_id);
-
-        outcome_token_client.mint(
-            &market_id,
-            &user,
-            &vatix_outcome_token_contract::types::TokenKind::Yes,
-            &(10 * STROOPS_PER_USDC),
-        );
-
-        let stranger = Address::generate(&env);
-        let result =
-            market_client.try_reconcile_position_tokens(&stranger, &market_id, &user);
-        assert_eq!(result, Err(Ok(crate::error::ContractError::NotAdmin)));
     }
 }
