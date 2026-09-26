@@ -9,6 +9,13 @@ you can attach to a PR or upgrade ticket.
 Each item that has a corresponding script call is annotated so you can
 follow along instead of hand-running individual `stellar` commands.
 
+> **Automated:** `bash scripts/upgrade/staging-dry-run.sh` runs the scripted
+> steps below in order and exits non-zero (fail-closed) on the first failed
+> or missing check. It requires `STAGING_DRY_RUN_ROLE=admin` (or
+> `STAGING_DRY_RUN_ALLOW=1` in CI), refuses mainnet unless
+> `STAGING_DRY_RUN_MAINNET_READY=1`, and is idempotent via a run lock. Use it
+> as the gate; the manual boxes below remain the human sign-off record.
+
 ## 1. Pre-flight (scripted)
 
 - [ ] `bash scripts/upgrade/check-upgrade.sh` exits `0`.

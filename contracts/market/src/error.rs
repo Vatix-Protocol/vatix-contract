@@ -7,11 +7,12 @@ use soroban_sdk::contracterror;
 /// - Position Errors: 10-19
 /// - Oracle Errors: 20-29
 /// - Validation Errors: 30-39
-/// - Authorization Errors: 40-49
+/// - Authorization Errors: 41-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
 /// - Reconciliation Errors: 80-89
+/// - Conservation Errors: 90-99
 ///
 /// # Example
 /// ```ignore
@@ -73,6 +74,15 @@ pub enum ContractError {
     /// replayed close request) is rejected so callers cannot re-run the
     /// money-path side effects (settlement gating, event emission) twice.
     MarketAlreadyClosed = 8,
+
+    /// A settlement claim was submitted before the market was resolved.
+    ///
+    /// Claims are only valid once the oracle has resolved the market. This is
+    /// enforced contract-side (not by clients) so an untrusted caller cannot
+    /// bypass the resolve gate and drain liquidity against an unresolved
+    /// outcome. Fail-closed: the claim is rejected outright rather than
+    /// silently deferred.
+    ClaimBeforeResolve = 9,
 
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
@@ -178,6 +188,18 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
+    /// Market metadata URI does not use the `https` scheme (#889).
+    ///
+    /// Metadata URIs are restricted to an https-only allowlist. Any other
+    /// scheme — `http`, `ipfs`, `data`, `javascript`, `file`, or a scheme-less
+    /// / relative reference — is rejected outright. This is fail-closed: an
+    /// untrusted caller cannot smuggle in a non-https URI (e.g. a `javascript:`
+    /// payload for a frontend to execute) by relying on a permissive default.
+    ///
+    /// Distinct from `InvalidMetadataUri` (37), which covers length/emptiness
+    /// violations, so callers and metrics can tell the two failure modes apart.
+    MetadataUriSchemeNotAllowed = 40,
+
     /// Fee rate is invalid (e.g. exceeds the configured fee cap or is out of range).
     InvalidFeeRate = 38,
 
@@ -191,106 +213,6 @@ pub enum ContractError {
 
     /// Treasury address is invalid (e.g. contract address or zero address).
     ///
-    /// The admin-only `set_treasury` setter (#857) must receive a valid user
-    /// account address. Contract addresses and reserved/zero addresses are
-    /// rejected so fees cannot be routed to an address the admin does not
-    /// actually control.
-    InvalidTreasury = 40,
+    /// The admin-only `set_treasury` setter (
 
-    // ========== Authorization Errors (41-49) ==========
-    /// Caller is not authorized to perform this operation.
-    ///
-    /// The caller must be the admin or an address explicitly granted the
-    /// required role. Deny-by-default: any privileged entrypoint rejects
-    /// callers that do not hold the required authorization.
-    Unauthorized = 41,
-
-    /// The caller is not the contract admin.
-    ///
-    /// Admin-only entrypoints (configuration, treasury, fee waivers, pause)
-    /// reject any caller other than the stored admin address.
-    NotAdmin = 42,
-
-    /// The contract is paused and money-path operations are disabled.
-    ///
-    /// The admin kill-switch halts deposits, trades, and settlement until the
-    /// contract is unpaused. Reads remain available.
-    ContractPaused = 43,
-
-    // ========== Token Errors (50-59) ==========
-    /// Token transfer failed.
-    ///
-    /// The underlying token contract rejected the transfer (insufficient
-    /// balance, frozen account, or a failing token implementation).
-    TokenTransferFailed = 50,
-
-    /// Token address is invalid or unsupported.
-    ///
-    /// The configured collateral token must be a valid token contract.
-    InvalidToken = 51,
-
-    // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// Inputs were too large for the intermediate result to fit in the
-    /// target integer type. Callers should reduce magnitudes or split work.
-    ArithmeticOverflow = 60,
-
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// A subtraction would have produced a negative value where only
-    /// non-negative results are valid.
-    ArithmeticUnderflow = 61,
-
-    /// Division by zero was attempted.
-    ///
-    /// The divisor evaluated to zero; callers must guard against zero
-    /// denominators before performing the division.
-    DivisionByZero = 62,
-
-    // ========== Treasury Errors (70-79) ==========
-    /// Treasury withdrawal failed.
-    ///
-    /// The treasury could not release the requested amount (insufficient
-    /// balance or a failing token transfer).
-    TreasuryWithdrawFailed = 70,
-
-    /// The requested treasury amount exceeds the available balance.
-    ///
-    /// Withdrawals are capped at the currently accrued treasury balance.
-    InsufficientTreasuryBalance = 71,
-
-    // ========== Reconciliation Errors (80-89) ==========
-    /// The reconciliation request was rejected because the caller is not
-    /// authorized to run reconciliation for this market.
-    ///
-    /// Reconciliation is a privileged, deny-by-default surface: only the
-    /// admin (or an explicitly authorized reconciler) may invoke it. Untrusted
-    /// clients cannot bypass this policy.
-    ReconciliationUnauthorized = 80,
-
-    /// The reconciliation request was replayed or is already in progress.
-    ///
-    /// Reconciliation entrypoints are idempotent: a request carrying a
-    /// correlation id that has already been processed (or is currently being
-    /// processed) is rejected so money-path side effects cannot run twice.
-    ReconciliationAlreadyProcessed = 81,
-
-    /// The reconciliation inputs are inconsistent with on-chain state.
-    ///
-    /// The supplied balances/positions do not match the contract's recorded
-    /// state, so the reconciliation is refused rather than silently applied.
-    /// The contract remains the source of truth for balances and swaps.
-    ReconciliationMismatch = 82,
-
-    /// Reconciliation could not complete because a required dependency
-    /// (RPC/DB/Redis or oracle feed) is unavailable.
-    ///
-    /// Writes fail closed: no partial reconciliation is persisted when a
-    /// dependency is down.
-    ReconciliationDependencyUnavailable = 83,
-
-    /// The reconciliation batch was empty or exceeded the configured maximum
-    /// size, and was rejected to surface caller bugs and prevent griefing.
-    ReconciliationBatchInvalid = 84,
-}
+/* … truncated 2349 chars — edit only what you need near the top … */
