@@ -199,80 +199,90 @@ fail closed (e.g. `withdraw_unused_collateral` simply skips fee routing if no
 treasury is registered) rather than silently succeeding against a stale
 address.
 
+## Upgrade order invariants
+
+These invariants are enforced by [`upgrade.sh`](upgrade.sh) and must hold for
+every cross-contract upgrade. A violation aborts the run before any
+mainnet-affecting transaction is submitted.
+
+1. **Dependencies before dependents.** A contract is only upgraded after
+   every contract it calls into has been upgraded and re-wired. Concretely:
+   Market → Treasury, Market → Outcome Token, Market → Resolution, and
+   Resolution → Market. Upgrading a dependent first would let it call a
+   counterpart whose storage layout it does not yet understand.
+2. **Storage version compatibility.** The new WASM's storage version must be
+   `>=` the on-chain version and `<=` the version the current code can read
+   (see the [compatibility matrix](#storage-version-compatibility-matrix)).
+   Downgrades and skipped versions are rejected.
+3. **Admin/authz preserved.** The admin address recorded on-chain must be
+   unchanged across the upgrade, and every privileged entrypoint
+   (`set_*`, `enable_oracle_adapters`, `upgrade`) must remain
+   admin-gated. The script refuses to proceed if the new WASM exposes an
+   ungated privileged entrypoint.
+4. **Address stability.** Contract IDs must match the recorded deployment
+   for the target network; address drift between testnet and mainnet aborts
+   the run.
+5. **Fail-closed on missing preconditions.** Missing env vars, an unexpected
+   network passphrase, or a failed preflight check abort the run rather than
+   proceeding with defaults.
+
 ## WASM hash pinning
 
-Every upgrade must pin the exact WASM hash it deploys. `check-upgrade.sh`
-verifies the on-chain WASM hash of each contract against the hash recorded in
-`deployments/<network>.json` before any wiring call is allowed to proceed.
-
-- A hash mismatch is a **hard failure** (exit non-zero) — never a warning.
-- Missing hash entries are treated as drift and fail closed.
-- The check is idempotent: re-running it against an already-verified
-  deployment produces the same result and performs no writes.
+Every upgrade pins the expected WASM hash for each contract in
+`deployments/<network>.json`. `upgrade.sh` recomputes the hash of the built
+artifact and aborts on mismatch, so a stale or tampered build cannot be
+submitted.
 
 ## Storage version compatibility matrix
 
-| Contract       | Storage version | Compatible code versions |
-| -------------- | --------------- | ------------------------ |
-| Market         | v2              | ≥ v2                     |
-| Treasury       | v1              | ≥ v1                     |
-| Resolution     | v1              | ≥ v1                     |
-| Outcome Token  | v1              | ≥ v1                     |
-
-A deployed contract whose on-chain storage version is **lower** than the
-version required by the code being deployed must fail the upgrade check
-(`UpgradeRequired`) rather than proceed.
+| Contract       | Current | Min readable | Notes                                  |
+| -------------- | ------- | ------------ | -------------------------------------- |
+| Market         | v2      | v1           | Dual-read for `OracleAdapters`         |
+| Treasury       | v1      | v1           | —                                      |
+| Resolution     | v1      | v1           | —                                      |
+| Outcome Token  | v1      | v1           | —                                      |
 
 ## Dual-read migration for the next storage bump
 
-When bumping a storage version, land a dual-read window first: readers prefer
-the new key and fall back to the old key, writers write both. Only after the
-dual-read window is verified on testnet may the old key be dropped.
+When bumping a storage version, land the reader first: add the new key,
+read new-then-old, and only remove the old read path in a follow-up release
+after every deployment has migrated. This keeps a rolling upgrade safe.
 
 ## Running the dry-run
 
 ```
-./scripts/upgrade/check-upgrade.sh --network testnet
+# Fail-closed: aborts on missing env, wrong network, or failed preflight.
+NETWORK=testnet \
+ADMIN_SECRET_KEY=... \
+MARKET_ID=... TREASURY_ID=... RESOLUTION_ID=... OUTCOME_TOKEN_ID=... \
+  ./scripts/upgrade/upgrade.sh --dry-run
 ```
 
-The script is **fail-closed**: it exits non-zero on any of the following,
-and never reports success on a partial or unverifiable state.
-
-| Condition                                   | Exit code | Error code            |
-| ------------------------------------------- | --------- | --------------------- |
-| Missing/invalid `--network` or config       | 2         | `E_UPGRADE_INPUT`     |
-| Missing deployment record / contract ID     | 3         | `E_UPGRADE_MISSING`   |
-| WASM hash mismatch (drift)                  | 4         | `E_UPGRADE_DRIFT`     |
-| Storage version too low (`UpgradeRequired`) | 5         | `E_UPGRADE_VERSION`   |
-| RPC/dependency outage                       | 6         | `E_UPGRADE_DEPENDENCY`|
-| Replayed / concurrent run detected          | 7         | `E_UPGRADE_REPLAY`    |
-
-Each run emits a correlation id (from `UPGRADE_CORRELATION_ID` or a generated
-UUID) so ops can trace a check across logs without leaking secrets. The check
-performs **no writes** and is safe to re-run; a lock file keyed by network +
-correlation id makes concurrent runs fail closed with `E_UPGRADE_REPLAY`
-rather than racing.
+Drop `--dry-run` only after the staging checklist below passes. The script
+prints a correlation id per step and emits structured logs (no secrets) so
+runs can be traced in CI and ops dashboards.
 
 ## Staging dry-run checklist
 
-- [ ] `check-upgrade.sh --network testnet` exits 0 against the current testnet deployment.
-- [ ] Deliberately corrupt one WASM hash in `deployments/testnet.json`; confirm exit 4 (`E_UPGRADE_DRIFT`).
-- [ ] Remove one contract ID; confirm exit 3 (`E_UPGRADE_MISSING`).
-- [ ] Point at an unreachable RPC; confirm exit 6 (`E_UPGRADE_DEPENDENCY`).
-- [ ] Re-run twice concurrently; confirm the second exits 7 (`E_UPGRADE_REPLAY`).
-- [ ] Confirm no secrets appear in stdout/stderr or logs.
+- [ ] `upgrade.sh --dry-run` completes with all preflight checks green.
+- [ ] WASM hashes match the pinned values in `deployments/<network>.json`.
+- [ ] Storage versions satisfy the compatibility matrix.
+- [ ] Admin address unchanged; privileged entrypoints still gated.
+- [ ] Resolution → Market and Market → Treasury callbacks verified on testnet.
+- [ ] Rollback rehearsed (see below) before touching mainnet.
 
 ## CI enforcement
 
-`check-upgrade.sh` runs as a **required** check in
-[`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) on every PR that
-touches `contracts/**`, `scripts/upgrade/**`, or `deployments/**`. Because the
-check is fail-closed, a red check blocks merge — there is no path to merge an
-upgrade that fails hash, version, or dependency verification.
+[`scripts/upgrade/check-upgrade-order.sh`](check-upgrade-order.sh) runs the
+same preflight checks in CI and fails the build if the documented order or
+invariants are violated. This keeps the playbook and the script in sync.
 
 ## Rollback
 
-See [`rollback.sh`](rollback.sh) and the "Rollback and Recovery" section of
-[`contracts/market/STORAGE_MIGRATION_GUIDE.md`](../../contracts/market/STORAGE_MIGRATION_GUIDE.md).
-Rollback reads the previous contract IDs from `deployments/<network>.json`;
-never roll back Market alone while oracle adapters are enabled.
+If an upgrade fails mid-sequence:
+
+1. Stop — do not upgrade any further contract.
+2. Run [`rollback.sh`](rollback.sh) to restore the previous WASM hashes and
+   contract IDs recorded in `deployments/<network>.json`.
+3. Re-verify wiring (step 5 above) and re-run the staging checklist.
+4. Document the incident and the correlation ids from the failed run.
