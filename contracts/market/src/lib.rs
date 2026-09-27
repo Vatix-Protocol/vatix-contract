@@ -106,6 +106,8 @@ pub mod storage;
 mod test;
 #[cfg(test)]
 mod tests_vectors;
+#[cfg(test)]
+mod tests_event_fixtures;
 pub mod types;
 #[cfg(test)]
 mod withdraw_fuzz;
