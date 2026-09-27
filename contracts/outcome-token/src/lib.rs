@@ -229,4 +229,87 @@ impl OutcomeTokenContract {
         events::emit_metadata_updated(&env, &name, &symbol);
         Ok(())
     }
+
+    /// Mint `amount` tokens of `kind` (Yes or No) for `user` in `market_id`.
+    ///
+    /// Only the registered market contract may call this function.
+    pub fn mint(
+        env: Env,
+        market_id: u32,
+        user: Address,
+        kind: TokenKind,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        // Storage-version guard (Issue #696): a stale/partially-upgraded
+        // deployment must fail closed here rather than let `mint` write
+        // balances/supply under a storage layout the compiled contract no
+        // longer understands.
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        config.market_contract.require_auth();
+
+        let balance = storage::get_balance(&env, market_id, &user, &kind);
+        let new_balance = balance.checked_add(amount).ok_or(ContractError::Overflow)?;
+        storage::set_balance(&env, market_id, &user, &kind, new_balance);
+
+        let supply = storage::get_total_supply(&env, market_id, &kind);
+        let new_supply = supply.checked_add(amount).ok_or(ContractError::Overflow)?;
+        storage::set_total_supply(&env, market_id, &kind, new_supply);
+
+        events::emit_token_minted(&env, market_id, &user, kind, amount, new_balance);
+        Ok(())
+    }
+
+    /// Burn `amount` tokens of `kind` from `user` in `market_id`.
+    ///
+    /// Only the registered market contract may call this function. Returns
+    /// [`ContractError::InsufficientBalance`] if the user holds fewer tokens
+    /// than `amount`.
+    pub fn burn(
+        env: Env,
+        market_id: u32,
+        user: Address,
+        kind: TokenKind,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        config.market_contract.require_auth();
+
+        let balance = storage::get_balance(&env, market_id, &user, &kind);
+        if balance < amount {
+            return Err(ContractError::InsufficientBalance);
+        }
+        let new_balance = balance - amount;
+        storage::set_balance(&env, market_id, &user, &kind, new_balance);
+
+        let supply = storage::get_total_supply(&env, market_id, &kind);
+        let new_supply = supply - amount;
+        storage::set_total_supply(&env, market_id, &kind, new_supply);
+
+        events::emit_token_burned(&env, market_id, &user, kind, amount, new_balance);
+        Ok(())
+    }
+
+    /// Return the token balance for a specific `(market_id, user, kind)` triple.
+    pub fn balance(env: Env, market_id: u32, user: Address, kind: TokenKind) -> i128 {
+        storage::get_balance(&env, market_id, &user, &kind)
+    }
+
+    /// Return the total outstanding supply for a `(market_id, kind)` pair.
+    pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
+        storage::get_total_supply(&env, market_id, &kind)
+    }
 }

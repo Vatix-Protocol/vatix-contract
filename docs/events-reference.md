@@ -23,6 +23,31 @@ events additionally carry a `version: u32 (topic)` field
 (`EVENT_VERSION`, currently `1`) as a schema-version topic — see the
 "Event schema versioning" note in `contracts/market/src/events.rs`.
 
+## Event versioning strategy
+
+Indexers must be able to tell payload schemas apart across contract upgrades
+without guessing. The rules below apply to every contract in this repo.
+
+1. **Version topic.** Versioned events carry `version: u32` as their first
+   explicit topic, sourced from the contract's `EVENT_VERSION` constant
+   (currently `1` in `contracts/market/src/events.rs`). Events without a
+   `version` topic are implicitly schema `0` (see "Notes for indexers").
+2. **Additive vs breaking.** Appending a *data* field is additive and does
+   not bump `EVENT_VERSION`; indexers must ignore unknown trailing fields.
+   Renaming, removing, re-typing or reordering any field, or changing the
+   topic list, is **breaking** and requires bumping `EVENT_VERSION`.
+3. **Never reuse a topic name** for a different payload. A breaking rename of
+   the event itself is a new struct (and therefore a new topic), not an edit.
+4. **Deny-by-default decoding.** Indexers must decode only the versions they
+   know and route unknown versions to a dead-letter path instead of
+   best-effort parsing, so a schema change fails closed rather than writing
+   corrupt balances or settlements.
+5. **Rollout.** Ship indexer support for version `N+1` *before* the contract
+   upgrade that emits it (ordering per `scripts/upgrade/UPGRADE_PLAYBOOK.md`),
+   and record the bump in this file and `scripts/upgrade/version-matrix.json`
+   in the same PR. Rollback is reverting the contract upgrade; indexers keep
+   decoding version `N` throughout, so no indexer rollback is needed.
+
 ## Market (`contracts/market/src/events.rs`)
 
 | Event/Topic | Fields (name: type) | Emitted When |
@@ -144,8 +169,8 @@ events additionally carry a `version: u32 (topic)` field
 
 | Event/Topic | Fields (name: type) | Emitted When |
 |---|---|---|
-| `token_minted` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens (YES/NO) are minted to a user |
-| `token_burned` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens are burned from a user |
+| `token_minted` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens (YES/NO) are minted to a user via `mint`. Emitted only after balance and total supply are written; callable only by the registered `market_contract`; rejected (no event) when paused, `amount <= 0`, or on storage-version mismatch |
+| `token_burned` | `market_id: u32 (topic)`, `user: Address (topic)`, `kind: TokenKind`, `amount: i128`, `new_balance: i128` | Outcome tokens are burned from a user via `burn`. Same authz/fail-closed rules as `token_minted`; also rejected (no event) on `InsufficientBalance` |
 | `token_transferred` | `market_id: u32 (topic)`, `from: Address (topic)`, `to: Address`, `kind: TokenKind`, `amount: i128` | Outcome tokens are transferred between two users |
 | `contract_paused` | `admin: Address (topic)`, `paused_at: u64` | Contract administratively paused; `mint`, `burn`, `transfer` now return `ContractPaused` (#750) |
 | `contract_unpaused` | `admin: Address (topic)`, `unpaused_at: u64` | Contract unpaused; normal token operations restored (#750) |
