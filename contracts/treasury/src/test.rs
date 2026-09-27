@@ -1306,3 +1306,85 @@ fn initialize_accepts_user_account_as_admin() {
     client.initialize(&admin, &market);
     assert_eq!(client.admin(), admin);
 }
+
+// ── Issue #911 / #921: treasury withdraw auth and fee events ─────────────────
+
+fn count_events(env: &Env, name: &str) -> u32 {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{Symbol, TryIntoVal};
+    let name = Symbol::new(env, name);
+    let mut n = 0;
+    for ev in env.events().all().iter() {
+        if let Some(first) = ev.1.get(0) {
+            let topic: Result<Symbol, _> = first.try_into_val(env);
+            if topic == Ok(name.clone()) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// An unauthorized withdraw is rejected with `Unauthorized` and leaves every
+/// piece of treasury state unchanged: custodied balance, cumulative fees,
+/// total collected, the on-chain token balances of treasury and recipient,
+/// and no `fees_withdrawn` event.
+#[test]
+fn unauthorized_withdraw_leaves_treasury_unchanged() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+
+    let token = TokenClient::new(&s.env, &s.token);
+    let imposter = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+
+    for caller in [imposter, s.market.clone()] {
+        let err = s
+            .client
+            .try_withdraw_fees(&caller, &s.token, &recipient, &500_000i128)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::Unauthorized);
+        assert_eq!(count_events(&s.env, "fees_withdrawn"), 0);
+
+        assert_eq!(s.client.token_balance(&s.token), 500_000);
+        assert_eq!(s.client.get_cumulative_fees(&s.token), 500_000);
+        assert_eq!(s.client.total_collected(), 500_000);
+        assert_eq!(token.balance(&s.treasury_id), 500_000);
+        assert_eq!(token.balance(&recipient), 0);
+    }
+}
+
+/// `collect_fee` emits one `fee_collected` event with `market_id`/`token`
+/// topics and fee/balance/cumulative data; a rejected collection emits none.
+#[test]
+fn collect_fee_emits_fee_collected_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Map, Symbol, TryIntoVal, Val};
+
+    let s = setup();
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client.collect_fee(&s.market, &s.token, &9u32, &50_000i128);
+
+    let ev = s.env.events().all().last().unwrap();
+    let name: Symbol = ev.1.get(0).unwrap().into_val(&s.env);
+    assert_eq!(name, Symbol::new(&s.env, "fee_collected"));
+    let market_id: u32 = ev.1.get(1).unwrap().into_val(&s.env);
+    assert_eq!(market_id, 9);
+    let token_topic: Address = ev.1.get(2).unwrap().into_val(&s.env);
+    assert_eq!(token_topic, s.token);
+
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
+    let get = |k: &str| -> i128 { data.get(Symbol::new(&s.env, k)).unwrap().into_val(&s.env) };
+    assert_eq!(get("fee_amount"), 50_000);
+    assert_eq!(get("new_token_balance"), 150_000);
+    assert_eq!(get("new_cumulative_fees"), 150_000);
+    assert_eq!(count_events(&s.env, "fee_collected"), 1);
+
+    let rogue = Address::generate(&s.env);
+    assert!(s.client.try_collect_fee(&rogue, &s.token, &1u32, &1i128).is_err());
+    assert_eq!(count_events(&s.env, "fee_collected"), 0);
+    assert!(s.client.try_collect_fee(&s.market, &s.token, &1u32, &0i128).is_err());
+    assert_eq!(count_events(&s.env, "fee_collected"), 0);
+}
