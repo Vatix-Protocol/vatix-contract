@@ -274,4 +274,14 @@ pub enum ContractError {
     /// register requests are rejected so an untrusted caller cannot override
     /// an existing deployment mapping.
     DeploymentIdAlreadyRegistered = 94,
+
+    /// `initialize_market` was called with a collateral token that differs
+    /// from the deployment's pinned collateral token (ADR-002 collateral
+    /// allowlist decision, #901).
+    ///
+    /// `CollateralBalance(user)` is not denominated per token, so a second
+    /// collateral token would let collateral deposited in one asset back
+    /// trades in another. Fail closed: exactly one collateral token per
+    /// deployment, pinned by the first market created.
+    CollateralTokenNotAllowed = 95,
 }

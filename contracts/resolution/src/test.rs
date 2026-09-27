@@ -1369,3 +1369,146 @@ fn slash_collateral_emits_collateral_slashed_event() {
     assert_eq!(client.get_proposer_collateral(&proposer), 0i128);
     assert_eq!(balance(&env, &token, &recipient), 10_000_000i128);
 }
+
+// ── Dispute integration & bond economics (#896, #899) ──────────────────────
+
+/// Propose → challenge → appeal → finalize, asserting balances at every
+/// step. Once the appealed outcome finalizes, the proposer's bond is refunded
+/// in full and the losing challenger's bond is split 50% reward (proposer) /
+/// 25% burned / 25% treasury cut (retained here, since no treasury is set).
+/// Bonds are conserved: every stroop posted is accounted for.
+#[test]
+fn dispute_then_finalize_settles_bonds_and_resolves_market() {
+    let env = Env::default();
+    let (client, _, market_contract, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = 1_000 + 10 * DEFAULT_WINDOW;
+
+    let candidate_id = client.propose(
+        &proposer, &9u32, &true, &signature(&env), &expiry, &evidence(&env),
+        &DEFAULT_WINDOW, &BOND,
+    );
+    assert_eq!(balance(&env, &token, &this), BOND);
+
+    client.challenge(
+        &challenger, &candidate_id, &String::from_str(&env, "ipfs://challenge"), &BOND,
+    );
+    assert_eq!(balance(&env, &token, &this), 2 * BOND);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 1);
+
+    // Disputed candidates cannot finalize, even after the window closes.
+    set_time(&env, 1_000 + DEFAULT_WINDOW + 1);
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::CandidateAlreadyChallenged))
+    );
+
+    // Appeal reopens a fresh window; finalize is blocked until it closes.
+    let appealed_at = env.ledger().timestamp();
+    client.appeal(
+        &proposer, &candidate_id, &false, &signature(&env), &evidence(&env), &DEFAULT_WINDOW,
+    );
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::ChallengeWindowOpen))
+    );
+
+    set_time(&env, appealed_at + DEFAULT_WINDOW + 1);
+    let finalized = client.finalize(&proposer, &candidate_id);
+    assert_eq!(finalized.status, crate::types::CandidateStatus::Finalized);
+    assert_eq!(finalized.outcome, false);
+    assert_eq!(finalized.appeal_round, 1);
+
+    let reward = BOND * 5_000 / 10_000;
+    let burned = BOND * 2_500 / 10_000;
+    let treasury_cut = BOND - reward - burned;
+    assert_eq!(balance(&env, &token, &proposer), BOND + reward);
+    assert_eq!(balance(&env, &token, &challenger), 0);
+    assert_eq!(balance(&env, &token, &this), treasury_cut);
+    assert_eq!(
+        balance(&env, &token, &proposer) + balance(&env, &token, &challenger)
+            + balance(&env, &token, &this) + burned,
+        2 * BOND
+    );
+    assert!(client.get_challengers(&candidate_id).is_empty());
+
+    let resolved = MockMarketClient::new(&env, &market_contract)
+        .get_last_resolved()
+        .expect("finalize must resolve the market");
+    assert_eq!(resolved.outcome, false);
+    assert!(!resolved.is_v2);
+
+    // Replay is rejected and moves no funds.
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::CandidateAlreadyFinalized))
+    );
+    assert_eq!(balance(&env, &token, &proposer), BOND + reward);
+    assert_eq!(balance(&env, &token, &this), treasury_cut);
+}
+
+/// Bonds below the documented minimums are rejected before any transfer.
+#[test]
+fn bonds_below_minimum_are_rejected_without_moving_funds() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let expiry = 1_000 + 10 * DEFAULT_WINDOW;
+    assert_eq!(
+        client.try_propose(
+            &proposer, &3u32, &true, &signature(&env), &expiry, &evidence(&env),
+            &DEFAULT_WINDOW, &(crate::MIN_BOND_AMOUNT - 1),
+        ),
+        Err(Ok(ContractError::InsufficientBond))
+    );
+    assert_eq!(balance(&env, &token, &proposer), BOND);
+
+    let candidate_id = client.propose(
+        &proposer, &3u32, &true, &signature(&env), &expiry, &evidence(&env),
+        &DEFAULT_WINDOW, &BOND,
+    );
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    assert_eq!(
+        client.try_challenge(
+            &challenger, &candidate_id, &String::from_str(&env, "ipfs://c"),
+            &(crate::MIN_CHALLENGE_BOND_AMOUNT - 1),
+        ),
+        Err(Ok(ContractError::InsufficientChallengeBond))
+    );
+    assert_eq!(balance(&env, &token, &challenger), BOND);
+    assert_eq!(balance(&env, &token, &this), BOND);
+}
+
+/// An unchallenged proposal refunds the proposer's bond exactly once and
+/// leaves no residue in the contract.
+#[test]
+fn unchallenged_finalize_refunds_full_bond() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer, &4u32, &true, &signature(&env), &(1_000 + 10 * DEFAULT_WINDOW),
+        &evidence(&env), &DEFAULT_WINDOW, &BOND,
+    );
+    assert_eq!(balance(&env, &token, &proposer), 0);
+
+    set_time(&env, 1_000 + DEFAULT_WINDOW + 1);
+    client.finalize(&proposer, &candidate_id);
+    assert_eq!(balance(&env, &token, &proposer), BOND);
+    assert_eq!(balance(&env, &token, &this), 0);
+}

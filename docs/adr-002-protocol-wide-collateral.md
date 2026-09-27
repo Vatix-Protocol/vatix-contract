@@ -167,11 +167,30 @@ migration window; withdrawal remains per-market until Phase 2.
   the same migration procedure documented in `STORAGE_MIGRATION_GUIDE.md`
   before this ships to an already-initialized deployment.
 
+### Collateral allowlist decision (#901)
+
+**Decided:** exactly one collateral token per deployment, enforced on-chain.
+
+- `initialize_market` pins the collateral token of the first market
+  (market id `1`, which can never be deleted). Every later
+  `initialize_market` call whose `collateral_token` differs is rejected with
+  `ContractError::CollateralTokenNotAllowed` (code `95`) before any state is
+  written — fail closed, no market id is consumed.
+- Rationale: `CollateralBalance(user)` is token-agnostic. Allowing a second
+  token would let a user deposit a low-value asset in market A and use that
+  balance to back trades (and winnings) in a market collateralised by USDC.
+- Authz: unchanged — only the admin can create markets, and even the admin
+  cannot bypass the pin.
+- No storage change: the pin is read from the existing `Market(1)` entry, so
+  `STORAGE_VERSION` is not bumped.
+- Rollback / multi-asset: supporting a second asset requires denominating
+  `CollateralBalance`/`TotalLockedCollateral` per token (mirroring treasury
+  `TokenBalance(Address)`), a storage-breaking change needing its own ADR.
+  Until then, deploy a separate market contract per collateral asset.
+- Tests: `test_initialize_market_rejects_second_collateral_token` in
+  `contracts/market/src/test.rs`.
+
 ### Open Questions
-- Should `CollateralBalance` be denominated per collateral token (mirroring
-  the treasury's `TokenBalance(Address)` design) once markets with
-  different collateral tokens can share a user's balance? Phase 1 assumes a
-  single collateral token per deployment, matching the current codebase.
 - Should Phase 2 also update `reconciliation.rs`'s invariant checks to
   assert `sum(locked_collateral) <= CollateralBalance` protocol-wide, in
   addition to the existing per-market `locked <= deposited` invariant?
