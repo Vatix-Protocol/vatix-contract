@@ -40,7 +40,8 @@ fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractErr
     }
 
     const ONE_YEAR_SECONDS: u64 = 31_536_000;
-    if end_time > current_time + ONE_YEAR_SECONDS {
+    // Saturate instead of panicking on overflow near u64::MAX (#906).
+    if end_time > current_time.saturating_add(ONE_YEAR_SECONDS) {
         return Err(ContractError::InvalidTimestamp);
     }
 
@@ -111,9 +112,13 @@ fn validate_amount_positive(amount: i128) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Upper bound for any single amount (collateral or shares). Keeping amounts at
+/// or below `i128::MAX / 2` guarantees that adding two validated amounts can
+/// never overflow (#906).
+pub const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
+
 /// Validates that amount does not exceed reasonable limits
 fn validate_amount_reasonable(amount: i128) -> Result<(), ContractError> {
-    const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
     if amount > MAX_REASONABLE_AMOUNT {
         return Err(ContractError::InvalidQuantity);
     }
@@ -152,10 +157,20 @@ fn validate_shares_not_empty(yes_shares: i128, no_shares: i128) -> Result<(), Co
     Ok(())
 }
 
-/// Validates share amounts
+/// Validates that neither share amount exceeds `MAX_REASONABLE_AMOUNT`, so
+/// downstream `yes + no` arithmetic cannot overflow (#906).
+fn validate_shares_bounded(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
+    if yes_shares > MAX_REASONABLE_AMOUNT || no_shares > MAX_REASONABLE_AMOUNT {
+        return Err(ContractError::InvalidShareAmount);
+    }
+    Ok(())
+}
+
+/// Validates share amounts: non-negative, not both zero, and bounded.
 pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
     validate_shares_non_negative(yes_shares, no_shares)?;
     validate_shares_not_empty(yes_shares, no_shares)?;
+    validate_shares_bounded(yes_shares, no_shares)?;
     Ok(())
 }
 
@@ -604,6 +619,37 @@ mod tests {
             calculate_fee(i128::MAX, 10000),
             Err(ContractError::ArithmeticOverflow)
         );
+    }
+
+    #[test]
+    fn test_shares_overflow_bound_rejected() {
+        assert!(validate_shares(MAX_REASONABLE_AMOUNT, MAX_REASONABLE_AMOUNT).is_ok());
+        assert_eq!(
+            validate_shares(i128::MAX, 0),
+            Err(ContractError::InvalidShareAmount)
+        );
+        assert_eq!(
+            validate_shares(0, MAX_REASONABLE_AMOUNT + 1),
+            Err(ContractError::InvalidShareAmount)
+        );
+    }
+
+    #[test]
+    fn test_collateral_amount_boundaries() {
+        assert!(validate_collateral_amount(MAX_REASONABLE_AMOUNT).is_ok());
+        assert_eq!(
+            validate_collateral_amount(MAX_REASONABLE_AMOUNT + 1),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_deposit_amount(0),
+            Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_end_time_no_overflow_near_u64_max() {
+        assert!(validate_end_time(u64::MAX, u64::MAX - 1).is_ok());
     }
 
     #[test]

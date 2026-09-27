@@ -50,6 +50,13 @@ Each ADR should follow this structure:
 | Number | Title | Status | Date |
 |--------|-------|--------|------|
 | [001](./001-oracle-adapter-selection.md) | Oracle Adapter Selection for Market Resolution | Accepted | 2026-06-29 |
+| [ADR-001 (spike)](../adr-001-oracle-adapter.md) | Soroban Oracle Adapter Interface (Reflector vs Pyth spike, precursor to 001) | Proposed | 2026-06-20 |
+| [002](../adr-002-protocol-wide-collateral.md) | Protocol-Wide Collateral Balance | Proposed (Phase 1 implemented) | 2026-08-25 |
+
+> **Index invariant:** every ADR in the repository must appear in this table,
+> including ADRs stored outside `docs/adr/` (currently `docs/adr-001-oracle-adapter.md`
+> and `docs/adr-002-protocol-wide-collateral.md`). New ADRs should be added under
+> `docs/adr/` using the next free number (next: **003**).
 
 ## Contributing
 
@@ -71,4 +78,4 @@ When creating a new ADR:
 
 ---
 
-**Last Updated:** 2026-06-29
+**Last Updated:** 2026-09-27
