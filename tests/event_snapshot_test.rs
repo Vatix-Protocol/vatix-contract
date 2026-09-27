@@ -94,6 +94,7 @@ fn event_market_created_shape() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let (topics, data) = last_event(&env);
@@ -122,7 +123,7 @@ fn event_collateral_deposited_shape() {
     let mut params = MarketParams::default_valid(&env);
     params.collateral_token = token.clone();
     let mid = client.initialize_market(
-        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token,
+        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token, &None,
     );
 
     let user = Address::generate(&env);
@@ -155,7 +156,7 @@ fn event_collateral_withdrawn_shape() {
     let mut params = MarketParams::default_valid(&env);
     params.collateral_token = token.clone();
     let mid = client.initialize_market(
-        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token,
+        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token, &None,
     );
 
     let user = Address::generate(&env);
@@ -185,7 +186,7 @@ fn event_position_updated_shape() {
     let mut params = MarketParams::default_valid(&env);
     params.collateral_token = token.clone();
     let mid = client.initialize_market(
-        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token,
+        &admin, &params.question, &params.end_time, &params.oracle_pubkey, &params.collateral_token, &None,
     );
 
     let user = Address::generate(&env);
@@ -221,9 +222,13 @@ fn event_market_resolved_shape() {
         &(env.ledger().timestamp() + 86_400),
         &oracle_pubkey,
         &token,
+        &None,
     );
+    let end_time = env.ledger().timestamp() + 86_400;
     let sig = sign_outcome(&env, &signing_key, mid, true);
-    client.resolve_market(&String::from_str(&env, "1"), &true, &sig);
+    let resolver = Address::generate(&env);
+    let expires_at = end_time + 86_400;
+    client.resolve_market(&resolver, &String::from_str(&env, "1"), &true, &sig, &expires_at);
 
     let (topics, data) = last_event(&env);
     assert_eq!(topics.len(), 2, "market_resolved_event has 2 topics");
@@ -254,14 +259,18 @@ fn event_position_settled_shape() {
         &(env.ledger().timestamp() + 86_400),
         &oracle_pubkey,
         &token,
+        &None,
     );
+    let end_time = env.ledger().timestamp() + 86_400;
     let user = Address::generate(&env);
     StellarAssetClient::new(&env, &token).mint(&user, &10_000i128);
     client.deposit_collateral(&user, &mid, &10_000i128);
     client.update_position(&user, &mid, &10_000i128, &0i128, &5_000i128);
 
     let sig = sign_outcome(&env, &signing_key, mid, true);
-    client.resolve_market(&String::from_str(&env, "1"), &true, &sig);
+    let resolver = Address::generate(&env);
+    let expires_at = end_time + 86_400;
+    client.resolve_market(&resolver, &String::from_str(&env, "1"), &true, &sig, &expires_at);
     client.settle_position(&user, &mid);
 
     let (topics, data) = last_event(&env);

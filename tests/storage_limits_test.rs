@@ -55,6 +55,7 @@ fn market_with_many_positions_stays_within_mainnet_budget() {
         &end_time,
         &oracle_pubkey,
         &collateral_token,
+        &None,
     );
 
     let deposit = 100 * STROOPS_PER_USDC;
@@ -112,6 +113,7 @@ fn market_participants_vec_storage_limits_test() {
         &end_time,
         &oracle_pubkey,
         &collateral_token,
+        &None,
     );
 
     let deposit = 10 * STROOPS_PER_USDC;

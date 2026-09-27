@@ -42,6 +42,7 @@ fn create_market_then_deposit_collateral() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
     assert_eq!(market_id, 1);
     assert_event_emitted(&env, "market_created");
@@ -82,6 +83,7 @@ fn non_admin_cannot_create_market() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 }
 
@@ -119,7 +121,7 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     let question = String::from_str(&env, "Will the full loop settle?");
     let end_time = env.ledger().timestamp() + 86_400;
     let market_id =
-        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None);
     assert_eq!(market_id, 1);
     assert_event_emitted(&env, "market_created");
 
@@ -145,7 +147,9 @@ fn full_protocol_loop_deposit_trade_resolve_settle() {
     // 4. Resolve the market (YES wins) with a valid oracle signature.
     let signature = helpers::sign_outcome(&env, &signing_key, market_id, outcome);
     let market_id_str = String::from_str(&env, "1");
-    client.resolve_market(&market_id_str, &outcome, &signature);
+    let resolver = Address::generate(&env);
+    let expires_at = end_time + 86_400;
+    client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
     assert_event_emitted(&env, "market_resolved");
     let resolved = env.as_contract(&contract_id, || {
         storage::get_market(&env, market_id)
@@ -201,7 +205,7 @@ fn full_protocol_loop_no_outcome_wins() {
     let question = String::from_str(&env, "Will NO win this round?");
     let end_time = env.ledger().timestamp() + 86_400;
     let market_id =
-        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None);
     assert_eq!(market_id, 1);
 
     // Deposit and buy NO shares
@@ -217,7 +221,9 @@ fn full_protocol_loop_no_outcome_wins() {
     // Resolve with NO outcome
     let signature = helpers::sign_outcome(&env, &signing_key, market_id, outcome);
     let market_id_str = String::from_str(&env, "1");
-    client.resolve_market(&market_id_str, &outcome, &signature);
+    let resolver = Address::generate(&env);
+    let expires_at = end_time + 86_400;
+    client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
     let resolved = env.as_contract(&contract_id, || {
         storage::get_market(&env, market_id)
@@ -267,7 +273,7 @@ fn full_protocol_loop_refund_path() {
     let question = String::from_str(&env, "Refund test?");
     let end_time = env.ledger().timestamp() + 86_400;
     let market_id =
-        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+        client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None);
 
     let user = Address::generate(&env);
     let deposit = 75 * STROOPS_PER_USDC;
@@ -281,7 +287,9 @@ fn full_protocol_loop_refund_path() {
     // in storage to simulate the "no-winner" refund path.
     let signature = helpers::sign_outcome(&env, &signing_key, market_id, true);
     let market_id_str = String::from_str(&env, "1");
-    client.resolve_market(&market_id_str, &true, &signature);
+    let resolver = Address::generate(&env);
+    let expires_at = end_time + 86_400;
+    client.resolve_market(&resolver, &market_id_str, &true, &signature, &expires_at);
 
     // Override the result to None to exercise the refund branch in settlement.
     // This simulates the governance / admin refund path.
@@ -335,6 +343,7 @@ fn duplicate_market_id_creation_is_rejected() {
         &params.end_time,
         &params.oracle_pubkey,
         &collateral_token,
+        &None,
     );
     assert_eq!(market_id, 1);
 
@@ -353,6 +362,7 @@ fn duplicate_market_id_creation_is_rejected() {
         &params.end_time,
         &params.oracle_pubkey,
         &collateral_token,
+        &None,
     );
     assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
 }
@@ -390,6 +400,7 @@ fn deposit_zero_quantity_is_rejected() {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     // Zero-quantity deposit must be deterministically rejected with InvalidQuantity.

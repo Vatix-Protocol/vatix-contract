@@ -39,6 +39,7 @@ fn market_with_funded_user(deposit: i128) -> (Env, Address, u32, Address) {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
