@@ -14,6 +14,9 @@ use soroban_sdk::contracterror;
 /// - Reconciliation Errors: 80-89
 /// - Conservation Errors: 90-99
 ///
+/// The full numeric code table for every contract is in
+/// `docs/error-codes.md`; keep it in sync when adding variants.
+///
 /// # Stable not-found codes
 ///
 /// Market lookups that fail because the requested market does not exist MUST

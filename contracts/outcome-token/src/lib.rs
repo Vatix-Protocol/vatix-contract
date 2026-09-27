@@ -16,6 +16,25 @@
 //! | `Config`                                 | `OutcomeTokenConfig` | Admin and market contract addresses |
 //! | `Balance(u32, Address, TokenKind)`       | `i128`    | Per-user, per-market, per-side token balance|
 //! | `TotalSupply(u32, TokenKind)`            | `i128`    | Per-market, per-side total token supply     |
+//!
+//! ## Transfer rules (Issue #903)
+//!
+//! Outcome tokens are **non-transferable** in this release. The contract
+//! exposes no `transfer`, `transfer_from`, or `approve` entrypoint, so
+//! balances can change only through the market contract (the sole mint/burn
+//! authority stored in `Config`). This is a deliberate, fail-closed decision:
+//!
+//! - The market contract stays the source of truth for positions and payouts;
+//!   a peer-to-peer transfer path could desync outcome balances from market
+//!   positions and settlement accounting.
+//! - No new privileged or user-facing surface is added (deny-by-default).
+//!
+//! If transfers are added later they MUST: require `from.require_auth()`,
+//! reject non-positive amounts (`InvalidAmount`) and self-transfers, fail with
+//! `InsufficientBalance` rather than going negative, reject while paused
+//! (`ContractPaused`) and once the market is resolved
+//! (`TransferBlockedAfterResolve`), leave `TotalSupply` unchanged, and ship
+//! behind a storage-version bump with a documented rollback.
 
 mod error;
 mod events;
@@ -138,11 +157,13 @@ impl OutcomeTokenContract {
         storage::get_pending_market_contract(&env)
     }
 
-    /// Pause the contract, blocking `mint`, `burn`, and `transfer`.
+    /// Pause the contract.
     ///
-    /// Only the stored admin may call this. Once paused, all three token
-    /// mutation entrypoints reject with [`ContractError::ContractPaused`]
-    /// until the admin calls [`Self::unpause`].
+    /// Only the stored admin may call this. Sets the pause flag that any
+    /// token-mutation entrypoint must check, rejecting with
+    /// [`ContractError::ContractPaused`] until the admin calls
+    /// [`Self::unpause`]. Outcome tokens are non-transferable (see the
+    /// module-level transfer rules).
     ///
     /// # Errors
     /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
