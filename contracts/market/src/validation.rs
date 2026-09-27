@@ -69,16 +69,6 @@ pub fn validate_market_creation(
     Ok(())
 }
 
-/// Validates question format: must be non-empty and within the sanitized
-/// title-length bound.
-fn validate_question_format(question: &String) -> Result<(), ContractError> {
-    let len = question.len();
-    if len == 0 || len >= MAX_MARKET_TITLE_LENGTH {
-        return Err(ContractError::InvalidQuestion);
-    }
-    Ok(())
-}
-
 /// Validates metadata URI format if provided
 ///
 /// If metadata_uri is Some, it must:

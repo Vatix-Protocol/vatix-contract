@@ -1331,7 +1331,7 @@ impl MarketContract {
             .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
         let new_yes = position.yes_shares + yes_delta;
         let new_no = position.no_shares + no_delta;
-        if new_yes >= 0 && new_no >= 0 {
+        let locked_elsewhere = if new_yes >= 0 && new_no >= 0 {
             let prospective_locked =
                 positions::calculate_locked_collateral(new_yes, new_no, market_price);
             let lock_increased = prospective_locked > position.locked_collateral;
@@ -1360,14 +1360,10 @@ impl MarketContract {
                     return Err(ContractError::InsufficientCollateral);
                 }
             }
-            // Keep the protocol-wide aggregate in sync so other markets see
-            // this market's updated lock immediately.
-            storage::set_total_locked_collateral(
-                &env,
-                &user,
-                locked_elsewhere.saturating_add(prospective_locked),
-            );
-        }
+            Some(locked_elsewhere)
+        } else {
+            None
+        };
 
         // 5. Apply the share deltas (persists the position and emits an event)
         let result =
@@ -1381,6 +1377,14 @@ impl MarketContract {
                     ContractError::InsufficientCollateral
                 }
             })?;
+
+        if let Some(locked_elsewhere) = locked_elsewhere {
+            // Keep the protocol-wide aggregate in sync only after the actual
+            // position update succeeds, so failed trades cannot corrupt the
+            // global lock accounting for this user.
+            let next_total_locked = locked_elsewhere.saturating_add(result.locked_collateral);
+            storage::set_total_locked_collateral(&env, &user, next_total_locked);
+        }
 
         // 5a. Track first-time participants so the market can later be
         //     settled page-by-page via `settle_positions_page` (Issue #495)
