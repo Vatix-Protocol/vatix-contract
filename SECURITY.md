@@ -28,6 +28,56 @@ This policy covers the Vatix-Protocol monorepo, including `vatix-contract` (Soro
 - Every external entrypoint is rate-limited and authorized.
 - Money-path and mainnet-affecting changes land behind a feature flag or kill-switch with a documented rollback.
 
+## Hardening Follow-up 1: Residual Authz / Observability / Docs Gaps (Issue #963)
+
+This section closes the residual gaps left after the initial hardening pass. It
+is the normative summary for the invariants below; the per-entrypoint detail
+lives in [`AUTH_TABLE.md`](AUTH_TABLE.md) and the settlement replay rules live
+in [`SETTLEMENT_IDEMPOTENCY.md`](SETTLEMENT_IDEMPOTENCY.md).
+
+### Deny-by-default authz
+
+- Every privileged entrypoint authorizes **before** any state read or write.
+  A caller that is not the stored admin (or an explicitly granted role) fails
+  with `NotAdmin`/`Unauthorized` and no state is mutated.
+- New privileged surfaces are denied by default: they must be added to
+  [`AUTH_TABLE.md`](AUTH_TABLE.md) (CI-enforced by
+  `scripts/check-auth-table.sh`, #892) before they can be called.
+- Wrong role or expired auth aborts the call; there is no implicit fallback to
+  a less-privileged path.
+
+### Fail-closed on dependency outage
+
+- Writes fail closed when a dependency (RPC/DB/Redis) is unavailable. A write
+  that cannot verify its preconditions is rejected rather than partially
+  applied.
+- Reads may degrade, but a degraded read never authorizes a write.
+- No silent fallback to a last-known value on money paths (see the oracle
+  assumptions below).
+
+### Idempotency and replay handling
+
+- Settlement and other money-path writes are idempotent: concurrent or
+  replayed requests are serialized and applied at most once. The exact keys
+  and replay rules are documented in
+  [`SETTLEMENT_IDEMPOTENCY.md`](SETTLEMENT_IDEMPOTENCY.md).
+- Replayed oracle reports count once toward quorum; a replayed settlement is a
+  no-op, not a second transfer.
+
+### Observability without secret leakage
+
+- Money paths emit actionable metrics and events (e.g. pause toggles, fee
+  collection, settlement outcomes) so operators can alert and pause.
+- Logs and metrics redact secrets: environment values, keys, and RPC URLs are
+  never emitted. Correlation ids are used to trace a request without exposing
+  credentials.
+
+### Rollback / kill-switch
+
+- Any money-path or mainnet-affecting change lands behind a feature flag or the
+  per-contract pause kill-switch (see *Pause Trading* below) with a documented
+  rollback. No state migration is required to roll back a pause.
+
 ## Oracle Collusion Assumptions (Issue #946)
 
 The oracle adapter's trust model and collusion assumptions are documented in
@@ -149,24 +199,10 @@ Freighter is an **untrusted client**: it holds signing keys and proposes
 signatures, but it is never authoritative for protocol state.
 
 - The contract remains the **source of truth** for balances, swaps, and admin.
-  Wallet-reported balances, network, and addresses are display hints only and
-  must be re-verified against the contract before any money-path action.
-- Every signed transaction is **authorized on-chain**; a signature from a
-  connected wallet does not by itself grant a role or bypass policy. Wrong-role
-  or expired-auth submissions are rejected by the contract, not the client.
-- Writes **fail closed** when the RPC is unavailable or the wallet returns an
-  unexpected network/address. Never treat a client-side success as settlement.
-- **No secrets** are stored in the repo or logs. Freighter keys never leave the
-  extension; the app must not log signed XDR, keys, or raw signatures.
-- Testnet vs mainnet **address drift** is a security concern: verify the
-  connected network and contract id before signing, and refuse to sign when they
-  do not match the configured deployment.
-
-All upgrade scripts must be run by an authorized operator against the intended
-network. Untrusted clients cannot bypass upgrade policy.
-
-## Implementation Summary
-
-The 
-
-/* … truncated 1829 chars — edit only what you need near the top … */
+  Wallet-reported balances, network, and account are treated as untrusted
+  hints and re-verified server/contract-side before any state change.
+- The wallet must be on the expected network passphrase; a mismatch is
+  rejected fail-closed rather than silently signing on the wrong network.
+- Signing requests are authorized per action; a wallet connection alone grants
+  no privileges.
+- No secrets (keys, seeds, RPC URLs) are logged by the web integration.
