@@ -601,3 +601,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-953 -->
 - #953: Resolution challenge bond lock/unlock
+
+<!-- handsoff-issue-954 -->
+- #954: Market creation emits MarketCreated fields complete
