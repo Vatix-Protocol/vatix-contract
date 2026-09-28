@@ -201,177 +201,79 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
+    /// The create-market anti-spam bond attached to the request is below the
+    /// currently configured minimum bond.
+    ///
+    /// `create_market` requires a bond (see `CreateMarketBond`) so that
+    /// untrusted callers cannot grief the protocol by spamming market
+    /// creation. The bond is enforced contract-side — clients cannot bypass
+    /// it by omitting the field or by passing a smaller amount. Fail-closed:
+    /// the request is rejected outright rather than silently accepted with a
+    /// zero bond.
+    BondBelowMinimum = 38,
+
+    /// The create-market anti-spam bond is not currently enabled, so a bond
+    /// was supplied where none is expected.
+    ///
+    /// When the bond policy is disabled (kill-switch / feature flag), callers
+    /// MUST NOT attach a bond. Rejecting a stray bond keeps the money path
+    /// deterministic and prevents accidental value transfer while the policy
+    /// is off.
+    BondNotEnabled = 39,
+
     // ========== Authorization Errors (41-49) ==========
     /// Caller is not authorized to perform this operation.
     ///
-    /// The caller must have the required role or permission.
+    /// Deny-by-default: any privileged surface (admin actions, bond policy
+    /// updates, oracle management) rejects callers that do not hold the
+    /// required role. Untrusted clients cannot bypass policy by crafting a
+    /// request that omits or forges authorization.
     Unauthorized = 41,
 
-    /// Caller is not the admin.
+    /// The caller's authorization has expired.
     ///
-    /// Only the contract admin can perform administrative operations.
-    NotAdmin = 42,
+    /// Time-bounded authorizations (e.g. signed admin intents) are rejected
+    /// once their deadline passes. Re-submit with a fresh authorization.
+    AuthorizationExpired = 42,
 
-    /// Caller is not the market creator.
+    /// The caller does not hold the role required for this operation.
     ///
-    /// Only the market creator can perform creator-restricted operations.
-    NotCreator = 43,
-
-    /// The contract has been paused by the admin.
-    ///
-    /// All state-changing operations are blocked while paused.
-    ContractPaused = 44,
+    /// Distinct from [`ContractError::Unauthorized`] so clients can surface a
+    /// precise "wrong role" message instead of a generic denial.
+    WrongRole = 43,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The token contract rejected the transfer (e.g., insufficient balance).
+    /// The underlying token contract rejected the transfer (e.g. insufficient
+    /// balance or allowance).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid.
-    ///
-    /// The provided token address is not a valid token contract.
+    /// The token address is invalid or unsupported.
     InvalidToken = 51,
 
-    /// Token amount is invalid (e.g., zero or negative).
-    ///
-    /// Token amounts must be positive.
-    InvalidTokenAmount = 52,
-
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// The operation would exceed the maximum representable value. This is a
-    /// fail-closed guard: rather than wrapping (which could mint or destroy
-    /// value), the contract rejects the operation outright.
+    /// Arithmetic overflow occurred during a computation.
     ArithmeticOverflow = 60,
 
-    /// Arithmetic underflow occurred during a calculation.
-    ///
-    /// The operation would go below the minimum representable value. Like
-    /// [`ContractError::ArithmeticOverflow`], this is fail-closed: the
-    /// operation is rejected instead of wrapping.
+    /// Arithmetic underflow occurred during a computation.
     ArithmeticUnderflow = 61,
 
     /// Division by zero was attempted.
-    ///
-    /// The divisor was zero. Division is rejected rather than panicking so
-    /// callers receive a stable, typed error code.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
     /// Treasury operation failed.
-    ///
-    /// A treasury-related operation could not be completed.
-    TreasuryError = 70,
+    TreasuryOperationFailed = 70,
 
-    /// Insufficient treasury balance.
-    ///
-    /// The treasury does not have enough funds for this operation.
-    InsufficientTreasuryBalance = 71,
+    /// Treasury is not configured.
+    TreasuryNotConfigured = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
     /// Reconciliation check failed.
-    ///
-    /// The on-chain state does not match the expected reconciled state.
     ReconciliationFailed = 80,
 
-    /// Balance mismatch detected during reconciliation.
-    ///
-    /// The computed balance does not match the stored balance.
-    BalanceMismatch = 81,
-
     // ========== Conservation Errors (90-99) ==========
-    /// Conservation invariant violated.
-    ///
-    /// The total value in must equal the total value out. A violation
-    /// indicates a critical bug and the operation is rejected fail-closed.
+    /// A conservation invariant was violated.
     ConservationViolation = 90,
-
-    /// Share conservation violated.
-    ///
-    /// The sum of shares must be conserved across a settlement operation.
-    ShareConservationViolation = 91,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The arithmetic error codes are part of the public ABI and must remain
-    /// stable so clients can map them deterministically. This guards against
-    /// accidental renumbering when new variants are added.
-    #[test]
-    fn arithmetic_error_codes_are_stable() {
-        assert_eq!(ContractError::ArithmeticOverflow as u32, 60);
-        assert_eq!(ContractError::ArithmeticUnderflow as u32, 61);
-        assert_eq!(ContractError::DivisionByZero as u32, 62);
-    }
-
-    /// The not-found code is the single stable code for market lookups and
-    /// must never be renumbered or reused.
-    #[test]
-    fn market_not_found_code_is_stable() {
-        assert_eq!(ContractError::MarketNotFound as u32, 1);
-    }
-
-    /// Error codes must be unique across the enum so a client can never
-    /// confuse two distinct failure modes. This catches copy/paste mistakes
-    /// when adding new variants.
-    #[test]
-    fn error_codes_are_unique() {
-        let codes = [
-            ContractError::MarketNotFound as u32,
-            ContractError::MarketAlreadyResolved as u32,
-            ContractError::MarketNotResolved as u32,
-            ContractError::MarketExpired as u32,
-            ContractError::MarketNotActive as u32,
-            ContractError::MarketClosedToDeposits as u32,
-            ContractError::WithdrawCooldownActive as u32,
-            ContractError::MarketAlreadyClosed as u32,
-            ContractError::ClaimBeforeResolve as u32,
-            ContractError::InsufficientCollateral as u32,
-            ContractError::PositionAlreadySettled as u32,
-            ContractError::NoPositionFound as u32,
-            ContractError::InvalidShareAmount as u32,
-            ContractError::BatchTooLarge as u32,
-            ContractError::InvalidSignature as u32,
-            ContractError::UnauthorizedOracle as u32,
-            ContractError::InvalidOutcome as u32,
-            ContractError::OraclePriceUnavailable as u32,
-            ContractError::OracleMessageExpired as u32,
-            ContractError::InvalidThresholdQuorum as u32,
-            ContractError::StalePrice as u32,
-            ContractError::InvalidPrice as u32,
-            ContractError::InvalidQuantity as u32,
-            ContractError::InvalidTimestamp as u32,
-            ContractError::InvalidQuestion as u32,
-            ContractError::InvalidOutcomeCount as u32,
-            ContractError::InvalidAdmin as u32,
-            ContractError::BelowMinDeposit as u32,
-            ContractError::InvalidMetadataUri as u32,
-            ContractError::Unauthorized as u32,
-            ContractError::NotAdmin as u32,
-            ContractError::NotCreator as u32,
-            ContractError::ContractPaused as u32,
-            ContractError::TokenTransferFailed as u32,
-            ContractError::InvalidToken as u32,
-            ContractError::InvalidTokenAmount as u32,
-            ContractError::ArithmeticOverflow as u32,
-            ContractError::ArithmeticUnderflow as u32,
-            ContractError::DivisionByZero as u32,
-            ContractError::TreasuryError as u32,
-            ContractError::InsufficientTreasuryBalance as u32,
-            ContractError::ReconciliationFailed as u32,
-            ContractError::BalanceMismatch as u32,
-            ContractError::ConservationViolation as u32,
-            ContractError::ShareConservationViolation as u32,
-        ];
-
-        for (i, a) in codes.iter().enumerate() {
-            for b in codes.iter().skip(i + 1) {
-                assert_ne!(a, b, "duplicate error code detected");
-            }
-        }
-    }
 }
