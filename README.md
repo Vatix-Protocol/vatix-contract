@@ -598,3 +598,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-890 -->
 - #890: Collect fee callback fully implemented
+
+<!-- handsoff-issue-952 -->
+- #952: Close market emits indexer events
