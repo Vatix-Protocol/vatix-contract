@@ -49,6 +49,12 @@ In-scope components:
   `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
   inaccuracy could lead to a mistaken security assumption
 
+## Threat Model
+
+See [`docs/threat-model.md`](docs/threat-model.md) for trust boundaries and
+mitigations, and [`docs/dust-handling.md`](docs/dust-handling.md) for the
+fee-rounding dust rule.
+
 ## Invariants
 
 These invariants must hold on every network, including localnet:

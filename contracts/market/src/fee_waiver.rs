@@ -20,6 +20,14 @@
 //! `add_fee_waiver` MUST return `FeeWaiverCapReached` when the list already
 //! contains `MAX_FEE_WAIVERS` addresses.  Removing this check re-opens the
 //! griefing vector.
+//!
+//! ## Spoofing (#926)
+//!
+//! A waiver can only be granted by the stored admin. Passing the admin's
+//! address as `caller` is not enough: `caller.require_auth()` runs before the
+//! equality check, so a transaction lacking the admin's signature aborts.
+//! Waiver status is read from contract storage only — no client-supplied
+//! flag can make [`effective_fee_rate_bps`] return `0`.
 
 use crate::error::ContractError;
 use crate::storage;
@@ -276,6 +284,20 @@ mod tests {
         // Deny-by-default: the unauthorized add must not have mutated state.
         let present = env.as_contract(&contract_id, || has_fee_waiver(&env, &waiver));
         assert!(!present, "unauthorized add must not grant a waiver");
+    }
+
+    /// #926: naming the admin as `caller` without the admin's signature must
+    /// fail auth before any state is written.
+    #[test]
+    #[should_panic]
+    fn test_spoofed_admin_caller_without_auth_is_rejected() {
+        let env = Env::default();
+        let (contract_id, admin) = setup(&env);
+        let attacker = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            let _ = add_fee_waiver(&env, &admin, &attacker);
+        });
     }
 
     #[test]

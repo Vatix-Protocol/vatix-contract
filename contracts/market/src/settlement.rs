@@ -103,6 +103,14 @@ fn compute_settlement(
 /// (`settle_position`, `batch_settle_positions`, `settle_positions_page`) so
 /// full-exit burning behaves identically regardless of which entrypoint a
 /// caller uses.
+///
+/// # Losing-share burn invariant (#931)
+/// Both sides are burned, including the **losing** side that pays out `0`.
+/// Losing shares are never redeemable, but leaving them live would let a
+/// settled user transfer worthless tokens that still count toward
+/// `total_supply`, breaking Position/OutcomeToken parity. The position is
+/// marked settled (CEI) before this call, so a replayed settle returns
+/// `PositionAlreadySettled` and can never double-burn.
 fn burn_settled_outcome_tokens(env: &Env, market_id: u32, user: &Address, position: &Position) {
     if let Some(outcome_token_address) = storage::get_outcome_token_contract(env) {
         let token_client = OutcomeTokenContractClient::new(env, &outcome_token_address);
@@ -508,6 +516,16 @@ mod tests {
         let env = Env::default();
         let pos = create_test_position(&env, 100, 30, false);
         assert_eq!(calculate_payout(&pos, true), 100);
+    }
+
+    /// #931: losing shares contribute nothing to payout, for either outcome.
+    #[test]
+    fn test_losing_shares_pay_zero() {
+        let env = Env::default();
+        let only_no = create_test_position(&env, 0, 75, false);
+        assert_eq!(calculate_payout(&only_no, true), 0);
+        let only_yes = create_test_position(&env, 75, 0, false);
+        assert_eq!(calculate_payout(&only_yes, false), 0);
     }
 
     #[test]
