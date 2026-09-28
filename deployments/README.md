@@ -55,6 +55,37 @@ Until real contracts are deployed, `contractId` values are empty strings and
 any tooling that depends on them should treat that as "not yet configured"
 rather than a valid address.
 
+## Env examples are secret-free
+
+Every `*.env.example` / `.env*.example` file in this repo is a **template of
+placeholders only**. It must never contain a real secret, token, private key,
+or funded account seed — not even a testnet one, since testnet keys are still
+credentials and get scraped. Contributors copy the example to a real env file
+and fill in their own values locally.
+
+Rules for env examples:
+
+1. **Placeholders only.** Use obvious non-secret placeholders (e.g.
+   `S...` / `C...` / `https://...`), never a value that could sign a
+transaction or authenticate to a service.
+2. **Public vs secret is labelled.** `NEXT_PUBLIC_*` values are shipped to the
+   browser and are public; everything else (secret keys, RPC auth tokens,
+   server-only config) is secret and must stay out of the client bundle and
+   out of git.
+3. **Testnet vs mainnet is labelled.** Defaults must point at **testnet**.
+   Never ship a default that silently targets mainnet — mainnet is opt-in and
+   must be set explicitly.
+4. **Fail closed.** An unset or placeholder value means "not configured";
+   tooling must refuse to act (especially on money paths) rather than fall
+   back to a mainnet endpoint or a shared key.
+5. **Keys match the code.** Env example keys must match what the code actually
+   reads (contract client, Soroban RPC, wallet config) so a contributor can
+   run locally without guessing.
+
+See `apps/web/.env.local.example` for the web app template and the
+`NEXT_PUBLIC_*` contract IDs it expects (which should match the registry
+above).
+
 ## Mainnet address review rule
 
 Mainnet contract IDs are money-path configuration: a wrong or swapped ID
