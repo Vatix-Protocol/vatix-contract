@@ -44,6 +44,7 @@ fn setup_market_with_deposit(deposit: i128) -> (Env, Address, u32, Address) {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);

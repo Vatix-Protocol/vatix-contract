@@ -139,12 +139,18 @@ pub struct AdminTransferProposed {
     pub effective_at: u64,
 }
 
-pub fn emit_admin_transfer_proposed(env: &Env, old_admin: &Address, new_admin: &Address, effective_at: u64) {
+pub fn emit_admin_transfer_proposed(
+    env: &Env,
+    old_admin: &Address,
+    new_admin: &Address,
+    effective_at: u64,
+) {
     AdminTransferProposed {
         old_admin: old_admin.clone(),
         new_admin: new_admin.clone(),
         effective_at,
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 // ── Market contract rotation ──────────────────────────────────────────────────
@@ -182,7 +188,8 @@ pub fn emit_market_contract_proposed(env: &Env, new_market_contract: &Address, e
     MarketContractProposed {
         new_market_contract: new_market_contract.clone(),
         effective_at,
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -197,7 +204,8 @@ pub fn emit_market_contract_set(env: &Env, new_market_contract: &Address) {
     MarketContractSet {
         new_market_contract: new_market_contract.clone(),
         set_at: env.ledger().timestamp(),
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 // ── Market registry (add/remove) ──────────────────────────────────────────────
@@ -210,7 +218,10 @@ pub struct MarketAdded {
 }
 
 pub fn emit_market_added(env: &Env, market_contract: &Address) {
-    MarketAdded { market_contract: market_contract.clone() }.publish(env);
+    MarketAdded {
+        market_contract: market_contract.clone(),
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -221,7 +232,10 @@ pub struct MarketRemoved {
 }
 
 pub fn emit_market_removed(env: &Env, market_contract: &Address) {
-    MarketRemoved { market_contract: market_contract.clone() }.publish(env);
+    MarketRemoved {
+        market_contract: market_contract.clone(),
+    }
+    .publish(env);
 }
 
 // ── Stakeholder fee distribution (#485) ───────────────────────────────────────
@@ -350,7 +364,11 @@ pub struct TreasuryEmergencyModeChanged {
     pub changed_at: u64,
 }
 
-pub fn emit_emergency_mode_changed(env: &Env, new_mode: &crate::storage::EmergencyMode, admin: &Address) {
+pub fn emit_emergency_mode_changed(
+    env: &Env,
+    new_mode: &crate::storage::EmergencyMode,
+    admin: &Address,
+) {
     TreasuryEmergencyModeChanged {
         new_mode: new_mode.clone(),
         admin: admin.clone(),

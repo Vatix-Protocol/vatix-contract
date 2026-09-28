@@ -27,6 +27,8 @@
 //!    without the contract's own authorization; the deny-by-default
 //!    surface rejects unauthenticated entrypoints.
 
+extern crate std;
+
 use crate::storage;
 use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
@@ -151,7 +153,7 @@ proptest! {
     #[test]
     fn prop_split_bond_replay_is_idempotent(
         total in 1i128..=1_000_000_000_000i128,
-        market_id in 1u64..=1_000u64,
+        market_id in 1u32..=1_000u32,
         round in 1u32..=1_000u32,
     ) {
         let env = Env::default();
@@ -194,9 +196,13 @@ proptest! {
 
         // No `mock_all_auths`: the split must fail closed for an
         // unauthenticated caller instead of moving funds.
-        let result = env.try_as_contract(&contract_id, || {
-            crate::split_bond(&env, 1, 1, &token_address, &loser, &winner, total);
-        });
+        // `split_bond` traps on the failed token auth; catch the unwind so the
+        // property can assert nothing moved.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            env.as_contract(&contract_id, || {
+                crate::split_bond(&env, 1, 1, &token_address, &loser, &winner, total);
+            })
+        }));
         prop_assert!(result.is_err(), "unauthenticated split was not rejected");
 
         let token_client = soroban_sdk::token::Client::new(&env, &token_address);

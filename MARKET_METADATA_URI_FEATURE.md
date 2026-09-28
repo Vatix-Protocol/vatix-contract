@@ -60,7 +60,7 @@ pub struct Market {
     /// Optional URI pointing to off-chain market metadata
     /// Can reference IPFS (ipfs://...), Arweave (ar://...),
     /// or HTTP endpoints. URI is validated to be non-empty
-    /// and reasonably sized (max 2048 chars).
+    /// and reasonably sized (max 512 bytes, printable ASCII only).
     pub metadata_uri: Option<String>,
 }
 ```
@@ -105,7 +105,8 @@ pub fn update_market_metadata(
 ### Validation Rules
 
 1. **Optional**: Field can be None (no metadata)
-2. **Max Length**: 2048 characters
+2. **Max Length**: 512 bytes (`MAX_METADATA_URI_LENGTH`, #914)
+3. **Charset**: printable, non-whitespace ASCII only (0x21..=0x7E, #914)
 3. **Non-Empty**: If Some, must be non-empty string
 4. **Format Hints** (not enforced):
    - IPFS: `ipfs://QmXxx...`
@@ -122,7 +123,7 @@ pub fn validate_metadata_uri(uri: &Option<String>) -> Result<(), ContractError> 
             return Err(ContractError::InvalidMetadataUri);
         }
         // Check max length
-        if uri.len() > 2048 {
+        if uri.len() > MAX_METADATA_URI_LENGTH {
             return Err(ContractError::InvalidMetadataUri);
         }
     }
@@ -190,7 +191,7 @@ pub struct MarketCreatedEvent {
 #### Unit Tests
 1. Valid metadata URIs (IPFS, Arweave, HTTP)
 2. Empty metadata_uri (None case)
-3. Max length boundary (2047, 2048, 2049)
+3. Max length boundary (511, 512, 513)
 4. Empty string rejection
 5. Event emission verification
 
@@ -291,11 +292,23 @@ Recommended JSON schema for metadata at URI:
 - **Backward Compatibility**: Can add to old markets
 - **Optional**: Not every market needs rich metadata
 
-### Why 2048 Character Limit?
+### Why a 512-Byte, Printable-ASCII Limit? (Metadata griefing, #914)
 
-- **Reasonable Bound**: Long enough for most URIs
-- **URI Standard**: Standard URI length limits are 2048
-- **Storage Efficiency**: Prevents abuse/bloat
+The URI is written to persistent market storage and re-emitted in
+`MarketCreated`, so an oversized or malformed value is a griefing vector:
+every reader, indexer and frontend pays for it on every access.
+
+- **Bound**: 512 bytes (`MAX_METADATA_URI_LENGTH` in
+  `contracts/market/src/validation.rs`) fits an `ipfs://` CIDv1, an `ar://`
+  tx id, or an https URL. The original 2048-char proposal was reduced.
+- **Charset**: only bytes `0x21..=0x7E` are accepted. Whitespace, control
+  characters (e.g. `\n`, NUL) and non-ASCII bytes (e.g. bidi override
+  `U+202E`) are rejected, so a URI cannot be visually spoofed or break
+  line-oriented indexers/logs.
+- **Fail-closed**: any violation returns `InvalidMetadataUri` (#37) and the
+  market is not created; there is no truncation or silent normalisation.
+- **Rollback**: loosening the bound is a single-constant change plus a WASM
+  upgrade; already-stored URIs are unaffected either way.
 
 ### Why Not Store Metadata On-Chain?
 
@@ -322,8 +335,8 @@ Recommended JSON schema for metadata at URI:
 | Valid HTTP URI | Accept valid HTTP metadata URI | Planned |
 | None metadata_uri | Accept markets without metadata | Planned |
 | Empty string rejected | Reject empty metadata_uri | Planned |
-| Max length accepted | Accept 2048 char URI | Planned |
-| Too long rejected | Reject >2048 char URI | Planned |
+| Max length accepted | Accept 512 byte URI | Planned |
+| Too long rejected | Reject >512 byte URI | Planned |
 | Event includes URI | Verify event emission | Planned |
 | Integration test | Full market creation flow | Planned |
 
@@ -359,7 +372,7 @@ Recommended JSON schema for metadata at URI:
 
 ✅ metadata_uri field added to Market struct  
 ✅ Optional field (None = no metadata)  
-✅ Validation rules enforced (non-empty, max 2048)  
+✅ Validation rules enforced (non-empty, max 512 bytes, printable ASCII)  
 ✅ Error handling for invalid URIs  
 ✅ Event emission includes metadata_uri  
 ✅ Storage version bumped to 5  

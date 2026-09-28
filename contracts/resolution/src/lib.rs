@@ -52,9 +52,9 @@ mod storage;
 pub mod types;
 
 #[cfg(test)]
-mod test;
-#[cfg(test)]
 mod bond_split_proptest;
+#[cfg(test)]
+mod test;
 
 use crate::error::ContractError;
 use crate::types::{
@@ -227,7 +227,11 @@ impl ResolutionContract {
 
     pub const ADDRESS_TIMELOCK_SECONDS: u64 = 172_800;
 
-    pub fn propose_factory(env: Env, admin: Address, factory: Address) -> Result<(), ContractError> {
+    pub fn propose_factory(
+        env: Env,
+        admin: Address,
+        factory: Address,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         storage::assert_version(&env)?;
         let config = storage::get_config(&env);
@@ -290,7 +294,8 @@ impl ResolutionContract {
 
     pub fn execute_market_contract(env: Env) -> Result<Address, ContractError> {
         storage::assert_version(&env)?;
-        let pending = storage::get_pending_market_contract(&env).ok_or(ContractError::Unauthorized)?;
+        let pending =
+            storage::get_pending_market_contract(&env).ok_or(ContractError::Unauthorized)?;
         if env.ledger().timestamp() < pending.effective_at {
             return Err(ContractError::Unauthorized);
         }
@@ -534,7 +539,11 @@ impl ResolutionContract {
         // single `finalize` refund path can rely on it. Ordered after every
         // state write above (Checks-Effects-Interactions, Issue #695).
         let token_client = TokenClient::new(&env, &collateral_token);
-        token_client.transfer(&candidate.proposer, env.current_contract_address(), &bond_amount);
+        token_client.transfer(
+            &candidate.proposer,
+            env.current_contract_address(),
+            &bond_amount,
+        );
 
         Ok(candidate.id)
     }
@@ -605,6 +614,13 @@ impl ResolutionContract {
         candidate.challenge_uri = Some(challenge_uri.clone());
         storage::set_candidate(&env, &candidate);
         storage::append_challenger(&env, candidate_id, &challenger, bond_amount);
+
+        // Interaction: lock the challenger's bond in this contract (#899).
+        // Without this transfer the recorded bond is unbacked, and slashing
+        // it in `finalize`/`arbitrate_uphold_proposer` would pay the reward
+        // out of other parties' locked bonds.
+        let this = env.current_contract_address();
+        TokenClient::new(&env, &collateral_token).transfer(&challenger, &this, &bond_amount);
 
         events::emit_candidate_challenged(
             &env,
@@ -883,11 +899,7 @@ impl ResolutionContract {
         storage::set_proposer_collateral(&env, &proposer, 0);
         events::emit_collateral_slashed(&env, &proposer, &recipient, amount);
         let this = env.current_contract_address();
-        TokenClient::new(&env, &collateral_token).transfer(
-            &this,
-            &recipient,
-            &amount,
-        );
+        TokenClient::new(&env, &collateral_token).transfer(&this, &recipient, &amount);
         Ok(amount)
     }
 
@@ -903,7 +915,11 @@ impl ResolutionContract {
     /// [`Self::propose_market_contract`] (Issue #687). This prevents an
     /// admin from redirecting the slash treasury cut instantly. Call
     /// [`Self::execute_treasury`] once the timelock has elapsed to apply it.
-    pub fn propose_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
+    pub fn propose_treasury(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
         storage::assert_version(&env)?;
         let config = storage::get_config(&env);
@@ -1051,7 +1067,12 @@ impl ResolutionContract {
         }
         settle_challengers_as_losers(&env, candidate_id, &candidate, &collateral_token);
 
-        events::emit_candidate_arbitrated(&env, candidate_id, candidate.market_id, candidate.outcome);
+        events::emit_candidate_arbitrated(
+            &env,
+            candidate_id,
+            candidate.market_id,
+            candidate.outcome,
+        );
 
         // Same ABI fix as `finalize` (#683) — see the comment there.
         let args: Vec<Val> = soroban_sdk::vec![

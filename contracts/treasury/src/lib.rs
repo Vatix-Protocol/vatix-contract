@@ -45,13 +45,13 @@
 //! this table, that document, and the `StorageKey` enum itself in lockstep
 //! (#722).
 
+#[cfg(test)]
+mod distribute_proptest;
 pub mod error;
 pub mod events;
 pub mod storage;
 #[cfg(test)]
 mod test;
-#[cfg(test)]
-mod distribute_proptest;
 
 pub use error::TreasuryError;
 
@@ -142,9 +142,7 @@ impl TreasuryContract {
         storage::set_token_balance(&env, &token, new_balance);
 
         let prev_cumulative = storage::get_cumulative_fees(&env, &token)?;
-        let new_cumulative = prev_cumulative
-            .checked_add(fee_amount)
-            .unwrap_or(i128::MAX);
+        let new_cumulative = prev_cumulative.checked_add(fee_amount).unwrap_or(i128::MAX);
         storage::set_cumulative_fees(&env, &token, new_cumulative);
 
         let prev_total = storage::get_total_collected(&env)?;
@@ -253,8 +251,7 @@ impl TreasuryContract {
     }
 
     pub fn execute_admin(env: Env) -> Result<Address, TreasuryError> {
-        let pending = storage::get_pending_admin(&env)
-            .ok_or(TreasuryError::Unauthorized)?; // Using Unauthorized as fallback for now
+        let pending = storage::get_pending_admin(&env).ok_or(TreasuryError::Unauthorized)?; // Using Unauthorized as fallback for now
 
         if env.ledger().timestamp() < pending.effective_at {
             return Err(TreasuryError::Unauthorized); // TimelockNotElapsed
@@ -403,8 +400,8 @@ impl TreasuryContract {
     }
 
     pub fn execute_market_contract(env: Env) -> Result<Address, TreasuryError> {
-        let pending = storage::get_pending_market_contract(&env)
-            .ok_or(TreasuryError::Unauthorized)?;
+        let pending =
+            storage::get_pending_market_contract(&env).ok_or(TreasuryError::Unauthorized)?;
 
         if env.ledger().timestamp() < pending.effective_at {
             return Err(TreasuryError::Unauthorized);

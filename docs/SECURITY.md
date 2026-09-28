@@ -86,34 +86,53 @@ pub fn has_oracle_adapters(env: &Env) -> bool {
 
 ### Verification: Zero Compromise
 
+Every Ed25519 verifier in `contracts/market/src/oracle.rs` calls the same
+guard before any crypto work:
+
 ```rust
-pub fn verify_oracle_signature(
-    env: &Env,
-    market_id: u32,
-    outcome: bool,
-    signature: &BytesN<64>,
-    oracle_pubkey: &BytesN<32>,
-) -> Result<(), ContractError> {
-    // FAIL-CLOSED: reject if adapters enabled
+fn require_ed25519_path_open(env: &Env) -> Result<(), ContractError> {
     if crate::storage::has_oracle_adapters(env) {
-        return Err(ContractError::UnauthorizedOracle);  // ← FIRST CHECK
+        return Err(ContractError::UnauthorizedOracle); // ← FIRST CHECK
     }
-
-    // Only if no adapters: check zero key
-    if oracle_pubkey == &BytesN::from_array(env, &[0u8; 32]) {
-        return Err(ContractError::UnauthorizedOracle);
-    }
-
-    // Only if no adapters: verify Ed25519
-    let message = construct_oracle_message(env, market_id, outcome);
-    env.crypto()
-        .ed25519_verify(oracle_pubkey, &message.into(), signature);
-
     Ok(())
 }
 ```
 
 **Order matters**: Check adapters first, before any crypto operations.
+Signatures are verified in pure Rust (`ed25519-dalek`) so an invalid
+signature returns `InvalidSignature` instead of trapping the host.
+
+### Oracle report verification path (#898)
+
+The lock and the other resolution gates apply to **every** resolution
+entrypoint, not only the legacy V1 path. Before #898, `resolve_market_v2` and
+both threshold entrypoints skipped the adapter lock, `resolve_market_threshold_v2`
+skipped the dispute-mode gate, and V2 reports were not bound to the running
+network.
+
+| Gate | `resolve_market` (V1) | `resolve_market_v2` | `resolve_market_threshold` (V1 layout) | `resolve_market_threshold_v2` |
+|------|:---:|:---:|:---:|:---:|
+| Paused → `ContractPaused` | ✅ | ✅ | ✅ | ✅ |
+| Emergency `SettleOnly`/`GlobalFreeze` → `EmergencyModeActive` | ✅ | ✅ | ✅ | ✅ |
+| Adapter-only lock → `UnauthorizedOracle` | ✅ | ✅ | ✅ | ✅ |
+| V1 kill switch (`OracleV1Disabled`) → `UnauthorizedOracle` | ✅ | n/a | ✅ | n/a |
+| Expiry (`expires_at` / `valid_until`) → `OracleMessageExpired` | ✅ | ✅ | n/a (V1 layout has no expiry) | ✅ |
+| Resolution contract registered (dispute mode) | must be finalized → `ResolutionNotFinalized` | must be finalized | rejected → `ResolutionNotFinalized` | rejected → `ResolutionNotFinalized` |
+| V2 network binding → `InvalidSignature` | n/a | ✅ | n/a | ✅ |
+
+**Network binding**: the V2 preimage includes `network_passphrase_hash`, but
+that only prevents testnet → mainnet replay if the contract compares the
+caller-supplied hash with the network it runs on.
+`oracle::require_current_network` rejects any hash other than
+`env.ledger().network_id()` (SHA-256 of the network passphrase), in both V2
+dispatchers. Backends must sign V2 reports with that exact value.
+
+The `verify_signature` / `verify_signature_v2` views apply the same checks, so
+the resolution contract's `propose` / `propose_v2` pre-validation cannot open
+a challenge window for a report the market will later refuse.
+
+Regression tests: `oracle_verification_898` in
+[contracts/market/src/test.rs](../contracts/market/src/test.rs).
 
 ---
 

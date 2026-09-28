@@ -213,7 +213,8 @@ pub fn emit_factory_proposed(env: &Env, factory: &Address, effective_at: u64) {
     FactoryProposed {
         factory: factory.clone(),
         effective_at,
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -228,7 +229,8 @@ pub fn emit_factory_set(env: &Env, factory: &Address) {
     FactorySet {
         factory: factory.clone(),
         set_at: env.ledger().timestamp(),
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -243,7 +245,8 @@ pub fn emit_market_contract_proposed(env: &Env, market_contract: &Address, effec
     MarketContractProposed {
         market_contract: market_contract.clone(),
         effective_at,
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -258,7 +261,8 @@ pub fn emit_market_contract_set(env: &Env, market_contract: &Address) {
     MarketContractSet {
         market_contract: market_contract.clone(),
         set_at: env.ledger().timestamp(),
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 /// Emitted when an admin proposes a new treasury address for the slashed-bond
@@ -276,7 +280,8 @@ pub fn emit_treasury_proposed(env: &Env, treasury: &Address, effective_at: u64) 
     TreasuryProposed {
         treasury: treasury.clone(),
         effective_at,
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -291,7 +296,8 @@ pub fn emit_treasury_set(env: &Env, treasury: &Address) {
     TreasurySet {
         treasury: treasury.clone(),
         set_at: env.ledger().timestamp(),
-    }.publish(env);
+    }
+    .publish(env);
 }
 
 #[contractevent]
@@ -389,7 +395,11 @@ pub struct EmergencyModeChanged {
     pub changed_at: u64,
 }
 
-pub fn emit_emergency_mode_changed(env: &Env, new_mode: &crate::types::EmergencyMode, admin: &Address) {
+pub fn emit_emergency_mode_changed(
+    env: &Env,
+    new_mode: &crate::types::EmergencyMode,
+    admin: &Address,
+) {
     EmergencyModeChanged {
         new_mode: new_mode.clone(),
         admin: admin.clone(),
@@ -411,12 +421,7 @@ pub struct CollateralSlashed {
     pub slashed_at: u64,
 }
 
-pub fn emit_collateral_slashed(
-    env: &Env,
-    proposer: &Address,
-    recipient: &Address,
-    amount: i128,
-) {
+pub fn emit_collateral_slashed(env: &Env, proposer: &Address, recipient: &Address, amount: i128) {
     CollateralSlashed {
         proposer: proposer.clone(),
         recipient: recipient.clone(),

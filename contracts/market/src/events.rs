@@ -1087,15 +1087,6 @@ pub fn emit_fee_rate_change_proposed(env: &Env, new_rate_bps: i128, effective_at
     .publish(env);
 }
 
-pub fn emit_fee_rate_changed(env: &Env, new_rate_bps: i128) {
-    FeeRateChangeExecuted {
-        version: EVENT_VERSION,
-        new_rate_bps,
-        executed_at: env.ledger().timestamp(),
-    }
-    .publish(env);
-}
-
 /// Emitted once a previously-proposed fee rate change actually takes effect.
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -1545,7 +1536,7 @@ mod tests {
         assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
-        let resolver_val: BytesN<32> = data
+        let resolver_val: Address = data
             .get(Symbol::new(&env, "resolver"))
             .unwrap()
             .into_val(&env);
@@ -1990,10 +1981,7 @@ mod tests {
         assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
-        let admin_val: Address = data
-            .get(Symbol::new(&env, "admin"))
-            .unwrap()
-            .into_val(&env);
+        let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
         let closed_at_val: u64 = data
             .get(Symbol::new(&env, "closed_at"))
             .unwrap()

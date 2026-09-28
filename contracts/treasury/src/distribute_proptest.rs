@@ -208,7 +208,7 @@ proptest! {
 
         let replay = apply_distribute(&mut state, Role::Treasurer, request_id, total, &weights);
         prop_assert_eq!(replay, Err(DistributeError::Replay));
-        prop_assert_eq!(state, after_first);
+        prop_assert_eq!(&state, &after_first);
         prop_assert_eq!(state.distributed_total, first.total);
         prop_assert_eq!(state.invocations, 1);
     }

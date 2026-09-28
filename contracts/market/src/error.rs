@@ -7,12 +7,15 @@ use soroban_sdk::contracterror;
 /// - Position Errors: 10-19
 /// - Oracle Errors: 20-29
 /// - Validation Errors: 30-39
-/// - Authorization Errors: 41-49
+/// - Authorization Errors: 40-49
 /// - Token Errors: 50-59
 /// - Arithmetic Errors: 60-69
 /// - Treasury Errors: 70-79
 /// - Reconciliation Errors: 80-89
 /// - Conservation Errors: 90-99
+///
+/// The full numeric code table for every contract is in
+/// `docs/error-codes.md`; keep it in sync when adding variants.
 ///
 /// # Stable not-found codes
 ///
@@ -37,15 +40,27 @@ use soroban_sdk::contracterror;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
+    // ========== Market Errors (1-9) 
+///
+/// # Example
+/// ```ignore
+/// use vatix_market::error::ContractError;
+///
+/// // Check for specific error
+/// match result {
+///     Err(ContractError::MarketNotFound) => println!("Market does not exist"),
+///     Err(ContractError::InvalidQuestion) => println!("Question is invalid"),
+///     Ok(_) => println!("Success"),
+/// }
+/// ```
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
     // ========== Market Errors (1-9) ==========
     /// The requested market does not exist in storage.
     ///
     /// Returned when attempting to access a market with an invalid or non-existent ID.
-    ///
-    /// This is the single, stable not-found code for market lookups. Every
-    /// market entrypoint that resolves a `market_id` to a stored market MUST
-    /// return this variant when the lookup misses, so clients can rely on a
-    /// deterministic code instead of a generic failure.
     MarketNotFound = 1,
 
     /// Attempted to resolve a market that has already been resolved.
@@ -79,23 +94,6 @@ pub enum ContractError {
 
     /// Withdraw attempted before the cooldown period since the last deposit has elapsed.
     WithdrawCooldownActive = 7,
-
-    /// The market has already been closed.
-    ///
-    /// `close_market` transitions a market into the terminal Closed state.
-    /// Closing is idempotent-hostile by design: a second close attempt (or a
-    /// replayed close request) is rejected so callers cannot re-run the
-    /// money-path side effects (settlement gating, event emission) twice.
-    MarketAlreadyClosed = 8,
-
-    /// A settlement claim was submitted before the market was resolved.
-    ///
-    /// Claims are only valid once the oracle has resolved the market. This is
-    /// enforced contract-side (not by clients) so an untrusted caller cannot
-    /// bypass the resolve gate and drain liquidity against an unresolved
-    /// outcome. Fail-closed: the claim is rejected outright rather than
-    /// silently deferred.
-    ClaimBeforeResolve = 9,
 
     // ========== Position Errors (10-19) ==========
     /// User does not have enough collateral locked to perform this operation.
@@ -201,28 +199,24 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
-    /// The create-market anti-spam bond attached to the request is below the
-    /// currently configured minimum bond.
-    ///
-    /// `create_market` requires a bond (see `CreateMarketBond`) so that
-    /// untrusted callers cannot grief the protocol by spamming market
-    /// creation. The bond is enforced contract-side — clients cannot bypass
-    /// it by omitting the field or by passing a smaller amount. Fail-closed:
-    /// the request is rejected outright rather than silently accepted with a
-    /// zero bond.
-    BondBelowMinimum = 38,
+    /// Fee rate is invalid (e.g. exceeds the configured fee cap or is out of range).
+    InvalidFeeRate = 38,
 
-    /// The create-market anti-spam bond is not currently enabled, so a bond
-    /// was supplied where none is expected.
+    /// Fee waiver account is invalid (a contract address, or the admin itself).
     ///
-    /// When the bond policy is disabled (kill-switch / feature flag), callers
-    /// MUST NOT attach a bond. Rejecting a stray bond keeps the money path
-    /// deterministic and prevents accidental value transfer while the policy
-    /// is off.
-    BondNotEnabled = 39,
+    /// The admin-managed fee waiver list (#483) may only hold ordinary user
+    /// accounts. Contract addresses are rejected the same way `InvalidAdmin`
+    /// rejects them, and the admin's own address is rejected so the admin
+    /// cannot quietly exempt itself from withdrawal fees it controls (#584).
+    InvalidFeeWaiverAccount = 39,
 
-    // ========== Authorization Errors (41-49) ==========
-    /// Caller is not authorized to perform this operation.
+    // ========== Authorization Errors (40-49) ==========
+    /// Caller is not authorized to perform this action.
+    ///
+    /// The caller must be the market creator or have appropriate permissions.
+    Unauthorized = 40,
+
+    /// Caller is not the admin for this operation.
     ///
     /// Deny-by-default: any privileged surface (admin actions, bond policy
     /// updates, oracle management) rejects callers that do not hold the
@@ -241,6 +235,27 @@ pub enum ContractError {
     /// Distinct from [`ContractError::Unauthorized`] so clients can surface a
     /// precise "wrong role" message instead of a generic denial.
     WrongRole = 43,
+
+    /// Only the contract admin can perform this action.
+    NotAdmin = 44,
+
+    /// Contract has already been initialized.
+    ///
+    /// `initialize(admin)` may only be called once. Replaying it would allow
+    /// an attacker to hijack the admin slot after initial deploy.
+    AlreadyInitialized = 45,
+
+    /// No pending admin transfer exists.
+    ///
+    /// `accept_admin` was called but `propose_admin` has not been issued yet,
+    /// or the previous proposal was already accepted.
+    NoPendingAdmin = 46,
+
+    /// `confirm_renounce_admin` was called but no renounce proposal is pending.
+    NoRenounceProposal = 47,
+
+    /// A renounce proposal is already pending; cannot propose again until confirmed or canceled.
+    RenounceAlreadyProposed = 48,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
@@ -276,4 +291,21 @@ pub enum ContractError {
     // ========== Conservation Errors (90-99) ==========
     /// A conservation invariant was violated.
     ConservationViolation = 90,
+
+    /// The requested fee rate exceeds the configured fee cap.
+    ///
+    /// Registration is idempotency-hostile by design: replayed or concurrent
+    /// register requests are rejected so an untrusted caller cannot override
+    /// an existing deployment mapping.
+    DeploymentIdAlreadyRegistered = 94,
+
+    /// `initialize_market` was called with a collateral token that differs
+    /// from the deployment's pinned collateral token (ADR-002 collateral
+    /// allowlist decision, #901).
+    ///
+    /// `CollateralBalance(user)` is not denominated per token, so a second
+    /// collateral token would let collateral deposited in one asset back
+    /// trades in another. Fail closed: exactly one collateral token per
+    /// deployment, pinned by the first market created.
+    CollateralTokenNotAllowed = 95,
 }

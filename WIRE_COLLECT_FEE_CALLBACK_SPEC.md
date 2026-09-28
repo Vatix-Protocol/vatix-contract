@@ -1,8 +1,43 @@
 # Wire Collect Fee Callback on Withdraw - Feature Specification
 
-**Status**: Proposed | Design Phase  
+**Status**: Implemented — integration verified by #895  
 **Feature**: Wire collect_fee callback on withdraw  
-**Date**: June 30, 2026  
+**Date**: June 30, 2026 (design) · September 2026 (#895 verification)  
+
+---
+
+## Implementation status (#895)
+
+The callback described below is live in `contracts/market/src/withdraw.rs`.
+Where this design note and the code differ, the code and the invariants in
+this section are authoritative:
+
+- **Fee event lives in the treasury.** `TreasuryContract::collect_fee` emits
+  the canonical `fee_collected` event (`market_id`, `token` topics; see
+  [FEE_COLLECTED_EVENT.md](FEE_COLLECTED_EVENT.md)). The market does not emit
+  a second `FeeCollectedEvent`; it emits `fee_calculated` and, when no
+  treasury is registered, `fee_retained_no_treasury`.
+- **Fee on top.** The user receives exactly `amount`; `amount + fee` is
+  deducted from `total_deposited` and from the protocol-wide
+  `CollateralBalance`. A withdraw succeeds iff `amount + fee <= total_deposited
+  - locked_collateral`.
+- **Fail closed.** If `collect_fee` rejects (market not registered with the
+  treasury, treasury paused or in `GlobalFreeze`), the whole withdrawal
+  reverts: no payout, no fee transfer, no position change.
+- **Timelocked fee changes.** `set_fee_rate` only proposes a rate; it applies
+  to withdrawals after `execute_fee_rate_change` once
+  `FEE_RATE_TIMELOCK_SECONDS` (48h, #496) have elapsed, and
+  `cancel_fee_rate_change` discards it. Rollback = propose the previous rate
+  (or cancel before execution); emergency stop = market `pause` or treasury
+  `pause`.
+- **Waivers.** Addresses on the admin-managed fee waiver list pay no fee and
+  never reach `collect_fee`.
+
+Test coverage: `tests/withdraw_treasury_test.rs` (fee-rate timelock,
+callback-failure rollback, paused treasury, waivers, boundary and per-token
+accounting), `tests/treasury_integration_test.rs`,
+`tests/treasury_unset_fee_test.rs`, and the unit/property tests in
+`contracts/market/src/withdraw.rs` and `withdraw_fuzz.rs`.
 
 ---
 
@@ -269,8 +304,10 @@ CollateralWithdrawnEvent:
 ### Configuration
 
 No new configuration needed. Uses existing:
-- `treasury_address`: Already registered via `set_treasury()`
-- `fee_rate_bps`: Already set via `set_fee_rate()`
+- `treasury_address`: registered via `set_treasury_contract()` (or the
+  timelocked `propose_treasury_contract` / `execute_treasury_contract`)
+- `fee_rate_bps`: proposed via `set_fee_rate()` and applied by
+  `execute_fee_rate_change()` after the 48h timelock
 
 ### Backward Compatibility
 
@@ -413,6 +450,6 @@ A: Error is returned to user. Withdrawal reverts.
 
 ---
 
-**Document Status**: Design Review  
+**Document Status**: Implemented (#895)  
 **Last Updated**: June 30, 2026  
 **Branch**: `feat/wire-collect-fee-callback`
