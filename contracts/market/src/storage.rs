@@ -830,9 +830,7 @@ pub fn get_all_market_ids(env: &Env) -> Vec<u32> {
 /// Check if any oracle adapters are registered.
 /// If true, Ed25519 signature verification should not be used as fallback.
 pub fn has_oracle_adapters(env: &Env) -> bool {
-    env.storage()
-        .persistent()
-        .has(&StorageKey::OracleAdapters)
+    env.storage().persistent().has(&StorageKey::OracleAdapters)
 }
 
 /// Register that oracle adapters are enabled for this market contract.
@@ -862,9 +860,7 @@ pub fn set_fee_rate_bps(env: &Env, rate: u32) {
 
 /// Return the pending fee-rate change, or `None` if no change is queued.
 pub fn get_pending_fee_rate(env: &Env) -> Option<PendingFeeRate> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::PendingFeeRate)
+    env.storage().persistent().get(&StorageKey::PendingFeeRate)
 }
 
 /// Persist a pending fee-rate change.
@@ -1332,12 +1328,7 @@ mod test {
         // Each entry is (module_name, explanatory_substring) — the second
         // field confirms the cfg_attr annotation is present and correctly
         // references the module.
-        let guarded = [
-            "positions",
-            "settlement",
-            "storage",
-            "validation",
-        ];
+        let guarded = ["positions", "settlement", "storage", "validation"];
 
         for module in guarded {
             // Confirm the scoped cfg_attr form IS present.

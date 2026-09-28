@@ -16,6 +16,8 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 ///   from the pre-versioning schema — this just adds the guard itself.
 pub const STORAGE_VERSION: u32 = 1;
 
+/// Persistent storage keys. Documented with types, writers, and invariants
+/// in `docs/resolution-storage.md` — update it when changing this enum.
 #[contracttype]
 pub enum StorageKey {
     /// Written by `initialize`; used to detect stale or uninitialized deployments.
@@ -87,11 +89,15 @@ pub fn get_pending_treasury(env: &Env) -> Option<crate::types::PendingAddressCha
 }
 
 pub fn set_pending_treasury(env: &Env, pending: &crate::types::PendingAddressChange) {
-    env.storage().persistent().set(&StorageKey::PendingTreasury, pending);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingTreasury, pending);
 }
 
 pub fn clear_pending_treasury(env: &Env) {
-    env.storage().persistent().remove(&StorageKey::PendingTreasury);
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingTreasury);
 }
 
 pub fn get_pending_factory(env: &Env) -> Option<crate::types::PendingAddressChange> {
@@ -99,23 +105,33 @@ pub fn get_pending_factory(env: &Env) -> Option<crate::types::PendingAddressChan
 }
 
 pub fn set_pending_factory(env: &Env, pending: &crate::types::PendingAddressChange) {
-    env.storage().persistent().set(&StorageKey::PendingFactory, pending);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingFactory, pending);
 }
 
 pub fn clear_pending_factory(env: &Env) {
-    env.storage().persistent().remove(&StorageKey::PendingFactory);
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingFactory);
 }
 
 pub fn get_pending_market_contract(env: &Env) -> Option<crate::types::PendingAddressChange> {
-    env.storage().persistent().get(&StorageKey::PendingMarketContract)
+    env.storage()
+        .persistent()
+        .get(&StorageKey::PendingMarketContract)
 }
 
 pub fn set_pending_market_contract(env: &Env, pending: &crate::types::PendingAddressChange) {
-    env.storage().persistent().set(&StorageKey::PendingMarketContract, pending);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingMarketContract, pending);
 }
 
 pub fn clear_pending_market_contract(env: &Env) {
-    env.storage().persistent().remove(&StorageKey::PendingMarketContract);
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingMarketContract);
 }
 
 pub fn increment_candidate_id(env: &Env) -> u32 {
@@ -195,7 +211,9 @@ pub fn get_treasury(env: &Env) -> Option<Address> {
 }
 
 pub fn set_treasury(env: &Env, treasury: &Address) {
-    env.storage().persistent().set(&StorageKey::Treasury, treasury);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
 }
 
 pub fn get_emergency_mode(env: &Env) -> crate::types::EmergencyMode {
@@ -206,7 +224,9 @@ pub fn get_emergency_mode(env: &Env) -> crate::types::EmergencyMode {
 }
 
 pub fn set_emergency_mode(env: &Env, mode: &crate::types::EmergencyMode) {
-    env.storage().persistent().set(&StorageKey::EmergencyMode, mode);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::EmergencyMode, mode);
 }
 
 pub fn is_paused(env: &Env) -> bool {

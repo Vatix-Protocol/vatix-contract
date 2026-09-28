@@ -429,6 +429,35 @@ mod test {
         assert_eq!(market.collateral_token, usdc_token);
     }
 
+    /// #901: the first market pins the deployment's collateral token; a
+    /// different token is rejected without consuming a market id, and the
+    /// pinned token is still accepted.
+    #[test]
+    fn test_initialize_market_rejects_second_collateral_token() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Pinned collateral");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let usdc_token = Address::generate(&env);
+        let other_token = Address::generate(&env);
+
+        let first = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &usdc_token, &None,
+        );
+        assert_eq!(first, 1);
+
+        let rejected = client.try_initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &other_token, &None,
+        );
+        assert_eq!(rejected, Err(Ok(ContractError::CollateralTokenNotAllowed)));
+
+        let second = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &usdc_token, &None,
+        );
+        assert_eq!(second, 2);
+    }
+
     #[test]
     fn test_initialize_market_with_valid_metadata_uri() {
         let (env, admin, client, contract_id) = create_test_contract();
@@ -505,7 +534,7 @@ mod test {
         let end_time = env.ledger().timestamp() + 86400;
         let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
         let collateral_token = Address::generate(&env);
-        let long_str = "a".repeat(2049);
+        let long_str = "a".repeat(crate::validation::MAX_METADATA_URI_LENGTH as usize + 1);
         let metadata_uri = Some(String::from_str(&env, &long_str));
 
         client.initialize_market(
@@ -1357,7 +1386,10 @@ mod test {
 
         // Verify event was emitted
         let events = env.events().all();
-        assert!(events.len() > 0, "OracleAdaptersEnabled event should be emitted");
+        assert!(
+            events.len() > 0,
+            "OracleAdaptersEnabled event should be emitted"
+        );
     }
 
     #[test]
@@ -2991,8 +3023,8 @@ mod test {
         let end_time = env.ledger().timestamp() + 86_400;
         let oracle_pubkey = BytesN::from_array(&env, &[7u8; 32]);
         let collateral_token = Address::generate(&env);
-        let market_id = client.initialize_market( dev
-            &admin,
+        let market_id = client.initialize_market(
+            dev & admin,
             &question,
             &end_time,
             &oracle_pubkey,
@@ -3230,7 +3262,10 @@ mod test {
 
         // A second void is rejected — no silent double-transition.
         let result = client.try_void_market(&resolution, &market_id);
-        assert_eq!(result, Err(Ok(crate::error::ContractError::MarketNotActive)));
+        assert_eq!(
+            result,
+            Err(Ok(crate::error::ContractError::MarketNotActive))
+        );
     }
 
     #[test]
@@ -3391,7 +3426,9 @@ mod test {
         // First tighten to 1_000 bps.
         client.set_fee_cap(&admin, &1_000i128);
         // A rate at 900 should be fine.
-        client.try_set_fee_rate(&admin, &900i128).expect("900 <= 1_000 cap");
+        client
+            .try_set_fee_rate(&admin, &900i128)
+            .expect("900 <= 1_000 cap");
 
         // Re-tighten to 500 bps.
         client.set_fee_cap(&admin, &500i128);
@@ -3502,7 +3539,9 @@ mod test {
 
         // Propose, cancel, then propose again with a different rate.
         client.set_fee_rate(&admin, &100i128);
-        client.cancel_fee_rate_change(&admin).expect("cancel should succeed");
+        client
+            .cancel_fee_rate_change(&admin)
+            .expect("cancel should succeed");
 
         client.set_fee_rate(&admin, &200i128);
         let pending = client
@@ -3545,7 +3584,7 @@ mod test {
     fn test_get_market_returns_all_fields() {
         use crate::types::{AdapterType, MarketStatus};
 
-        let (env, admin, client, _contract_id) = create_test_contract();
+        let (env, admin, client, contract_id) = create_test_contract();
 
         let question = String::from_str(&env, "Will ETH reach $10k by end of year?");
         let end_time = env.ledger().timestamp() + 86_400;
@@ -3559,6 +3598,7 @@ mod test {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         // Before enabling adapters, Ed25519 should work
@@ -3567,7 +3607,9 @@ mod test {
 
         // Verify that we can resolve via Ed25519 before adapters are enabled
         let market_id_str = String::from_str(&env, "1");
-        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
+        assert!(client
+            .resolve_market(&market_id_str, &outcome, &signature)
+            .is_ok());
 
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
         assert_eq!(market_after.status, MarketStatus::Resolved);
@@ -3587,8 +3629,77 @@ mod test {
         let outcome = true;
         let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
 
-        let _market_id = client.initialize_market(
+        let _market_id = client.initialize_market(&None);
 
+        let market = client.get_market(&market_id);
+
+        // Destructure every field — adding a new field to `Market` without
+        // updating this pattern produces a compile error, which is exactly the
+        // desired "test fails if a new public field is omitted" behaviour.
+        let crate::types::Market {
+            id,
+            question: market_question,
+            end_time: market_end_time,
+            oracle_pubkey: market_oracle_pubkey,
+            status,
+            result,
+            creator,
+            created_at: market_created_at,
+            collateral_token: market_collateral_token,
+            price_bps,
+            resolver,
+            resolved_at,
+            adapter_type,
+            outcome_count,
+            closed_to_deposits,
+        } = market;
+
+        assert_eq!(id, market_id);
+        assert_eq!(market_question, question);
+        assert_eq!(market_end_time, end_time);
+        assert_eq!(market_oracle_pubkey, oracle_pubkey);
+        assert_eq!(status, MarketStatus::Active);
+        assert_eq!(result, None);
+        assert_eq!(creator, admin);
+        assert_eq!(market_created_at, created_at);
+        assert_eq!(market_collateral_token, collateral_token);
+        // Initial price is 50 % (5 000 bps) as set by initialize_market.
+        assert_eq!(price_bps, 5_000i128);
+        // Resolver and resolved_at are only populated after resolution.
+        assert_eq!(resolver, None);
+        assert_eq!(resolved_at, None);
+        // Default adapter for new markets is Ed25519.
+        assert_eq!(adapter_type, AdapterType::Ed25519);
+        // Binary markets always have exactly two outcomes.
+        assert_eq!(outcome_count, 2u32);
+        // Markets are open to deposits at creation.
+        assert!(!closed_to_deposits);
+
+        // Verify the market can be read from storage as well.
+        let stored = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(stored.status, MarketStatus::Active);
+    }
+
+    #[test]
+    fn test_upgrade_order_safety_complete_sequence() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Step 1: Create market with Ed25519 oracle
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let collateral_token = Address::generate(&env);
+
+        let market_id = 1u32;
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+        let created_at = env.ledger().timestamp();
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
             &None,
         );
 
@@ -3635,6 +3746,47 @@ mod test {
         assert_eq!(outcome_count, 2u32);
         // Markets are open to deposits at creation.
         assert!(!closed_to_deposits);
+
+        // Step 2: Verify Ed25519 works before upgrade
+        let market_id_str = String::from_str(&env, "1");
+        let resolver_addr = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        assert!(client.resolve_market(&resolver_addr, &market_id_str, &outcome, &signature, &expires_at).is_ok());
+
+        // Step 3: Verify market is resolved
+        let market = get_market_from_storage(&env, &contract_id, 1u32);
+        assert_eq!(market.status, MarketStatus::Resolved);
+
+        // Step 4: Create a new market after resolution to test adapter mode
+        let question2 = String::from_str(&env, "Test market 2");
+        let market_id2 = 2u32;
+        let outcome2 = false;
+        let (oracle_pubkey2, signature2) =
+            generate_test_keypair_and_sign(&env, market_id2, outcome2);
+
+        let _market_id2 = client.initialize_market(
+            &admin,
+            &question2,
+            &end_time,
+            &oracle_pubkey2,
+            &collateral_token,
+            &None,
+        );
+
+        // Step 5: Enable oracle adapters (simulating resolution contract upgrade)
+        assert!(client.enable_oracle_adapters(&admin).is_ok());
+
+        // Step 6: Verify that Ed25519 is now rejected for the new market
+        let market_id_str2 = String::from_str(&env, "2");
+        let result2 = client.resolve_market(&resolver_addr, &market_id_str2, &outcome2, &signature2, &expires_at);
+
+        // Should fail because adapters are now enabled
+        assert!(result2.is_err());
+
+        // Verify contract state shows adapters are enabled
+        env.as_contract(&contract_id, || {
+            assert!(storage::has_oracle_adapters(&env));
+        });
     }
 
     /// Verify that `get_market` reflects `closed_to_deposits` after
@@ -3654,45 +3806,19 @@ mod test {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
-        // Step 2: Verify Ed25519 works before upgrade
-        let market_id_str = String::from_str(&env, "1");
-        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
+        // Before closing: open to deposits.
+        let market_before = client.get_market(&market_id);
+        assert!(!market_before.closed_to_deposits);
 
-        // Step 3: Verify market is resolved
-        let market = get_market_from_storage(&env, &contract_id, 1u32);
-        assert_eq!(market.status, MarketStatus::Resolved);
+        // Close market to deposits.
+        client.close_market_to_deposits(&admin, &market_id);
 
-        // Step 4: Create a new market after resolution to test adapter mode
-        let question2 = String::from_str(&env, "Test market 2");
-        let market_id = 2u32;
-        let outcome2 = false;
-        let (oracle_pubkey2, signature2) =
-            generate_test_keypair_and_sign(&env, market_id, outcome2);
-
-        let _market_id = client.initialize_market(
-            &admin,
-            &question2,
-            &end_time,
-            &oracle_pubkey2,
-            &collateral_token,
-        );
-
-        // Step 5: Enable oracle adapters (simulating resolution contract upgrade)
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
-
-        // Step 6: Verify that Ed25519 is now rejected for the new market
-        let market_id_str = String::from_str(&env, "2");
-        let result = client.resolve_market(&market_id_str, &outcome2, &signature2);
-
-        // Should fail because adapters are now enabled
-        assert!(result.is_err());
-
-        // Verify contract state shows adapters are enabled
-        env.as_contract(&contract_id, || {
-            assert!(storage::has_oracle_adapters(&env));
-        });
+        // After closing: closed_to_deposits must be true.
+        let market_after = client.get_market(&market_id);
+        assert!(market_after.closed_to_deposits);
     }
 
     /// Verify that `get_market` reflects `status` and `resolver` / `resolved_at`
@@ -3934,8 +4060,7 @@ mod test {
             "get_emergency_mode() must reflect TradingHalted after set"
         );
 
-        let halted_result =
-            client.try_deposit_collateral(&user, &market_id, &1_000i128);
+        let halted_result = client.try_deposit_collateral(&user, &market_id, &1_000i128);
         assert_eq!(
             halted_result,
             Err(Ok(ContractError::EmergencyModeActive)),

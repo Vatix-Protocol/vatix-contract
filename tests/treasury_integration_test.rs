@@ -32,7 +32,8 @@ fn fee_for(amount: i128) -> i128 {
 /// `collateral_withdrawn_event` (market) around it.
 fn find_fee_collected_event(env: &Env) -> Option<(std::vec::Vec<Val>, Val)> {
     let target = Symbol::new(env, "fee_collected");
-    let all: std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> = env.events().all().iter().collect();
+    let all: std::vec::Vec<(Address, soroban_sdk::Vec<Val>, Val)> =
+        env.events().all().iter().collect();
     for (_contract, topics, data) in all.into_iter().rev() {
         let topics: std::vec::Vec<Val> = topics.iter().collect();
         let first: Symbol = topics[0].clone().into_val(env);
@@ -49,7 +50,8 @@ fn has_fee_collected_event(env: &Env) -> bool {
 }
 
 fn data_map(env: &Env, data: Val) -> Map<Symbol, Val> {
-    data.try_into_val(env).expect("data must be a Map<Symbol,Val>")
+    data.try_into_val(env)
+        .expect("data must be a Map<Symbol,Val>")
 }
 
 fn data_i128(env: &Env, m: &Map<Symbol, Val>, key: &str) -> i128 {

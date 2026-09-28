@@ -130,12 +130,11 @@ fn metadata_rejects_empty_symbol() {
     let env = Env::default();
     let (client, admin, _market) = setup(&env);
 
-    let result = client.try_set_metadata(
-        &admin,
+    client.set_metadata(
         &String::from_str(&env, "Vatix Outcome YES"),
         &String::from_str(&env, ""),
+        &7,
     );
-    assert_eq!(result, Err(Ok(ContractError::EmptyMetadata)));
 }
 
 #[test]

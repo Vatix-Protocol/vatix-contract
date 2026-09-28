@@ -37,7 +37,14 @@ fn setup() -> Setup {
 
     client.initialize(&admin, &market);
 
-    Setup { env, admin, market, token, treasury_id, client }
+    Setup {
+        env,
+        admin,
+        market,
+        token,
+        treasury_id,
+        client,
+    }
 }
 
 fn fund_treasury(s: &Setup, amount: i128) {
@@ -59,10 +66,7 @@ fn initialize_stores_admin_and_market() {
 fn initialize_writes_storage_version() {
     let s = setup();
     s.env.as_contract(&s.treasury_id, || {
-        assert_eq!(
-            storage::get_version(&s.env),
-            Some(storage::STORAGE_VERSION),
-        );
+        assert_eq!(storage::get_version(&s.env), Some(storage::STORAGE_VERSION),);
     });
 }
 
@@ -102,7 +106,8 @@ fn admin_panics_before_initialize() {
 #[test]
 fn collect_fee_updates_balance_and_cumulative() {
     let s = setup();
-    s.client.collect_fee(&s.market, &s.token, &1u32, &50_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &50_000i128);
     assert_eq!(s.client.token_balance(&s.token), 50_000);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 50_000);
 }
@@ -110,8 +115,10 @@ fn collect_fee_updates_balance_and_cumulative() {
 #[test]
 fn collect_fee_accumulates_across_calls() {
     let s = setup();
-    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
-    s.client.collect_fee(&s.market, &s.token, &2u32, &200_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &2u32, &200_000i128);
     assert_eq!(s.client.token_balance(&s.token), 300_000);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 300_000);
 }
@@ -171,12 +178,17 @@ fn collect_fee_errors_when_not_initialized() {
 fn withdraw_fees_transfers_to_recipient() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
 
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &200_000i128);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &200_000i128);
 
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&recipient), 200_000);
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&recipient),
+        200_000
+    );
     assert_eq!(s.client.token_balance(&s.token), 300_000);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 500_000);
 }
@@ -229,10 +241,12 @@ fn admin_withdraws_accumulated_fees_in_full() {
     let s = setup();
     let total_collected = 1_000_000i128;
     fund_treasury(&s, total_collected);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &total_collected);
 
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &total_collected);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &total_collected);
 
     assert_eq!(
         s.client.token_balance(&s.token),
@@ -257,11 +271,13 @@ fn admin_withdraws_partial_accumulated_fees() {
     let s = setup();
     let total_collected = 500_000i128;
     fund_treasury(&s, total_collected);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &total_collected);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &total_collected);
 
     let partial = 200_000i128;
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &partial);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &partial);
 
     assert_eq!(
         s.client.token_balance(&s.token),
@@ -302,10 +318,12 @@ fn withdraw_fees_before_initialize_is_rejected() {
 fn cumulative_stays_high_after_withdrawal() {
     let s = setup();
     fund_treasury(&s, 300_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &300_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &300_000i128);
 
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &300_000i128);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &300_000i128);
 
     assert_eq!(s.client.token_balance(&s.token), 0);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 300_000);
@@ -656,7 +674,8 @@ fn new_admin_can_withdraw_after_transfer() {
 
     // old admin can no longer withdraw
     fund_treasury(&s, 100_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &100_000i128);
     let recipient = Address::generate(&s.env);
     let err = s
         .client
@@ -666,7 +685,8 @@ fn new_admin_can_withdraw_after_transfer() {
     assert_eq!(err, TreasuryError::Unauthorized);
 
     // new admin can withdraw
-    s.client.withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
+    s.client
+        .withdraw_fees(&new_admin, &s.token, &recipient, &100_000i128);
     assert_eq!(s.client.token_balance(&s.token), 0);
 }
 
@@ -695,7 +715,8 @@ fn pause_blocks_collect_fee() {
 fn pause_blocks_withdraw_fees() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     s.client.pause(&s.admin);
     let recipient = Address::generate(&s.env);
     let err = s
@@ -718,7 +739,8 @@ fn pause_blocks_withdraw_fees() {
 fn withdraw_fees_paused_before_admin_check() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     s.client.pause(&s.admin);
 
     let rogue = Address::generate(&s.env);
@@ -739,7 +761,8 @@ fn withdraw_fees_paused_before_admin_check() {
 fn withdraw_fees_paused_leaves_balances_unchanged() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     let balance_before = s.client.token_balance(&s.token);
     let total_before = s.client.total_collected();
 
@@ -762,7 +785,8 @@ fn unpause_restores_operations() {
     s.client.unpause(&s.admin);
     assert!(!s.client.is_paused());
     // collect_fee works again
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     assert_eq!(s.client.token_balance(&s.token), 500_000);
 }
 
@@ -794,14 +818,21 @@ fn unpause_rejects_non_admin() {
 #[test]
 fn emergency_mode_defaults_to_normal() {
     let s = setup();
-    assert_eq!(s.client.get_emergency_mode(), storage::EmergencyMode::Normal);
+    assert_eq!(
+        s.client.get_emergency_mode(),
+        storage::EmergencyMode::Normal
+    );
 }
 
 #[test]
 fn set_emergency_mode_updates_stored_mode() {
     let s = setup();
-    s.client.set_emergency_mode(&s.admin, &storage::EmergencyMode::GlobalFreeze);
-    assert_eq!(s.client.get_emergency_mode(), storage::EmergencyMode::GlobalFreeze);
+    s.client
+        .set_emergency_mode(&s.admin, &storage::EmergencyMode::GlobalFreeze);
+    assert_eq!(
+        s.client.get_emergency_mode(),
+        storage::EmergencyMode::GlobalFreeze
+    );
 }
 
 #[test]
@@ -814,14 +845,18 @@ fn set_emergency_mode_rejects_non_admin() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TreasuryError::Unauthorized);
-    assert_eq!(s.client.get_emergency_mode(), storage::EmergencyMode::Normal);
+    assert_eq!(
+        s.client.get_emergency_mode(),
+        storage::EmergencyMode::Normal
+    );
 }
 
 #[test]
 fn global_freeze_blocks_collect_fee_withdraw_and_distribute() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
 
     let stakeholder = Address::generate(&s.env);
     let mut stakeholders = soroban_sdk::Vec::new(&s.env);
@@ -832,7 +867,8 @@ fn global_freeze_blocks_collect_fee_withdraw_and_distribute() {
     });
     s.client.execute_stakeholders();
 
-    s.client.set_emergency_mode(&s.admin, &storage::EmergencyMode::GlobalFreeze);
+    s.client
+        .set_emergency_mode(&s.admin, &storage::EmergencyMode::GlobalFreeze);
 
     let err = s
         .client
@@ -864,11 +900,13 @@ fn trading_halted_and_settle_only_still_allow_collect_fee() {
     // collect_fee/withdraw_fees/distribute_fees are only blocked by
     // GlobalFreeze.
     let s = setup();
-    s.client.set_emergency_mode(&s.admin, &storage::EmergencyMode::TradingHalted);
+    s.client
+        .set_emergency_mode(&s.admin, &storage::EmergencyMode::TradingHalted);
     s.client.collect_fee(&s.market, &s.token, &1u32, &100i128);
     assert_eq!(s.client.token_balance(&s.token), 100);
 
-    s.client.set_emergency_mode(&s.admin, &storage::EmergencyMode::SettleOnly);
+    s.client
+        .set_emergency_mode(&s.admin, &storage::EmergencyMode::SettleOnly);
     s.client.collect_fee(&s.market, &s.token, &2u32, &100i128);
     assert_eq!(s.client.token_balance(&s.token), 200);
 }
@@ -920,7 +958,8 @@ fn collect_fee_paused_before_market_auth_check() {
 fn collect_fee_paused_leaves_balances_unchanged() {
     let s = setup();
     // Collect some fees before pausing so we have a non-zero baseline.
-    s.client.collect_fee(&s.market, &s.token, &1u32, &200_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &200_000i128);
     let balance_before = s.client.token_balance(&s.token);
     let cumulative_before = s.client.get_cumulative_fees(&s.token);
     let total_before = s.client.total_collected();
@@ -946,7 +985,8 @@ fn collect_fee_resumes_after_unpause() {
     s.client.pause(&s.admin);
     s.client.unpause(&s.admin);
 
-    s.client.collect_fee(&s.market, &s.token, &7u32, &50_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &7u32, &50_000i128);
 
     assert_eq!(s.client.token_balance(&s.token), 50_000);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 50_000);
@@ -1017,7 +1057,8 @@ fn propose_and_execute_stakeholders(s: &Setup, stakeholders: &soroban_sdk::Vec<(
 fn distribute_fees_pays_out_by_share() {
     let s = setup();
     fund_treasury(&s, 1_000_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &1_000_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &1_000_000i128);
 
     let stakeholder_a = Address::generate(&s.env);
     let stakeholder_b = Address::generate(&s.env);
@@ -1028,8 +1069,14 @@ fn distribute_fees_pays_out_by_share() {
 
     s.client.distribute_fees(&s.admin, &s.token);
 
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&stakeholder_a), 700_000);
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&stakeholder_b), 300_000);
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&stakeholder_a),
+        700_000
+    );
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&stakeholder_b),
+        300_000
+    );
     assert_eq!(s.client.token_balance(&s.token), 0);
     // Cumulative fees stay monotone — distribution only moves the live balance.
     assert_eq!(s.client.get_cumulative_fees(&s.token), 1_000_000);
@@ -1050,7 +1097,8 @@ fn distribute_fees_pays_out_by_share() {
 fn distribute_fees_pays_exact_share_not_double() {
     let s = setup();
     fund_treasury(&s, 250_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &250_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &250_000i128);
 
     let stakeholder = Address::generate(&s.env);
     let mut stakeholders = soroban_sdk::Vec::new(&s.env);
@@ -1059,7 +1107,10 @@ fn distribute_fees_pays_exact_share_not_double() {
 
     s.client.distribute_fees(&s.admin, &s.token);
 
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&stakeholder), 250_000);
+    assert_eq!(
+        TokenClient::new(&s.env, &s.token).balance(&stakeholder),
+        250_000
+    );
     assert_eq!(s.client.token_balance(&s.token), 0);
 }
 
@@ -1067,7 +1118,8 @@ fn distribute_fees_pays_exact_share_not_double() {
 fn distribute_fees_rejects_without_stakeholders_configured() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
 
     let err = s
         .client
@@ -1099,7 +1151,8 @@ fn distribute_fees_rejects_zero_balance() {
 fn distribute_fees_rejects_non_admin() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     let stakeholder = Address::generate(&s.env);
     let mut stakeholders = soroban_sdk::Vec::new(&s.env);
     stakeholders.push_back((stakeholder, 10_000u32));
@@ -1118,7 +1171,8 @@ fn distribute_fees_rejects_non_admin() {
 fn distribute_fees_blocked_while_paused() {
     let s = setup();
     fund_treasury(&s, 500_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &500_000i128);
     let stakeholder = Address::generate(&s.env);
     let mut stakeholders = soroban_sdk::Vec::new(&s.env);
     stakeholders.push_back((stakeholder, 10_000u32));
@@ -1152,7 +1206,8 @@ fn withdraw_fees_emits_fees_withdrawn_event() {
     s.client.collect_fee(&s.market, &s.token, &1u32, &collected);
 
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &withdrawn);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &withdrawn);
 
     let events = s.env.events().all();
     // The last event must be FeesWithdrawn.
@@ -1168,9 +1223,15 @@ fn withdraw_fees_emits_fees_withdrawn_event() {
         "event name topic must be 'fees_withdrawn'"
     );
     let token_topic: Address = topics.get(1).unwrap().into_val(&s.env);
-    assert_eq!(token_topic, s.token, "second topic must be the token address");
+    assert_eq!(
+        token_topic, s.token,
+        "second topic must be the token address"
+    );
     let to_topic: Address = topics.get(2).unwrap().into_val(&s.env);
-    assert_eq!(to_topic, recipient, "third topic must be the recipient address");
+    assert_eq!(
+        to_topic, recipient,
+        "third topic must be the recipient address"
+    );
 
     // ── data fields ───────────────────────────────────────────────────────────
     let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
@@ -1179,7 +1240,10 @@ fn withdraw_fees_emits_fees_withdrawn_event() {
         .get(Symbol::new(&s.env, "amount"))
         .unwrap()
         .into_val(&s.env);
-    assert_eq!(amount_val, withdrawn, "event 'amount' must equal the withdrawn amount");
+    assert_eq!(
+        amount_val, withdrawn,
+        "event 'amount' must equal the withdrawn amount"
+    );
 
     let remaining_val: i128 = data
         .get(Symbol::new(&s.env, "remaining_token_balance"))
@@ -1231,7 +1295,8 @@ fn withdraw_fees_panics_without_auth() {
 fn withdraw_fees_non_admin_returns_unauthorized() {
     let s = setup();
     fund_treasury(&s, 100_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &100_000i128);
 
     let imposter = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
@@ -1255,17 +1320,19 @@ fn total_collected_invariant_after_collect_and_withdraw() {
     assert_eq!(s.client.total_collected(), 0);
 
     fund_treasury(&s, 100_000);
-    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client
+        .collect_fee(&s.market, &s.token, &1u32, &100_000i128);
     assert_eq!(s.client.total_collected(), 100_000);
 
     let recipient = Address::generate(&s.env);
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &40_000i128);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &40_000i128);
     assert_eq!(s.client.total_collected(), 60_000);
 
-    s.client.withdraw_fees(&s.admin, &s.token, &recipient, &60_000i128);
+    s.client
+        .withdraw_fees(&s.admin, &s.token, &recipient, &60_000i128);
     assert_eq!(s.client.total_collected(), 0);
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Regression tests — Issue #786: admin cannot be a contract address on init
@@ -1305,4 +1372,86 @@ fn initialize_accepts_user_account_as_admin() {
 
     client.initialize(&admin, &market);
     assert_eq!(client.admin(), admin);
+}
+
+// ── Issue #911 / #921: treasury withdraw auth and fee events ─────────────────
+
+fn count_events(env: &Env, name: &str) -> u32 {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{Symbol, TryIntoVal};
+    let name = Symbol::new(env, name);
+    let mut n = 0;
+    for ev in env.events().all().iter() {
+        if let Some(first) = ev.1.get(0) {
+            let topic: Result<Symbol, _> = first.try_into_val(env);
+            if topic == Ok(name.clone()) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// An unauthorized withdraw is rejected with `Unauthorized` and leaves every
+/// piece of treasury state unchanged: custodied balance, cumulative fees,
+/// total collected, the on-chain token balances of treasury and recipient,
+/// and no `fees_withdrawn` event.
+#[test]
+fn unauthorized_withdraw_leaves_treasury_unchanged() {
+    let s = setup();
+    fund_treasury(&s, 500_000);
+    s.client.collect_fee(&s.market, &s.token, &1u32, &500_000i128);
+
+    let token = TokenClient::new(&s.env, &s.token);
+    let imposter = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+
+    for caller in [imposter, s.market.clone()] {
+        let err = s
+            .client
+            .try_withdraw_fees(&caller, &s.token, &recipient, &500_000i128)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TreasuryError::Unauthorized);
+        assert_eq!(count_events(&s.env, "fees_withdrawn"), 0);
+
+        assert_eq!(s.client.token_balance(&s.token), 500_000);
+        assert_eq!(s.client.get_cumulative_fees(&s.token), 500_000);
+        assert_eq!(s.client.total_collected(), 500_000);
+        assert_eq!(token.balance(&s.treasury_id), 500_000);
+        assert_eq!(token.balance(&recipient), 0);
+    }
+}
+
+/// `collect_fee` emits one `fee_collected` event with `market_id`/`token`
+/// topics and fee/balance/cumulative data; a rejected collection emits none.
+#[test]
+fn collect_fee_emits_fee_collected_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Map, Symbol, TryIntoVal, Val};
+
+    let s = setup();
+    s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
+    s.client.collect_fee(&s.market, &s.token, &9u32, &50_000i128);
+
+    let ev = s.env.events().all().last().unwrap();
+    let name: Symbol = ev.1.get(0).unwrap().into_val(&s.env);
+    assert_eq!(name, Symbol::new(&s.env, "fee_collected"));
+    let market_id: u32 = ev.1.get(1).unwrap().into_val(&s.env);
+    assert_eq!(market_id, 9);
+    let token_topic: Address = ev.1.get(2).unwrap().into_val(&s.env);
+    assert_eq!(token_topic, s.token);
+
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&s.env).unwrap();
+    let get = |k: &str| -> i128 { data.get(Symbol::new(&s.env, k)).unwrap().into_val(&s.env) };
+    assert_eq!(get("fee_amount"), 50_000);
+    assert_eq!(get("new_token_balance"), 150_000);
+    assert_eq!(get("new_cumulative_fees"), 150_000);
+    assert_eq!(count_events(&s.env, "fee_collected"), 1);
+
+    let rogue = Address::generate(&s.env);
+    assert!(s.client.try_collect_fee(&rogue, &s.token, &1u32, &1i128).is_err());
+    assert_eq!(count_events(&s.env, "fee_collected"), 0);
+    assert!(s.client.try_collect_fee(&s.market, &s.token, &1u32, &0i128).is_err());
+    assert_eq!(count_events(&s.env, "fee_collected"), 0);
 }

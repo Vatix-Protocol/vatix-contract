@@ -7,6 +7,14 @@ use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient}
 
 /// Calculate payout for a position based on market outcome
 ///
+/// # Invariant: exact collateral share (#930)
+///
+/// Each winning share redeems for exactly one stroop of collateral: the
+/// payout equals the winning-side share count with no rounding, fee, or
+/// price scaling, and losing shares contribute nothing. Because every
+/// YES/NO pair is backed by one unit of collateral, this keeps total
+/// winning payouts equal to the collateral backing the winning side.
+///
 /// # Arguments
 /// * `position` - User's position
 /// * `outcome` - Market outcome (true = YES won, false = NO won)
@@ -103,6 +111,14 @@ fn compute_settlement(
 /// (`settle_position`, `batch_settle_positions`, `settle_positions_page`) so
 /// full-exit burning behaves identically regardless of which entrypoint a
 /// caller uses.
+///
+/// # Losing-share burn invariant (#931)
+/// Both sides are burned, including the **losing** side that pays out `0`.
+/// Losing shares are never redeemable, but leaving them live would let a
+/// settled user transfer worthless tokens that still count toward
+/// `total_supply`, breaking Position/OutcomeToken parity. The position is
+/// marked settled (CEI) before this call, so a replayed settle returns
+/// `PositionAlreadySettled` and can never double-burn.
 fn burn_settled_outcome_tokens(env: &Env, market_id: u32, user: &Address, position: &Position) {
     if let Some(outcome_token_address) = storage::get_outcome_token_contract(env) {
         let token_client = OutcomeTokenContractClient::new(env, &outcome_token_address);
@@ -195,8 +211,6 @@ pub fn settle_position(env: &Env, user: &Address, market_id: u32) -> Result<i128
             crate::types::EmergencyMode::SettleOnly,
         ],
     )?;
-
-
 
     let market = storage::get_market(env, market_id)?.ok_or(ContractError::MarketNotFound)?;
     let mut position =
@@ -510,6 +524,16 @@ mod tests {
         assert_eq!(calculate_payout(&pos, true), 100);
     }
 
+    /// #931: losing shares contribute nothing to payout, for either outcome.
+    #[test]
+    fn test_losing_shares_pay_zero() {
+        let env = Env::default();
+        let only_no = create_test_position(&env, 0, 75, false);
+        assert_eq!(calculate_payout(&only_no, true), 0);
+        let only_yes = create_test_position(&env, 75, 0, false);
+        assert_eq!(calculate_payout(&only_yes, false), 0);
+    }
+
     #[test]
     fn test_calculate_payout_no_wins() {
         let env = Env::default();
@@ -523,6 +547,19 @@ mod tests {
         let pos = create_test_position(&env, 50, 50, false);
         assert_eq!(calculate_payout(&pos, true), 50);
         assert_eq!(calculate_payout(&pos, false), 50);
+    }
+
+    #[test]
+    fn test_calculate_payout_is_exact_collateral_share() {
+        let env = Env::default();
+        // Odd, non-round amounts: no rounding or price scaling is applied.
+        let pos = create_test_position(&env, 1_234_567_891, 7, false);
+        assert_eq!(calculate_payout(&pos, true), 1_234_567_891);
+        assert_eq!(calculate_payout(&pos, false), 7);
+        // Very large balances redeem 1:1 without saturation.
+        let big = i128::MAX / 2;
+        let pos = create_test_position(&env, big, 1, false);
+        assert_eq!(calculate_payout(&pos, true), big);
     }
 
     #[test]
@@ -691,6 +728,7 @@ mod tests {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         let user = Address::generate(&env);
@@ -760,6 +798,7 @@ mod tests {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         // Deposit collateral.
@@ -777,7 +816,9 @@ mod tests {
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
         // Before settling, the contract holds the deposit and the user holds nothing.
         assert_eq!(token_client.balance(&user), 0);
@@ -793,7 +834,9 @@ mod tests {
 
         // The position is now marked settled.
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert!(position.is_settled);
 
@@ -847,6 +890,7 @@ mod tests {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         let user = Address::generate(&env);
@@ -860,7 +904,9 @@ mod tests {
         let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
-        client.resolve_market(&String::from_str(&env, "1"), &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &String::from_str(&env, "1"), &outcome, &signature, &expires_at);
 
         // First settle succeeds and pays out exactly once.
         let first_payout = client.settle_position(&user, &market_id);
@@ -869,7 +915,9 @@ mod tests {
         let user_balance_after_first = token_client.balance(&user);
         let contract_balance_after_first = token_client.balance(&contract_id);
         let position_after_first = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert!(position_after_first.is_settled);
 
@@ -894,7 +942,9 @@ mod tests {
 
         // Stored position is unchanged by the rejected repeat attempts.
         let position_after_repeats = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert_eq!(position_after_repeats, position_after_first);
     }
@@ -931,6 +981,7 @@ mod tests {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         let user = Address::generate(&env);
@@ -956,7 +1007,7 @@ mod tests {
         use crate::MarketContract;
         use ed25519_dalek::{Signer, SigningKey};
         use rand::rngs::OsRng;
-        use soroban_sdk::{String, token::StellarAssetClient};
+        use soroban_sdk::{token::StellarAssetClient, String};
 
         let env = soroban_sdk::Env::default();
         env.mock_all_auths();
@@ -982,7 +1033,7 @@ mod tests {
         let question = String::from_str(&env, "Batch settle test?");
         let end_time = env.ledger().timestamp() + 86_400;
         let market_id =
-            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None);
 
         // Mint and deposit for two users with YES shares
         for _ in 0..2u8 {
@@ -997,7 +1048,9 @@ mod tests {
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
         (env, contract_id, market_id, collateral_token)
     }
@@ -1026,7 +1079,7 @@ mod tests {
         let question = String::from_str(&env, "Still active?");
         let end_time = env.ledger().timestamp() + 86_400;
         let market_id =
-            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token);
+            client.initialize_market(&admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None);
 
         // Pass a non-empty list so the market-status guard (not the empty-batch guard)
         // is the first thing that fires.
@@ -1049,9 +1102,7 @@ mod tests {
 
         let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
         users.push_back(Address::generate(&env));
-        let result = env.as_contract(&contract_id, || {
-            batch_settle_positions(&env, 999, users)
-        });
+        let result = env.as_contract(&contract_id, || batch_settle_positions(&env, 999, users));
         assert_eq!(result, Err(ContractError::MarketNotFound));
     }
 
@@ -1071,10 +1122,10 @@ mod tests {
 
     #[test]
     fn test_batch_settle_settles_multiple_users() {
-        use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
-        use soroban_sdk::String;
         use ed25519_dalek::{Signer, SigningKey};
         use rand::rngs::OsRng;
+        use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+        use soroban_sdk::String;
 
         const DEPOSIT: i128 = 100_000_000;
         const SHARES: i128 = 100_000_000;
@@ -1104,7 +1155,7 @@ mod tests {
         let question = String::from_str(&env, "Batch settle multi user?");
         let end_time = env.ledger().timestamp() + 86_400;
         let market_id = client.initialize_market(
-            &admin, &question, &end_time, &oracle_pubkey, &collateral_token,
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None,
         );
 
         // Create two users, both buy YES shares.
@@ -1122,17 +1173,20 @@ mod tests {
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
         // Batch settle both users.
         let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
         users.push_back(user1.clone());
         users.push_back(user2.clone());
 
-        let total_payout = env.as_contract(&contract_id, || {
-            batch_settle_positions(&env, market_id, users)
-        })
-        .expect("batch settle should succeed");
+        let total_payout = env
+            .as_contract(&contract_id, || {
+                batch_settle_positions(&env, market_id, users)
+            })
+            .expect("batch settle should succeed");
 
         // Both users should receive SHARES each.
         assert_eq!(total_payout, SHARES * 2);
@@ -1198,7 +1252,7 @@ mod tests {
         let question = String::from_str(&env, "Batch settle burns outcome tokens?");
         let end_time = env.ledger().timestamp() + 86_400;
         let market_id = client.initialize_market(
-            &admin, &question, &end_time, &oracle_pubkey, &collateral_token,
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None,
         );
         client.set_outcome_token_contract(&admin, &ot_contract_id);
 
@@ -1211,22 +1265,35 @@ mod tests {
         }
 
         // Outcome tokens were minted alongside the position updates above.
-        assert_eq!(ot_client.total_supply(&market_id, &TokenKind::Yes), SHARES * 2);
-        assert_eq!(ot_client.balance(&market_id, &user1, &TokenKind::Yes), SHARES);
-        assert_eq!(ot_client.balance(&market_id, &user2, &TokenKind::Yes), SHARES);
+        assert_eq!(
+            ot_client.total_supply(&market_id, &TokenKind::Yes),
+            SHARES * 2
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user1, &TokenKind::Yes),
+            SHARES
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user2, &TokenKind::Yes),
+            SHARES
+        );
 
         let outcome = true;
         let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
         let mut users: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
         users.push_back(user1.clone());
         users.push_back(user2.clone());
-        env.as_contract(&contract_id, || batch_settle_positions(&env, market_id, users))
-            .expect("batch settle should succeed");
+        env.as_contract(&contract_id, || {
+            batch_settle_positions(&env, market_id, users)
+        })
+        .expect("batch settle should succeed");
 
         // Full exit via batch settlement must burn every settled user's
         // outcome tokens, driving total supply back to zero.
@@ -1237,10 +1304,10 @@ mod tests {
 
     #[test]
     fn test_batch_settle_skips_already_settled() {
-        use soroban_sdk::String;
-        use soroban_sdk::token::StellarAssetClient;
         use ed25519_dalek::{Signer, SigningKey};
         use rand::rngs::OsRng;
+        use soroban_sdk::token::StellarAssetClient;
+        use soroban_sdk::String;
 
         const DEPOSIT: i128 = 50_000_000;
         const SHARES: i128 = 50_000_000;
@@ -1272,6 +1339,7 @@ mod tests {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
         let user = Address::generate(&env);
@@ -1283,7 +1351,9 @@ mod tests {
         let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
-        client.resolve_market(&String::from_str(&env, "1"), &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &String::from_str(&env, "1"), &outcome, &signature, &expires_at);
 
         // Settle once through the normal path.
         client.settle_position(&user, &market_id);
@@ -1375,10 +1445,11 @@ mod tests {
         soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token)
             .mint(&contract_id, &(1_000_000_000i128));
 
-        let (total_payout, next_index, is_complete) = env.as_contract(&contract_id, || {
-            settle_positions_page(&env, market_id, 0, 10)
-        })
-        .expect("resolved market should settle successfully");
+        let (total_payout, next_index, is_complete) = env
+            .as_contract(&contract_id, || {
+                settle_positions_page(&env, market_id, 0, 10)
+            })
+            .expect("resolved market should settle successfully");
 
         assert!(total_payout > 0, "resolved market page-settle must pay out");
         assert!(is_complete);
@@ -1430,7 +1501,7 @@ mod tests {
         let question = String::from_str(&env, "Page settle burns outcome tokens?");
         let end_time = env.ledger().timestamp() + 86_400;
         let market_id = client.initialize_market(
-            &admin, &question, &end_time, &oracle_pubkey, &collateral_token,
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None,
         );
         client.set_outcome_token_contract(&admin, &ot_contract_id);
 
@@ -1438,20 +1509,27 @@ mod tests {
         sac.mint(&user, &DEPOSIT);
         client.deposit_collateral(&user, &market_id, &DEPOSIT);
         client.update_position(&user, &market_id, &SHARES, &0i128, &5_000i128);
-        assert_eq!(ot_client.balance(&market_id, &user, &TokenKind::Yes), SHARES);
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &TokenKind::Yes),
+            SHARES
+        );
 
         let outcome = true;
         let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
         let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
         let signature = BytesN::from_array(&env, &sig_bytes);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&market_id_str, &outcome, &signature);
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
 
         // Fund the contract so the page-settle payout transfer succeeds.
         StellarAssetClient::new(&env, &collateral_token).mint(&contract_id, &(1_000_000_000i128));
 
-        env.as_contract(&contract_id, || settle_positions_page(&env, market_id, 0, 10))
-            .expect("resolved market should settle successfully");
+        env.as_contract(&contract_id, || {
+            settle_positions_page(&env, market_id, 0, 10)
+        })
+        .expect("resolved market should settle successfully");
 
         assert_eq!(ot_client.total_supply(&market_id, &TokenKind::Yes), 0);
         assert_eq!(ot_client.balance(&market_id, &user, &TokenKind::Yes), 0);
@@ -1545,7 +1623,9 @@ mod tests {
             oversized.push_back(Address::generate(&env));
         }
         assert_eq!(
-            env.as_contract(&contract_id, || batch_settle_positions(&env, 12345, oversized)),
+            env.as_contract(&contract_id, || batch_settle_positions(
+                &env, 12345, oversized
+            )),
             Err(ContractError::BatchTooLarge),
         );
     }

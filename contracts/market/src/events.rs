@@ -1990,10 +1990,7 @@ mod tests {
         assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
-        let admin_val: Address = data
-            .get(Symbol::new(&env, "admin"))
-            .unwrap()
-            .into_val(&env);
+        let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
         let closed_at_val: u64 = data
             .get(Symbol::new(&env, "closed_at"))
             .unwrap()

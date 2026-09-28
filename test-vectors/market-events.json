@@ -1,0 +1,42 @@
+{
+  "description": "Indexer event fixtures for the market contract (#915). Each fixture pins the on-chain shape of one event: the auto-generated snake_case name topic, the ordered explicit topics (EVENT_VERSION is always first), and the data-map field names. Indexers decode against these fixtures; any change to an event's topics or payload must update this file and bump EVENT_VERSION in contracts/market/src/events.rs. Replayed by contracts/market/src/tests_event_fixtures.rs.",
+  "event_version": 1,
+  "fixtures": [
+    {
+      "id": "contract-initialized",
+      "name": "contract_initialized",
+      "topics": ["version:u32", "admin:address"],
+      "data": ["initialized_at:u64"]
+    },
+    {
+      "id": "market-created",
+      "name": "market_created",
+      "topics": ["version:u32", "market_id:u32"],
+      "data": ["creator:address", "end_time:u64", "metadata_uri:option<string>", "question:string"]
+    },
+    {
+      "id": "collateral-deposited",
+      "name": "collateral_deposited",
+      "topics": ["version:u32", "user:address", "market_id:u32"],
+      "data": ["amount:i128", "new_total:i128"]
+    },
+    {
+      "id": "collateral-withdrawn",
+      "name": "collateral_withdrawn",
+      "topics": ["version:u32", "user:address", "market_id:u32"],
+      "data": ["amount:i128", "new_total:i128"]
+    },
+    {
+      "id": "market-resolved",
+      "name": "market_resolved",
+      "topics": ["version:u32", "market_id:u32"],
+      "data": ["oracle_pubkey:bytesn<32>", "outcome:bool", "resolved_at:u64", "resolver:address"]
+    },
+    {
+      "id": "position-updated",
+      "name": "position_updated",
+      "topics": ["version:u32", "market_id:u32", "user:address"],
+      "data": ["locked_collateral:i128", "no_shares:i128", "yes_shares:i128"]
+    }
+  ]
+}

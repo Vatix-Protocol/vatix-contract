@@ -70,7 +70,9 @@ fn setup_market(deposit: i128) -> (Env, Address, u32, Address) {
 
 fn assert_invariant(env: &Env, contract_id: &Address, market_id: u32, user: &Address) {
     let position = env
-        .as_contract(contract_id, || storage::get_position(env, market_id, user).unwrap())
+        .as_contract(contract_id, || {
+            storage::get_position(env, market_id, user).unwrap()
+        })
         .expect("position should exist");
     assert!(
         position.locked_collateral <= position.total_deposited,
@@ -94,12 +96,48 @@ struct Case {
 #[test]
 fn table_driven_locked_never_exceeds_deposited() {
     let cases = [
-        Case { name: "deposit_only_no_trade", deposit_usdc: 100, yes_shares: 0, no_shares: 0, price_bps: 5_000 },
-        Case { name: "net_yes_half_price", deposit_usdc: 100, yes_shares: 100 * STROOPS_PER_USDC, no_shares: 0, price_bps: 5_000 },
-        Case { name: "net_yes_boundary_exact_deposit", deposit_usdc: 100, yes_shares: 100 * STROOPS_PER_USDC, no_shares: 0, price_bps: 10_000 },
-        Case { name: "net_no_low_price", deposit_usdc: 100, yes_shares: 0, no_shares: 100 * STROOPS_PER_USDC, price_bps: 1_000 },
-        Case { name: "hedged_equal_shares_zero_lock", deposit_usdc: 100, yes_shares: 50 * STROOPS_PER_USDC, no_shares: 50 * STROOPS_PER_USDC, price_bps: 7_500 },
-        Case { name: "small_deposit_small_trade", deposit_usdc: 1, yes_shares: STROOPS_PER_USDC / 2, no_shares: 0, price_bps: 6_000 },
+        Case {
+            name: "deposit_only_no_trade",
+            deposit_usdc: 100,
+            yes_shares: 0,
+            no_shares: 0,
+            price_bps: 5_000,
+        },
+        Case {
+            name: "net_yes_half_price",
+            deposit_usdc: 100,
+            yes_shares: 100 * STROOPS_PER_USDC,
+            no_shares: 0,
+            price_bps: 5_000,
+        },
+        Case {
+            name: "net_yes_boundary_exact_deposit",
+            deposit_usdc: 100,
+            yes_shares: 100 * STROOPS_PER_USDC,
+            no_shares: 0,
+            price_bps: 10_000,
+        },
+        Case {
+            name: "net_no_low_price",
+            deposit_usdc: 100,
+            yes_shares: 0,
+            no_shares: 100 * STROOPS_PER_USDC,
+            price_bps: 1_000,
+        },
+        Case {
+            name: "hedged_equal_shares_zero_lock",
+            deposit_usdc: 100,
+            yes_shares: 50 * STROOPS_PER_USDC,
+            no_shares: 50 * STROOPS_PER_USDC,
+            price_bps: 7_500,
+        },
+        Case {
+            name: "small_deposit_small_trade",
+            deposit_usdc: 1,
+            yes_shares: STROOPS_PER_USDC / 2,
+            no_shares: 0,
+            price_bps: 6_000,
+        },
     ];
 
     for case in cases {
@@ -107,9 +145,19 @@ fn table_driven_locked_never_exceeds_deposited() {
         let (env, contract_id, market_id, user) = setup_market(deposit);
         let client = MarketContractClient::new(&env, &contract_id);
 
-        let result =
-            client.try_update_position(&user, &market_id, &case.yes_shares, &case.no_shares, &case.price_bps);
-        assert!(result.is_ok(), "case '{}' expected success: {:?}", case.name, result);
+        let result = client.try_update_position(
+            &user,
+            &market_id,
+            &case.yes_shares,
+            &case.no_shares,
+            &case.price_bps,
+        );
+        assert!(
+            result.is_ok(),
+            "case '{}' expected success: {:?}",
+            case.name,
+            result
+        );
 
         assert_invariant(&env, &contract_id, market_id, &user);
     }
@@ -162,16 +210,30 @@ fn invariant_holds_after_every_step_in_a_trade_sequence() {
     let client = MarketContractClient::new(&env, &contract_id);
 
     // Step 1: buy YES.
-    client.update_position(&user, &market_id, &(80 * STROOPS_PER_USDC), &0i128, &6_000i128);
+    client.update_position(
+        &user,
+        &market_id,
+        &(80 * STROOPS_PER_USDC),
+        &0i128,
+        &6_000i128,
+    );
     assert_invariant(&env, &contract_id, market_id, &user);
 
     // Step 2: partially hedge with NO.
-    client.update_position(&user, &market_id, &0i128, &(30 * STROOPS_PER_USDC), &6_000i128);
+    client.update_position(
+        &user,
+        &market_id,
+        &0i128,
+        &(30 * STROOPS_PER_USDC),
+        &6_000i128,
+    );
     assert_invariant(&env, &contract_id, market_id, &user);
 
     // Step 3: withdraw whatever remains available.
     let position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .unwrap()
     });
     let available = position.total_deposited - position.locked_collateral;
     if available > 0 {
@@ -180,11 +242,19 @@ fn invariant_holds_after_every_step_in_a_trade_sequence() {
     }
 
     // Step 4: sell back down to fully hedged.
-    client.update_position(&user, &market_id, &(-80 * STROOPS_PER_USDC), &(-30 * STROOPS_PER_USDC), &6_000i128);
+    client.update_position(
+        &user,
+        &market_id,
+        &(-80 * STROOPS_PER_USDC),
+        &(-30 * STROOPS_PER_USDC),
+        &6_000i128,
+    );
     assert_invariant(&env, &contract_id, market_id, &user);
 
     let final_position = env.as_contract(&contract_id, || {
-        storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        storage::get_position(&env, market_id, &user)
+            .unwrap()
+            .unwrap()
     });
     assert_eq!(final_position.yes_shares, 0);
     assert_eq!(final_position.no_shares, 0);

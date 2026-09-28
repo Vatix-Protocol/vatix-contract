@@ -100,7 +100,11 @@ fn fee_math_regression_corpus() {
                 // Round-trip fee property checks (#758)
                 let fee = result.unwrap();
                 assert!(fee >= 0, "vector {}: fee must be non-negative", vector.id);
-                assert!(fee <= amount, "vector {}: fee cannot exceed amount", vector.id);
+                assert!(
+                    fee <= amount,
+                    "vector {}: fee cannot exceed amount",
+                    vector.id
+                );
                 assert_eq!(
                     (amount - fee) + fee,
                     amount,
@@ -276,3 +280,42 @@ fn oracle_message_regression_corpus() {
     // 2. Verify keccak256 message hash match
     let msg_hash = construct_oracle_message_v2(
         &env,
+        &passphrase_hash,
+        vector.market_id,
+        outcome_bool,
+        vector.valid_until,
+        vector.epoch,
+    );
+    assert_eq!(
+        bytes_to_hex(&msg_hash.to_array()),
+        vector.keccak_hex,
+        "oracle-message keccak_hex mismatch"
+    );
+
+    // 3. Verify signature verification succeeds against oracle pubkey
+    let pubkey_bytes = hex_to_bytes(&vector.pubkey_hex);
+    let mut pubkey_arr = [0u8; 32];
+    pubkey_arr.copy_from_slice(&pubkey_bytes);
+    let oracle_pubkey = BytesN::from_array(&env, &pubkey_arr);
+
+    let sig_bytes = hex_to_bytes(&vector.signature_hex);
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = BytesN::from_array(&env, &sig_arr);
+
+    let verify_res = verify_oracle_signature_v2(
+        &env,
+        &passphrase_hash,
+        vector.market_id,
+        outcome_bool,
+        vector.valid_until,
+        vector.epoch,
+        &signature,
+        &oracle_pubkey,
+    );
+    assert_eq!(
+        verify_res,
+        Ok(()),
+        "oracle-message vector signature verification failed"
+    );
+}

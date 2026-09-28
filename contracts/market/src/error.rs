@@ -14,6 +14,9 @@ use soroban_sdk::contracterror;
 /// - Reconciliation Errors: 80-89
 /// - Conservation Errors: 90-99
 ///
+/// The full numeric code table for every contract is in
+/// `docs/error-codes.md`; keep it in sync when adding variants.
+///
 /// # Stable not-found codes
 ///
 /// Market lookups that fail because the requested market does not exist MUST
@@ -274,4 +277,14 @@ pub enum ContractError {
     /// register requests are rejected so an untrusted caller cannot override
     /// an existing deployment mapping.
     DeploymentIdAlreadyRegistered = 94,
+
+    /// `initialize_market` was called with a collateral token that differs
+    /// from the deployment's pinned collateral token (ADR-002 collateral
+    /// allowlist decision, #901).
+    ///
+    /// `CollateralBalance(user)` is not denominated per token, so a second
+    /// collateral token would let collateral deposited in one asset back
+    /// trades in another. Fail closed: exactly one collateral token per
+    /// deployment, pinned by the first market created.
+    CollateralTokenNotAllowed = 95,
 }

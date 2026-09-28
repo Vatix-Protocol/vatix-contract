@@ -60,8 +60,7 @@ pub const ORACLE_PREIMAGE_LEN: usize = ORACLE_DOMAIN_SEPARATOR.len() + 4 + 1;
 
 /// Exact width, in bytes, of the V2 oracle preimage before hashing:
 /// `domain_separator (15) || passphrase_hash (32) || market_id_be (4) || outcome_byte (1) || valid_until_be (8) || epoch_be (4)`.
-pub const ORACLE_PREIMAGE_LEN_V2: usize =
-    ORACLE_DOMAIN_SEPARATOR_V2.len() + 32 + 4 + 1 + 8 + 4;
+pub const ORACLE_PREIMAGE_LEN_V2: usize = ORACLE_DOMAIN_SEPARATOR_V2.len() + 32 + 4 + 1 + 8 + 4;
 
 /// Construct the legacy V1 message that the oracle signs.
 ///
@@ -91,14 +90,8 @@ pub fn construct_oracle_message_v2(
     valid_until: u64,
     epoch: u32,
 ) -> BytesN<32> {
-    let preimage = build_oracle_preimage_v2(
-        env,
-        passphrase_hash,
-        market_id,
-        outcome,
-        valid_until,
-        epoch,
-    );
+    let preimage =
+        build_oracle_preimage_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
     env.crypto().keccak256(&preimage).into()
 }
 
@@ -113,7 +106,10 @@ pub fn build_oracle_preimage_v2(
 ) -> Bytes {
     let mut preimage = Bytes::new(env);
     preimage.append(&Bytes::from_slice(env, ORACLE_DOMAIN_SEPARATOR_V2));
-    preimage.append(&Bytes::from_slice(env, passphrase_hash.to_array().as_slice()));
+    preimage.append(&Bytes::from_slice(
+        env,
+        passphrase_hash.to_array().as_slice(),
+    ));
     preimage.append(&Bytes::from_slice(env, &market_id.to_be_bytes()));
     preimage.append(&Bytes::from_slice(env, &[u8::from(outcome)]));
     preimage.append(&Bytes::from_slice(env, &valid_until.to_be_bytes()));
@@ -264,14 +260,8 @@ pub fn verify_oracle_signature_v2(
         return Err(ContractError::InvalidSignature);
     }
 
-    let message = construct_oracle_message_v2(
-        env,
-        passphrase_hash,
-        market_id,
-        outcome,
-        valid_until,
-        epoch,
-    );
+    let message =
+        construct_oracle_message_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
 
     if !verify_ed25519_safe(oracle_pubkey, &message, signature) {
         return Err(ContractError::InvalidSignature);
@@ -327,7 +317,9 @@ pub fn verify_market_outcome(
     proof: &BytesN<64>,
 ) -> Result<(), ContractError> {
     match adapter_type {
-        AdapterType::Ed25519 => verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey),
+        AdapterType::Ed25519 => {
+            verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey)
+        }
         AdapterType::Reflector => verify_via_reflector(env, market_id, market, outcome, proof),
         AdapterType::Pyth => {
             if crate::storage::is_adapter_enabled(env, &adapter_type) {
@@ -574,14 +566,8 @@ pub fn verify_threshold_signatures_v2(
         }
     }
 
-    let message_target = construct_oracle_message_v2(
-        env,
-        passphrase_hash,
-        market_id,
-        outcome,
-        valid_until,
-        epoch,
-    );
+    let message_target =
+        construct_oracle_message_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
     let message_opposite = construct_oracle_message_v2(
         env,
         passphrase_hash,
@@ -616,13 +602,13 @@ pub fn verify_threshold_signatures_v2(
 #[cfg(test)]
 mod tests {
     extern crate std;
-    use std::format;
     use super::*;
     use crate::types::MarketStatus;
     use soroban_sdk::{
         testutils::{Address as _, BytesN as _},
         Address, Env, String,
     };
+    use std::format;
 
     fn make_market(env: &Env, oracle_pubkey: BytesN<32>) -> Market {
         Market {
@@ -1034,11 +1020,13 @@ mod tests {
             "V2 test vector signature must verify on-chain"
         );
 
-        let to_hex = |b: &[u8]| -> std::string::String { b.iter().map(|x| format!("{:02x}", x)).collect() };
+        let to_hex =
+            |b: &[u8]| -> std::string::String { b.iter().map(|x| format!("{:02x}", x)).collect() };
 
         let mut raw = [0u8; ORACLE_PREIMAGE_LEN_V2];
         let mut idx = 0;
-        raw[idx..idx + ORACLE_DOMAIN_SEPARATOR_V2.len()].copy_from_slice(ORACLE_DOMAIN_SEPARATOR_V2);
+        raw[idx..idx + ORACLE_DOMAIN_SEPARATOR_V2.len()]
+            .copy_from_slice(ORACLE_DOMAIN_SEPARATOR_V2);
         idx += ORACLE_DOMAIN_SEPARATOR_V2.len();
         raw[idx..idx + 32].copy_from_slice(&passphrase_hash.to_array());
         idx += 32;
@@ -1077,7 +1065,10 @@ mod tests {
         );
 
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors");
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/oracle-message.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-vectors/oracle-message.json"
+        );
         std::fs::create_dir_all(dir).expect("create test-vectors dir");
         std::fs::write(path, &json).expect("write oracle-message.json");
     }
@@ -1428,8 +1419,14 @@ mod adapter_fallback_tests {
         env.as_contract(&contract_id, || {
             // No admin has enabled the Reflector adapter, so it defaults to
             // disabled and resolution falls back to direct Ed25519 verification.
-            let result =
-                verify_market_outcome(&env, market_id, &market, AdapterType::Reflector, outcome, &sig);
+            let result = verify_market_outcome(
+                &env,
+                market_id,
+                &market,
+                AdapterType::Reflector,
+                outcome,
+                &sig,
+            );
             assert_eq!(result, Ok(()));
         });
     }

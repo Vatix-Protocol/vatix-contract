@@ -1,11 +1,30 @@
+//! Public `#[contracttype]` types for the market contract (#918).
+//!
+//! These types are exported in the contract spec and appear verbatim in
+//! generated client bindings (`stellar contract bindings typescript|rust`).
+//! Binding stability rules:
+//!
+//! - Enum variants are encoded by name (`Vec[Symbol("Active")]`), so renaming
+//!   or removing a variant is a breaking change for every binding consumer.
+//! - Struct fields are encoded as a map keyed by field name, so renaming,
+//!   removing, or retyping a field breaks decoding of existing storage and of
+//!   clients built against an older spec. Adding a field to a stored struct
+//!   requires a storage migration (see `STORAGE_VERSION` in `storage.rs`).
+//! - All amounts are `i128` stroops of the market's `collateral_token`
+//!   (1 USDC = 10^7 stroops); prices are basis points (0–10_000).
+//! - Timestamps are ledger seconds (`u64`).
+
 use soroban_sdk::{contracttype, Address, BytesN, String, Symbol};
 
 /// Represents the possible states of a prediction market.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum MarketStatus {
+    /// Open for deposits and trading until `end_time`.
     Active,
+    /// Outcome recorded in `Market::result`; positions may be settled.
     Resolved,
+    /// Market abandoned; no outcome will be recorded.
     Canceled,
 }
 
@@ -34,8 +53,11 @@ pub enum EmergencyMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub enum AdapterType {
+    /// Signed outcome verified against `Market::oracle_pubkey`.
     Ed25519,
+    /// Reflector price feed compared to `MarketAdapterConfig::resolution_price`.
     Reflector,
+    /// Pyth price feed compared to `MarketAdapterConfig::resolution_price`.
     Pyth,
 }
 
@@ -64,14 +86,24 @@ pub const MARKET_WASM32_SIZE_BUDGET: u32 = 65_536;
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct Market {
+    /// Unique market identifier assigned at creation.
     pub id: u32,
+    /// Human-readable YES/NO question.
     pub question: String,
+    /// Ledger timestamp after which trading closes and resolution may occur.
     pub end_time: u64,
+    /// Ed25519 public key whose signature resolves this market.
     pub oracle_pubkey: BytesN<32>,
+    /// Lifecycle state; see [`MarketStatus`].
     pub status: MarketStatus,
+    /// `Some(true)` = YES won, `Some(false)` = NO won, `None` = unresolved
+    /// (or, when `status` is `Resolved`, a no-winner refund).
     pub result: Option<bool>,
+    /// Address that created the market.
     pub creator: Address,
+    /// Ledger timestamp of creation.
     pub created_at: u64,
+    /// SAC token used as collateral; all amounts are in its stroops.
     pub collateral_token: Address,
     /// Current market price in basis points (0–10_000). Updated on every trade.
     pub price_bps: i128,
@@ -132,14 +164,19 @@ pub struct Market {
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub struct Position {
+    /// Owner of the position.
     pub user: Address,
+    /// YES outcome shares held; each redeems for 1 stroop if YES wins.
     pub yes_shares: i128,
+    /// NO outcome shares held; each redeems for 1 stroop if NO wins.
     pub no_shares: i128,
     /// Collateral required to back current YES/NO shares (from calculate_locked_collateral).
     pub locked_collateral: i128,
     /// Total collateral deposited by user in this market (never decreased except by withdraw).
     pub total_deposited: i128,
+    /// Market this position belongs to.
     pub market_id: u32,
+    /// Set once the position has been paid out; blocks double settlement.
     pub is_settled: bool,
 }
 
@@ -158,6 +195,7 @@ pub struct PendingFeeRateChange {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct PendingAddressChange {
+    /// Address that becomes active once `effective_at` is reached.
     pub new_address: Address,
     pub effective_at: u64,
 }
@@ -166,6 +204,7 @@ pub struct PendingAddressChange {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct PendingAdapterTypeChange {
+    /// Adapter that becomes active once `effective_at` is reached.
     pub new_adapter: AdapterType,
     pub effective_at: u64,
 }
@@ -199,6 +238,7 @@ pub struct MarketAdapterConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct PendingBytesNChange {
+    /// Value that becomes active once `effective_at` is reached.
     pub new_bytes: BytesN<32>,
     pub effective_at: u64,
 }
@@ -207,7 +247,9 @@ pub struct PendingBytesNChange {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct PendingThresholdSignersChange {
+    /// Ed25519 public keys of the proposed signer set.
     pub signers: soroban_sdk::Vec<BytesN<32>>,
+    /// Minimum number of `signers` that must sign a resolution.
     pub quorum: u32,
     pub effective_at: u64,
 }

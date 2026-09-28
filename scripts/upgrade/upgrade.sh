@@ -9,7 +9,10 @@
 #   1. Dependencies are upgraded before their dependents.
 #   2. Every contract's storage version is compatible with the target build.
 #   3. Admin/authz configuration is preserved across the upgrade.
-#   4. The script fails closed: any missing env, wrong network, or failed
+#   4. Every WASM artifact matches its pinned SHA-256 in expected-hashes.json
+#      (unpinned or mismatched hashes abort unless ALLOW_UNPINNED_HASHES=1,
+#      which is refused on mainnet).
+#   5. The script fails closed: any missing env, wrong network, or failed
 #      preflight aborts the run before a single contract is touched.
 #
 # Usage:
@@ -25,6 +28,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PLAYBOOK="${SCRIPT_DIR}/UPGRADE_PLAYBOOK.md"
+HASHES_FILE="${SCRIPT_DIR}/expected-hashes.json"
 
 log()  { printf '[upgrade] %s\n' "$*" >&2; }
 warn() { printf '[upgrade][warn] %s\n' "$*" >&2; }
@@ -54,6 +58,38 @@ if [ "${UPGRADE_DISABLED:-}" = "1" ]; then
 fi
 
 command -v stellar >/dev/null 2>&1 || die "stellar CLI not found on PATH"
+command -v jq >/dev/null 2>&1 || die "jq is required to read ${HASHES_FILE}"
+jq empty "${HASHES_FILE}" 2>/dev/null || die "missing or invalid ${HASHES_FILE}"
+
+if [ "${ALLOW_UNPINNED_HASHES:-}" = "1" ] && [ "${NETWORK}" = "mainnet" ]; then
+  die "ALLOW_UNPINNED_HASHES=1 is not permitted on mainnet"
+fi
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# Fails closed unless the artifact's SHA-256 equals the value pinned for its
+# wasmFile in expected-hashes.json.
+verify_pinned_hash() {
+  local name="$1" wasm="$2" expected actual
+  expected="$(jq -r --arg f "$(basename "${wasm}")" \
+    '[.contracts[] | select(.wasmFile == $f) | .expectedSha256][0] // empty' "${HASHES_FILE}")"
+  actual="$(sha256_of "${wasm}")"
+  if [ -z "${expected}" ]; then
+    [ "${ALLOW_UNPINNED_HASHES:-}" = "1" ] \
+      || die "${name}: no expectedSha256 pinned in ${HASHES_FILE} (built: ${actual}); pin it or set ALLOW_UNPINNED_HASHES=1 on testnet"
+    warn "${name}: unpinned hash (built: ${actual}); ALLOW_UNPINNED_HASHES=1"
+    return 0
+  fi
+  [ "${expected}" = "${actual}" ] \
+    || die "${name}: WASM hash mismatch expected=${expected} actual=${actual}; refusing to upgrade"
+  log "${name}: WASM hash matches pin (${actual})"
+}
 
 # ---------------------------------------------------------------------------
 # 2. Upgrade order (dependencies before dependents)
@@ -78,6 +114,7 @@ for entry in "${UPGRADE_ORDER[@]}"; do
   name="${entry%%:*}"
   wasm="${entry#*:}"
   [ -f "${wasm}" ] || die "missing wasm artifact for ${name}: ${wasm}"
+  verify_pinned_hash "${name}" "${wasm}"
   log "preflight ok: ${name} -> ${wasm}"
 done
 
@@ -90,6 +127,9 @@ for entry in "${UPGRADE_ORDER[@]}"; do
   wasm="${entry#*:}"
 
   log "upgrading ${name} on ${NETWORK}"
+  # Re-verify immediately before upload so the artifact cannot be swapped
+  # between preflight and submission.
+  verify_pinned_hash "${name}" "${wasm}"
   if ! stellar contract upload \
         --network "${NETWORK}" \
         --source-account "${ADMIN_SECRET}" \

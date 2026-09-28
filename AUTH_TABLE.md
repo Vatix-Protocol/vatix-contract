@@ -5,6 +5,10 @@ Inventory of every admin-gated (or otherwise privileged) mutator across the
 check each one performs. Produced as part of the auth-hardening pass; keep
 this in sync whenever an admin entrypoint is added, removed, or renamed.
 
+The operational procedure for rotating the admin key (propose/accept,
+timelock, verification, rollback and emergency rotation) is documented in
+[`docs/admin-rotation-ceremony.md`](docs/admin-rotation-ceremony.md).
+
 Every row below follows the same two-step pattern unless noted otherwise:
 
 1. `caller.require_auth()` — cryptographic proof the caller signed the call.

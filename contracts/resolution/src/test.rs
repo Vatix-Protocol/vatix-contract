@@ -523,13 +523,19 @@ fn shrinking_default_does_not_move_existing_candidate_deadline() {
         &proposed_window,
         &BOND,
     );
-    let deadline_before = client.get_candidate(&candidate_id).unwrap().challenge_deadline;
+    let deadline_before = client
+        .get_candidate(&candidate_id)
+        .unwrap()
+        .challenge_deadline;
 
     // Shrink the default to its minimum -- if this had any binding effect on
     // live candidates, the deadline read below would move.
     client.set_default_challenge_window(&admin, &60);
 
-    let deadline_after = client.get_candidate(&candidate_id).unwrap().challenge_deadline;
+    let deadline_after = client
+        .get_candidate(&candidate_id)
+        .unwrap()
+        .challenge_deadline;
     assert_eq!(deadline_before, deadline_after);
 }
 
@@ -740,21 +746,19 @@ fn propose_rejects_signature_expiry_before_proposed_at() {
 
 // ── Issue #552: challenge window boundary tests at challenge ──────────────────
 //
-// From lib.rs `challenge`:
-//   if timestamp > challenge_deadline  → ChallengeWindowClosed
+// From lib.rs `challenge` (Issue #912):
+//   if timestamp >= challenge_deadline  → ChallengeWindowClosed
 //
-// Key off-by-one cases:
-//   timestamp == deadline     → > is false  → window CLOSED (error)
-//   timestamp == deadline - 1 → > is false  → window OPEN   (accepted)
-//
-// Wait — re-read: `> deadline` means equal is NOT greater, so:
-//   timestamp == deadline     → NOT > deadline → window still open → accepted
-//   timestamp == deadline + 1 → > deadline     → ChallengeWindowClosed
+// The window is half-open, `[proposed_at, challenge_deadline)`, and
+// `finalize` opens at exactly `challenge_deadline`, so there is no second
+// in which both a challenge and a finalize are valid.
+//   timestamp == deadline - 1 → window OPEN   → accepted
+//   timestamp == deadline     → window CLOSED → ChallengeWindowClosed
 
-/// challenge at exactly the deadline (t == deadline) is still accepted —
-/// the guard is strictly `>`, so the boundary second is inside the window.
+/// challenge at exactly the deadline (t == deadline) is rejected — the
+/// boundary second belongs to finalize, not to the challenge window.
 #[test]
-fn challenge_accepted_at_exactly_deadline() {
+fn challenge_rejected_at_exactly_deadline() {
     let env = Env::default();
     let (client, _, _, token) = setup(&env);
     set_time(&env, 1_000);
@@ -779,10 +783,9 @@ fn challenge_accepted_at_exactly_deadline() {
     let challenger = Address::generate(&env);
     fund(&env, &token, &challenger, BOND);
     let uri = String::from_str(&env, "ipfs://at-deadline");
-    let result = client.try_challenge(&challenger, &candidate_id, &uri, &BOND);
-    assert!(
-        result.is_ok(),
-        "challenge at deadline boundary should be accepted (guard is >)"
+    assert_eq!(
+        client.try_challenge(&challenger, &candidate_id, &uri, &BOND),
+        Err(Ok(ContractError::ChallengeWindowClosed))
     );
 }
 
@@ -854,16 +857,16 @@ fn challenge_accepted_one_second_before_deadline() {
 // ── Issue #552: finalize window boundary tests ────────────────────────────────
 //
 // From lib.rs `finalize`:
-//   if timestamp <= challenge_deadline  → ChallengeWindowOpen
+//   if timestamp < challenge_deadline  → ChallengeWindowOpen
 //
 // Key off-by-one cases:
-//   timestamp == deadline     → <= is true → window OPEN  → ChallengeWindowOpen
-//   timestamp == deadline + 1 → <= is false → window CLOSED → accepted
+//   timestamp == deadline - 1 → window OPEN   → ChallengeWindowOpen
+//   timestamp == deadline     → window CLOSED → accepted
 
-/// finalize at exactly the deadline is rejected — the window is still open
-/// because the guard is `<=`.
+/// finalize at exactly the deadline is accepted — the challenge window is
+/// half-open, so it closed at `challenge_deadline` (Issue #912).
 #[test]
-fn finalize_rejected_at_exactly_deadline() {
+fn finalize_accepted_at_exactly_deadline() {
     let env = Env::default();
     let (client, _, _, token) = setup(&env);
     set_time(&env, 1_000);
@@ -885,10 +888,8 @@ fn finalize_rejected_at_exactly_deadline() {
     set_time(&env, 1_300);
 
     let finalizer = Address::generate(&env);
-    assert_eq!(
-        client.try_finalize(&finalizer, &candidate_id),
-        Err(Ok(ContractError::ChallengeWindowOpen))
-    );
+    let candidate = client.finalize(&finalizer, &candidate_id);
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Finalized);
 }
 
 /// finalize one second after the deadline succeeds.
@@ -1368,4 +1369,276 @@ fn slash_collateral_emits_collateral_slashed_event() {
     // State must be correct: balance zeroed, funds at recipient.
     assert_eq!(client.get_proposer_collateral(&proposer), 0i128);
     assert_eq!(balance(&env, &token, &recipient), 10_000_000i128);
+}
+
+// ── Issue #912 / #920: challenge window and dispute events ────────────────────
+
+fn count_events(env: &Env, name: &str) -> u32 {
+    let name = Symbol::new(env, name);
+    let mut n = 0;
+    for ev in env.events().all().iter() {
+        if let Some(first) = ev.1.get(0) {
+            let topic: Result<Symbol, _> = first.try_into_val(env);
+            if topic == Ok(name.clone()) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// A challenge after the window closes is rejected fail-closed: the candidate
+/// stays `Proposed`, no challenger is recorded, the challenger's bond is not
+/// taken, no `candidate_challenged` event fires, and finalize still works.
+#[test]
+fn late_challenge_leaves_candidate_and_bond_unchanged() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &(env.ledger().timestamp() + 3_600),
+        &evidence(&env),
+        &300u64,
+        &BOND,
+    );
+
+    set_time(&env, 1_300);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    let uri = String::from_str(&env, "ipfs://late");
+    assert_eq!(
+        client.try_challenge(&challenger, &candidate_id, &uri, &BOND),
+        Err(Ok(ContractError::ChallengeWindowClosed))
+    );
+    assert_eq!(count_events(&env, "candidate_challenged"), 0);
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Proposed);
+    assert_eq!(candidate.challenged_by, None);
+    assert_eq!(candidate.challenge_uri, None);
+    assert_eq!(balance(&env, &token, &challenger), BOND);
+
+    let finalizer = Address::generate(&env);
+    let candidate = client.finalize(&finalizer, &candidate_id);
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Finalized);
+}
+
+/// `challenge` emits exactly one `candidate_challenged` dispute event with
+/// `candidate_id`/`market_id` topics and the challenger, URI, bond and
+/// timestamp as data; a replayed challenge is rejected and emits nothing.
+#[test]
+fn challenge_emits_candidate_challenged_event() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer,
+        &7u32,
+        &true,
+        &signature(&env),
+        &(env.ledger().timestamp() + 3_600),
+        &evidence(&env),
+        &300u64,
+        &BOND,
+    );
+
+    set_time(&env, 1_100);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 2 * BOND);
+    let uri = String::from_str(&env, "ipfs://dispute");
+    client.challenge(&challenger, &candidate_id, &uri, &BOND);
+
+    let ev = env.events().all().last().unwrap();
+    let name: Symbol = ev.1.get(0).unwrap().into_val(&env);
+    assert_eq!(name, Symbol::new(&env, "candidate_challenged"));
+    let id_topic: u32 = ev.1.get(1).unwrap().into_val(&env);
+    assert_eq!(id_topic, candidate_id);
+    let market_topic: u32 = ev.1.get(2).unwrap().into_val(&env);
+    assert_eq!(market_topic, 7);
+
+    let data: Map<Symbol, Val> = ev.2.try_into_val(&env).unwrap();
+    let who: Address = data
+        .get(Symbol::new(&env, "challenger"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(who, challenger);
+    let got_uri: String = data
+        .get(Symbol::new(&env, "challenge_uri"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(got_uri, uri);
+    let bond: i128 = data
+        .get(Symbol::new(&env, "bond_amount"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(bond, BOND);
+    let at: u64 = data
+        .get(Symbol::new(&env, "challenged_at"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(at, 1_100);
+    assert_eq!(count_events(&env, "candidate_challenged"), 1);
+
+    // Replay: rejected, no second dispute event, no bond movement.
+    let before = balance(&env, &token, &challenger);
+    assert_eq!(
+        client.try_challenge(&challenger, &candidate_id, &uri, &BOND),
+        Err(Ok(ContractError::CandidateAlreadyChallenged))
+    );
+    assert_eq!(count_events(&env, "candidate_challenged"), 0);
+    assert_eq!(balance(&env, &token, &challenger), before);
+}
+
+// ── Dispute integration & bond economics (#896, #899) ──────────────────────
+
+/// Propose → challenge → appeal → finalize, asserting balances at every
+/// step. Once the appealed outcome finalizes, the proposer's bond is refunded
+/// in full and the losing challenger's bond is split 50% reward (proposer) /
+/// 25% burned / 25% treasury cut (retained here, since no treasury is set).
+/// Bonds are conserved: every stroop posted is accounted for.
+#[test]
+fn dispute_then_finalize_settles_bonds_and_resolves_market() {
+    let env = Env::default();
+    let (client, _, market_contract, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = 1_000 + 10 * DEFAULT_WINDOW;
+
+    let candidate_id = client.propose(
+        &proposer, &9u32, &true, &signature(&env), &expiry, &evidence(&env),
+        &DEFAULT_WINDOW, &BOND,
+    );
+    assert_eq!(balance(&env, &token, &this), BOND);
+
+    client.challenge(
+        &challenger, &candidate_id, &String::from_str(&env, "ipfs://challenge"), &BOND,
+    );
+    assert_eq!(balance(&env, &token, &this), 2 * BOND);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 1);
+
+    // Disputed candidates cannot finalize, even after the window closes.
+    set_time(&env, 1_000 + DEFAULT_WINDOW + 1);
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::CandidateAlreadyChallenged))
+    );
+
+    // Appeal reopens a fresh window; finalize is blocked until it closes.
+    let appealed_at = env.ledger().timestamp();
+    client.appeal(
+        &proposer, &candidate_id, &false, &signature(&env), &evidence(&env), &DEFAULT_WINDOW,
+    );
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::ChallengeWindowOpen))
+    );
+
+    set_time(&env, appealed_at + DEFAULT_WINDOW + 1);
+    let finalized = client.finalize(&proposer, &candidate_id);
+    assert_eq!(finalized.status, crate::types::CandidateStatus::Finalized);
+    assert_eq!(finalized.outcome, false);
+    assert_eq!(finalized.appeal_round, 1);
+
+    let reward = BOND * 5_000 / 10_000;
+    let burned = BOND * 2_500 / 10_000;
+    let treasury_cut = BOND - reward - burned;
+    assert_eq!(balance(&env, &token, &proposer), BOND + reward);
+    assert_eq!(balance(&env, &token, &challenger), 0);
+    assert_eq!(balance(&env, &token, &this), treasury_cut);
+    assert_eq!(
+        balance(&env, &token, &proposer) + balance(&env, &token, &challenger)
+            + balance(&env, &token, &this) + burned,
+        2 * BOND
+    );
+    assert!(client.get_challengers(&candidate_id).is_empty());
+
+    let resolved = MockMarketClient::new(&env, &market_contract)
+        .get_last_resolved()
+        .expect("finalize must resolve the market");
+    assert_eq!(resolved.outcome, false);
+    assert!(!resolved.is_v2);
+
+    // Replay is rejected and moves no funds.
+    assert_eq!(
+        client.try_finalize(&proposer, &candidate_id),
+        Err(Ok(ContractError::CandidateAlreadyFinalized))
+    );
+    assert_eq!(balance(&env, &token, &proposer), BOND + reward);
+    assert_eq!(balance(&env, &token, &this), treasury_cut);
+}
+
+/// Bonds below the documented minimums are rejected before any transfer.
+#[test]
+fn bonds_below_minimum_are_rejected_without_moving_funds() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let expiry = 1_000 + 10 * DEFAULT_WINDOW;
+    assert_eq!(
+        client.try_propose(
+            &proposer, &3u32, &true, &signature(&env), &expiry, &evidence(&env),
+            &DEFAULT_WINDOW, &(crate::MIN_BOND_AMOUNT - 1),
+        ),
+        Err(Ok(ContractError::InsufficientBond))
+    );
+    assert_eq!(balance(&env, &token, &proposer), BOND);
+
+    let candidate_id = client.propose(
+        &proposer, &3u32, &true, &signature(&env), &expiry, &evidence(&env),
+        &DEFAULT_WINDOW, &BOND,
+    );
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    assert_eq!(
+        client.try_challenge(
+            &challenger, &candidate_id, &String::from_str(&env, "ipfs://c"),
+            &(crate::MIN_CHALLENGE_BOND_AMOUNT - 1),
+        ),
+        Err(Ok(ContractError::InsufficientChallengeBond))
+    );
+    assert_eq!(balance(&env, &token, &challenger), BOND);
+    assert_eq!(balance(&env, &token, &this), BOND);
+}
+
+/// An unchallenged proposal refunds the proposer's bond exactly once and
+/// leaves no residue in the contract.
+#[test]
+fn unchallenged_finalize_refunds_full_bond() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    let this = client.address.clone();
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer, &4u32, &true, &signature(&env), &(1_000 + 10 * DEFAULT_WINDOW),
+        &evidence(&env), &DEFAULT_WINDOW, &BOND,
+    );
+    assert_eq!(balance(&env, &token, &proposer), 0);
+
+    set_time(&env, 1_000 + DEFAULT_WINDOW + 1);
+    client.finalize(&proposer, &candidate_id);
+    assert_eq!(balance(&env, &token, &proposer), BOND);
+    assert_eq!(balance(&env, &token, &this), 0);
+}
 }

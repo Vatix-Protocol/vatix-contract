@@ -39,6 +39,7 @@ fn market_with_funded_user(deposit: i128) -> (Env, Address, u32, Address) {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
@@ -100,7 +101,7 @@ fn buy_yes_convenience_function_works() {
     assert_eq!(position.yes_shares, amount);
     assert_eq!(position.no_shares, 0);
     assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
-    
+
     // Verify event was emitted
     assert_event_emitted(&env, "trade_executed_event");
 }
@@ -118,7 +119,7 @@ fn buy_no_convenience_function_works() {
     assert_eq!(position.yes_shares, 0);
     assert_eq!(position.no_shares, amount);
     assert_eq!(position.locked_collateral, 40 * STROOPS_PER_USDC);
-    
+
     assert_event_emitted(&env, "trade_executed_event");
 }
 
@@ -215,7 +216,8 @@ fn get_position_returns_correct_data() {
     client.buy_yes(&user, &market_id, &amount, &6_000i128);
 
     // Query position using get_position
-    let position = client.get_position(&market_id, &user)
+    let position = client
+        .get_position(&market_id, &user)
         .expect("storage check ok")
         .expect("position should exist");
 
@@ -234,7 +236,8 @@ fn get_position_returns_none_for_nonexistent_position() {
 
     // Query position for a user who never traded
     let other_user = Address::generate(&env);
-    let position = client.get_position(&market_id, &other_user)
+    let position = client
+        .get_position(&market_id, &other_user)
         .expect("storage check ok");
 
     assert!(position.is_none());
@@ -247,12 +250,16 @@ fn get_market_returns_correct_data() {
     let client = MarketContractClient::new(&env, &contract_id);
 
     // Query market details
-    let market = client.get_market(&market_id)
+    let market = client
+        .get_market(&market_id)
         .expect("storage check ok")
         .expect("market should exist");
 
     assert_eq!(market.id, market_id);
-    assert_eq!(market.status, vatix_market_contract::types::MarketStatus::Active);
+    assert_eq!(
+        market.status,
+        vatix_market_contract::types::MarketStatus::Active
+    );
     assert_eq!(market.price_bps, 5_000); // Default initial price
     assert!(market.result.is_none()); // Not resolved yet
 }

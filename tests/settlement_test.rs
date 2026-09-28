@@ -27,9 +27,7 @@ use soroban_sdk::{
     Address, Env,
 };
 use vatix_market_contract::{
-    error::ContractError, storage,
-    types::MarketStatus,
-    MarketContract, MarketContractClient,
+    error::ContractError, storage, types::MarketStatus, MarketContract, MarketContractClient,
 };
 
 const STROOPS_PER_USDC: i128 = 10_000_000;

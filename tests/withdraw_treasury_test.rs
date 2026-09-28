@@ -41,8 +41,7 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
     });
 
     let treasury_addr = env.register(TreasuryContract, ());
-    TreasuryContractClient::new(&env, &treasury_addr)
-        .initialize(&admin, &market_addr);
+    TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &market_addr);
 
     MarketContractClient::new(&env, &market_addr).set_treasury_contract(&admin, &treasury_addr);
 
@@ -55,12 +54,7 @@ fn setup_with_treasury() -> (Env, Address, Address, Address, Address) {
 }
 
 /// Create a market and return its numeric id.
-fn open_market(
-    env: &Env,
-    client: &MarketContractClient,
-    admin: &Address,
-    token: &Address,
-) -> u32 {
+fn open_market(env: &Env, client: &MarketContractClient, admin: &Address, token: &Address) -> u32 {
     let mut params = MarketParams::default_valid(env);
     params.collateral_token = token.clone();
     client.initialize_market(
@@ -284,7 +278,10 @@ fn non_admin_cannot_set_fee_rate() {
     let imposter = Address::generate(&env);
 
     let result = market.try_set_fee_rate(&imposter, &100);
-    assert!(result.is_err(), "non-admin must not be able to set fee rate");
+    assert!(
+        result.is_err(),
+        "non-admin must not be able to set fee rate"
+    );
 }
 
 #[test]
@@ -482,4 +479,3 @@ fn withdraw_invalid_amount_rejected() {
         "negative amount must be rejected"
     );
 }
-

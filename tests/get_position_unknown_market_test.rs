@@ -110,7 +110,13 @@ fn get_position_on_real_market_with_position_returns_it() {
     let deposit = 100 * STROOPS_PER_USDC;
     StellarAssetClient::new(&env, &token).mint(&user, &deposit);
     client.deposit_collateral(&user, &market_id, &deposit);
-    client.update_position(&user, &market_id, &(40 * STROOPS_PER_USDC), &0i128, &6_000i128);
+    client.update_position(
+        &user,
+        &market_id,
+        &(40 * STROOPS_PER_USDC),
+        &0i128,
+        &6_000i128,
+    );
 
     let position = client
         .get_position(&market_id, &user)
