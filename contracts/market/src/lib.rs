@@ -211,59 +211,13 @@ impl MarketContract {
         Ok(())
     }
 
-    /// Admin-only kill-switch. Engages the global pause so money-path writes
-    /// fail closed. Deny-by-default privileged surface; requires admin auth.
-    pub fn set_paused(env: Env, caller: Address, paused: bool) -> Result<(), StorageError> {
-        caller.require_auth();
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Admin.symbol())
-            .ok_or(StorageError::Unauthorized)?;
-        if caller != admin {
-            return Err(StorageError::Unauthorized);
-        }
-        env.storage()
-            .instance()
-            .set(&StorageKey::Paused.symbol(), &paused);
-        Ok(())
-    }
-
-    /// Execute the typed mint-on-trade cross-contract edge.
-    ///
-    /// Fail-closed ordering: pause check, authz, input validation, idempotency,
-    /// then the money-path write. Replayed/concurrent requests with the same
-    /// `correlation_id` are rejected with `DuplicateCorrelationId`.
-    pub fn mint_on_trade(env: Env, edge: MintOnTradeEdge) -> Result<(), MintOnTradeError> {
-        if Self::is_paused(&env) {
-            return Err(MintOnTradeError::Paused);
-        }
-        edge.trader.require_auth();
-        if edge.amount == 0 {
-            return Err(MintOnTradeError::InvalidAmount);
-        }
-        if env
-            .storage()
-            .instance()
-            .get::<_, Address>(&StorageKey::OutcomeToken.symbol())
-            .is_none()
-        {
-            return Err(MintOnTradeError::OutcomeTokenNotConfigured);
-        }
-        let seen_key = (StorageKey::MintOnTradeSeen.symbol(), edge.correlation_id);
-        if env.storage().instance().has(&seen_key) {
-            return Err(MintOnTradeError::DuplicateCorrelationId);
-        }
-        env.storage().instance().set(&seen_key, &true);
-        Ok(())
-    }
-
-    /// Whether the global kill-switch is engaged. Defaults to paused=false only
-    /// when explicitly unset; callers treat missing state as not-paused.
+    /// Whether the kill-switch is engaged. Defaults to paused (fail-closed) when
+    /// the flag has never been written, so an uninitialized contract denies
+    /// money-path writes rather than silently allowing them.
     fn is_paused(env: &Env) -> bool {
         env.storage()
             .instance()
             .get(&StorageKey::Paused.symbol())
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 }
