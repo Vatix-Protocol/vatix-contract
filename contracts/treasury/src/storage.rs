@@ -81,7 +81,6 @@ pub struct PendingStakeholders {
 
 // ── Version ───────────────────────────────────────────────────────────────────
 
-
 pub fn set_version(env: &Env) {
     env.storage()
         .instance()
@@ -127,7 +126,9 @@ pub fn get_pending_admin(env: &Env) -> Option<PendingAddressChange> {
 }
 
 pub fn set_pending_admin(env: &Env, pending: &PendingAddressChange) {
-    env.storage().instance().set(&StorageKey::PendingAdmin, pending);
+    env.storage()
+        .instance()
+        .set(&StorageKey::PendingAdmin, pending);
 }
 
 pub fn clear_pending_admin(env: &Env) {
@@ -169,15 +170,21 @@ pub fn is_authorized_market(env: &Env, market: &Address) -> bool {
 }
 
 pub fn get_pending_market_contract(env: &Env) -> Option<PendingAddressChange> {
-    env.storage().instance().get(&StorageKey::PendingMarketContract)
+    env.storage()
+        .instance()
+        .get(&StorageKey::PendingMarketContract)
 }
 
 pub fn set_pending_market_contract(env: &Env, pending: &PendingAddressChange) {
-    env.storage().instance().set(&StorageKey::PendingMarketContract, pending);
+    env.storage()
+        .instance()
+        .set(&StorageKey::PendingMarketContract, pending);
 }
 
 pub fn clear_pending_market_contract(env: &Env) {
-    env.storage().instance().remove(&StorageKey::PendingMarketContract);
+    env.storage()
+        .instance()
+        .remove(&StorageKey::PendingMarketContract);
 }
 
 // ── Token balance (current, decreasable on withdrawal) ────────────────────────
@@ -263,9 +270,7 @@ pub fn is_paused(env: &Env) -> bool {
 }
 
 pub fn set_paused(env: &Env, paused: bool) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::Paused, &paused);
+    env.storage().instance().set(&StorageKey::Paused, &paused);
 }
 
 // ── Stakeholder revenue share (#485) ──────────────────────────────────────────
@@ -289,7 +294,9 @@ pub fn set_stakeholders(env: &Env, stakeholders: &Vec<(Address, u32)>) {
 
 /// A proposed stakeholder list awaiting its timelock delay (Issue #689), if any.
 pub fn get_pending_stakeholders(env: &Env) -> Option<PendingStakeholders> {
-    env.storage().instance().get(&StorageKey::PendingStakeholders)
+    env.storage()
+        .instance()
+        .get(&StorageKey::PendingStakeholders)
 }
 
 pub fn set_pending_stakeholders(env: &Env, pending: &PendingStakeholders) {

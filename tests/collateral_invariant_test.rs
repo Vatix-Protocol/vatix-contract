@@ -54,6 +54,7 @@ fn setup_market(deposit: i128) -> (Env, Address, u32, Address) {
         &params.end_time,
         &params.oracle_pubkey,
         &params.collateral_token,
+        &None,
     );
 
     let user = Address::generate(&env);
@@ -315,12 +316,9 @@ fn table_driven_locked_never_exceeds_deposited() {
         });
 
         assert_eq!(
-            position.locked_collateral,
-            case.expected_locked,
+            position.locked_collateral, case.expected_locked,
             "[{}] locked_collateral snapshot mismatch: got {}, want {}",
-            case.label,
-            position.locked_collateral,
-            case.expected_locked,
+            case.label, position.locked_collateral, case.expected_locked,
         );
 
         assert!(

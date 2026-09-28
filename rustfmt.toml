@@ -1,0 +1,25 @@
+# Workspace-wide rustfmt configuration (#923).
+#
+# Enforced in CI by `cargo fmt --all -- --check` (.github/workflows/ci.yml,
+# "Format check" step) across every crate in the workspace: market,
+# treasury, resolution, outcome-token and the root integration tests.
+# A PR that is not formatted fails CI; fix locally with:
+#
+#   cargo fmt --all
+#
+# Only stable options are used so the check behaves identically on the
+# `stable` toolchain installed by CI. Values pin the current rustfmt
+# defaults explicitly so a future default change cannot silently reformat
+# the codebase. This file lives at the repo root; do not add per-crate
+# rustfmt.toml files (rustfmt uses the nearest one, which would fork style).
+#
+# Option reference: https://rust-lang.github.io/rustfmt/
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+hard_tabs = false
+newline_style = "Unix"
+use_field_init_shorthand = false
+use_try_shorthand = false
+reorder_imports = true
+reorder_modules = true

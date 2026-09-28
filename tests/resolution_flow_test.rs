@@ -38,10 +38,11 @@ use soroban_sdk::{
     token::StellarAssetClient,
     Address, BytesN, Env, String,
 };
-use vatix_market_contract::{storage as market_storage, types::MarketStatus, MarketContract, MarketContractClient};
+use vatix_market_contract::{
+    storage as market_storage, types::MarketStatus, MarketContract, MarketContractClient,
+};
 use vatix_resolution_contract::{
-    types::CandidateStatus,
-    ResolutionContract, ResolutionContractClient,
+    types::CandidateStatus, ResolutionContract, ResolutionContractClient,
 };
 
 /// Challenge window used across all tests in this module (5 minutes).
@@ -127,7 +128,8 @@ fn e2e_propose_finalize_resolves_real_market() {
         &BOND_AMOUNT,
     );
 
-    let candidate = h.resolution_client
+    let candidate = h
+        .resolution_client
         .get_candidate(&candidate_id)
         .expect("candidate should exist after propose");
     assert_eq!(candidate.status, CandidateStatus::Proposed);
@@ -229,7 +231,8 @@ fn e2e_challenged_candidate_leaves_market_active() {
         &BOND_AMOUNT,
     );
 
-    let candidate = h.resolution_client
+    let candidate = h
+        .resolution_client
         .get_candidate(&candidate_id)
         .expect("candidate should exist");
     assert_eq!(candidate.status, CandidateStatus::Challenged);

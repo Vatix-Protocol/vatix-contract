@@ -24,6 +24,18 @@ Closes #
 - [ ] Fail-closed behavior on dependency outage (RPC/DB/Redis) is preserved for writes.
 - [ ] Disclosure process followed — see [SECURITY.md](../SECURITY.md) for reporting channels and supported versions.
 
+## Authorization (AUTH_TABLE)
+
+<!-- Required when this PR adds, removes, renames, or changes the auth checks of
+any contract entrypoint (anything that calls `require_auth()`, or any admin /
+role / timelock gate). CI job "AUTH_TABLE coverage (#892)" runs
+`bash scripts/check-auth-table.sh` and fails on missing or stale entries. -->
+
+- [ ] No entrypoint was added, removed, renamed, or re-gated in this PR, **or**
+- [ ] [AUTH_TABLE.md](../AUTH_TABLE.md) is updated in this PR: each changed entrypoint lists its `require_auth` subject, admin/role-equality check, and timelock/kill-switch notes.
+- [ ] New privileged entrypoints are deny-by-default (`require_auth()` **and** an admin/role-equality check) and have an auth-negative test.
+- [ ] `bash scripts/check-auth-table.sh` passes locally.
+
 ## Test plan
 
 <!-- Unit / integration / e2e coverage, plus manual Freighter checklist when needed. -->

@@ -88,6 +88,51 @@ codes, and authz rules described below.
 - Keep the summary and this reference cross-linked so contributors can
   find the invariants from either entrypoint.
 
+## Status
+
+The settlement idempotency guard was correct in production code all along.
+The blocking issue was that the settlement test call-sites in
+`contracts/market/src/settlement.rs` used stale API signatures that no longer
+matched the current `#[contractimpl]` entrypoints:
+
+- `initialize_market` was called with 5 arguments — missing the required
+  `metadata_uri: Option<String>` sixth parameter.
+- `resolve_market` was called with 3 arguments (`market_id_str`, `outcome`,
+  `signature`) — missing the required `resolver: Address` first parameter and
+  the `expires_at: u64` fifth parameter.
+
+These mismatches caused compile-time failures across every settlement integration
+test, leaving the `PositionAlreadySettled` guard completely untested.
+
+### Fix applied
+
+All `client.initialize_market(...)` calls in `contracts/market/src/settlement.rs`
+updated to pass `&None` as the `metadata_uri` argument. All
+`client.resolve_market(...)` calls updated to pass `&resolver` as the first
+argument and `&(end_time + 86_400)` as the `expires_at` argument, satisfying
+the fail-closed expiry check introduced in #701.
+
+No production logic was changed.
+
+## Files touched
+
+- `contracts/market/src/settlement.rs` — all test call-sites updated to match
+  current API signatures. Production logic unchanged.
+- `contracts/market/src/test.rs` — three merge-corrupted test functions
+  (`test_get_market_returns_all_fields`, `test_upgrade_order_safety_complete_sequence`,
+  `test_get_market_reflects_closed_to_deposits`) restored to correct form; stale
+  `initialize_market` and `resolve_market` signatures fixed throughout.
+- `tests/market_test.rs` — stale call-sites in all integration tests updated.
+- `tests/client_entrypoints_test.rs` — stale call-sites updated.
+- `tests/event_snapshot_test.rs` — stale call-sites updated.
+- `tests/storage_limits_test.rs` — stale call-sites updated.
+- `tests/positions_test.rs` — stale call-site updated.
+- `tests/proptest_locked_invariant.rs` — stale call-site updated.
+- `tests/collateral_invariant_test.rs` — stale call-site updated.
+- `tests/settlement_test.rs` — workspace-level integration tests (already
+  used correct API signatures; no changes needed).
+- `SETTLEMENT_IDEMPOTENCY.md` — this file updated to document the fix.
+
 ## Test plan
 
 - Unit tests for invariants and auth negatives (wrong role, expired auth,
