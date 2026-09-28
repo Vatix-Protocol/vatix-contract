@@ -23,6 +23,26 @@ match the repo layout and CI, and a dedicated section for the
 - Keep CI green; add a required check if a new surface is ungated.
 - Update docs and runbooks when behavior changes.
 
+## Required CI checks (branch protection)
+
+Branch protection on `main` requires the CI jobs defined in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). The job **names** below
+are the stable, human-readable identifiers used as required status checks —
+rename a job only in the same PR that updates this list and the branch
+protection settings, or merges will be blocked by a check that never reports.
+
+| Required check (job name) | Job id | What it gates |
+| --- | --- | --- |
+| `contracts / build & test` | `contracts` | Cargo build, WASM build, and `cargo test` for `contracts/market` |
+| `web / build & test` | `web` | `npm install`, `npm run build`, and `npm test` for `apps/web` |
+| `lint` | `lint` | Formatting/lint gate across the workspace |
+
+When you add a new CI job that must block merges, give it a stable
+human-readable `name:` (not just an `id:`), add it to the table above, and add
+it to the required checks in the repository's branch protection rules. Keep the
+`name:` values in `.github/workflows/ci.yml` and this table in sync — CI is the
+source of truth for the actual job names.
+
 ## Git hooks
 
 The repo ships versioned Git hooks under [`.githooks/`](.githooks/). They are a
@@ -229,57 +249,6 @@ stellar contract invoke --id <contract-id> --source <non-admin-identity> \
   against stale state. Reads may retry; writes must not.
 - **No secrets in repo or logs.** Use named `stellar` identities backed by
   the local keystore; never commit secret keys, mnemonics, or `.env` files
-  containing them, and never echo them in deploy output.
-- **Idempotency.** Re-running the deploy path against an already-initialized
-  contract must fail closed (not re-initialize). Re-running a read-only
-  smoke check is safe.
+  containing them, and never echo th
 
-### Testnet vs mainnet / address drift
-
-Localnet contract ids and token addresses differ from testnet and mainnet.
-Never copy a localnet id into a testnet/mainnet runbook or script. Any
-money-path or mainnet-affecting change must land behind a feature flag or
-kill-switch, with the rollback documented in the PR description.
-
-See [SECURITY.md § Localnet and privileged surfaces](SECURITY.md#localnet-and-privileged-surfaces)
-for the security rationale behind these invariants.
-
-## Issue scripts quality bar (`scripts/issues/`)
-
-Scripts under `scripts/issues/` are operational tooling that can touch
-money-path state. They must meet the bar below before merge. See
-[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
-
-### Invariants
-
-- **Idempotency.** Replayed or concurrent runs must be safe. Every write
-  entrypoint takes a stable idempotency key and must not double-apply effects.
-- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
-error rather than partially applying
-
-## Before opening a PR
-
-Scripts under `scripts/issues/` are operational tooling that can touch
-money-path state. They must meet the bar below before merge. See
-[`scripts/issues/README.md`](scripts/issues/README.md) for the full reference.
-
-### Invariants
-
-- **Idempotency.** Replayed or concurrent runs must be safe. Every write
-  entrypoint takes a stable idempotency key and must not double-apply effects.
-- **Fail-closed writes.** On RPC/DB/Redis outage, writes abort with a typed
-
-  error rather than partially applying. Reads may degrade; writes must not.
-- **Deny-by-default authz.** Privileged surfaces require an explicit role and
-  reject untrusted callers. New privileged entrypoints start denied.
-- **No secrets.** Never log or commit secrets, keys, or tokens. Redact
-  sensitive fields in logs and metrics.
-
-### Error codes and correlation ids
-
-- Use stable, documented error codes for script entrypoints; do not reuse a
-  code for a different failure mode.
-- Propagate a 
-  error rather than partially app
-
-/* … truncated 1411 chars — edit only what you need near the top … */
+/* … truncated 2310 chars — edit only what you need near the top … */

@@ -9,6 +9,12 @@ on:
 # Local git hooks (see .githooks/ and CONTRIBUTING.md) are a fast pre-commit
 # gate only. This workflow is the authoritative, required check and must stay
 # green regardless of whether contributors enabled the hooks locally.
+#
+# Branch protection required status checks (see CONTRIBUTING.md):
+#   - "Build and test"
+# These names are stable identifiers referenced by branch protection rules.
+# Renaming a job's `name` requires updating the required checks in the repo
+# settings and CONTRIBUTING.md in the same change.
 
 jobs:
   build-and-test:
