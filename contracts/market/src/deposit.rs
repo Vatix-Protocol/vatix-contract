@@ -82,10 +82,7 @@ pub fn deposit_collateral(
     user.require_auth();
 
     // Emergency mode: deposits are blocked unless mode is Normal
-    crate::validation::require_emergency_mode_allows(
-        &env,
-        &[crate::types::EmergencyMode::Normal],
-    )?;
+    crate::validation::require_emergency_mode_allows(&env, &[crate::types::EmergencyMode::Normal])?;
 
     // Reentrancy guard: held for the remainder of this call, released
     // automatically when it goes out of scope.
@@ -421,7 +418,9 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount);
         // locked_collateral is share-based and is untouched by deposit; see
@@ -461,7 +460,9 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert_eq!(position.yes_shares, 0);
         assert_eq!(position.no_shares, 0);
@@ -477,7 +478,9 @@ mod tests {
         assert!(result.is_ok());
 
         let position = env.as_contract(&contract_id, || {
-            storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position should exist")
         });
         assert_eq!(position.total_deposited, deposit_amount + second_deposit);
         assert_eq!(position.locked_collateral, 0);
@@ -488,7 +491,7 @@ mod tests {
     #[test]
     fn test_deposit_event_contains_amount_and_new_total() {
         use soroban_sdk::{
-            testutils::{Events as _, Address as _},
+            testutils::{Address as _, Events as _},
             IntoVal, Map, Symbol, TryIntoVal, Val,
         };
 
@@ -521,7 +524,10 @@ mod tests {
 
         // Topic 0 = event name symbol
         let topic0: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "collateral_deposited"));
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "collateral_deposited")
+        );
 
         // Topic 1 = user
         let topic1: Address = last.1.get(1).unwrap().into_val(&env);
@@ -533,8 +539,14 @@ mod tests {
 
         // Data: amount and new_total
         let data: Map<Symbol, Val> = last.2.clone().try_into_val(&env).unwrap();
-        let amount_val: i128 = data.get(Symbol::new(&env, "amount")).unwrap().into_val(&env);
-        let new_total_val: i128 = data.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
+        let amount_val: i128 = data
+            .get(Symbol::new(&env, "amount"))
+            .unwrap()
+            .into_val(&env);
+        let new_total_val: i128 = data
+            .get(Symbol::new(&env, "new_total"))
+            .unwrap()
+            .into_val(&env);
         assert_eq!(amount_val, first);
         assert_eq!(new_total_val, first); // first deposit, new_total == amount
 
@@ -547,8 +559,14 @@ mod tests {
         let events2 = env.events().all();
         let last2 = events2.last().unwrap();
         let data2: Map<Symbol, Val> = last2.2.clone().try_into_val(&env).unwrap();
-        let amount2: i128 = data2.get(Symbol::new(&env, "amount")).unwrap().into_val(&env);
-        let new_total2: i128 = data2.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
+        let amount2: i128 = data2
+            .get(Symbol::new(&env, "amount"))
+            .unwrap()
+            .into_val(&env);
+        let new_total2: i128 = data2
+            .get(Symbol::new(&env, "new_total"))
+            .unwrap()
+            .into_val(&env);
         assert_eq!(amount2, second);
         assert_eq!(new_total2, first + second);
     }
@@ -613,9 +631,14 @@ mod tests {
             running += amount;
 
             let position = env.as_contract(&contract_id, || {
-                storage::get_position(&env, market_id, &user).unwrap().expect("position should exist")
+                storage::get_position(&env, market_id, &user)
+                    .unwrap()
+                    .expect("position should exist")
             });
-            assert_eq!(position.total_deposited, running, "after deposit of {amount}");
+            assert_eq!(
+                position.total_deposited, running,
+                "after deposit of {amount}"
+            );
         }
 
         // Final total must equal sum of all deposits
@@ -826,7 +849,10 @@ mod tests {
         });
 
         let locked = env.as_contract(&contract_id, || storage::is_deposit_locked(&env));
-        assert!(!locked, "deposit lock must be cleared after the call returns");
+        assert!(
+            !locked,
+            "deposit lock must be cleared after the call returns"
+        );
 
         // Second deposit still succeeds now that the lock is clear.
         let result = env.as_contract(&contract_id, || {

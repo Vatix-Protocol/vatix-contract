@@ -27,9 +27,27 @@
 #     `stellar keys generate` and never echoed.
 #
 # See CONTRIBUTING.md ("Localnet deploy") and SECURITY.md for the full runbook.
+#
+# Run `make help` for a one-line summary of every target.
+
+.PHONY: default all help test build verify fmt clean \
+	localnet-up localnet-deploy localnet-smoke localnet-down
 
 default: build
 
+# Print a one-line summary of every target.
+help:
+	@echo "build           Build deployable WASM via 'stellar contract build' (default)"
+	@echo "test            Build, then run 'cargo test'"
+	@echo "verify          Print the WASM hash to check reproducibility"
+	@echo "fmt             Format all crates with 'cargo fmt --all'"
+	@echo "clean           Remove build artifacts ('cargo clean')"
+	@echo "localnet-up     Start local Soroban network + funded identity"
+	@echo "localnet-deploy Build and deploy to localnet (address in .localnet/)"
+	@echo "localnet-smoke  Read-only 'get_admin' check against deployed contract"
+	@echo "localnet-down   Stop localnet and remove .localnet/"
+
+# Alias for `test` (build + full test suite).
 all: test
 
 # Run the full unit + integration test suite for the contract.
@@ -101,8 +119,10 @@ localnet-down:
 	-stellar network stop $(NETWORK)
 	-rm -rf .localnet
 
+# Format every crate in the workspace.
 fmt:
 	cargo fmt --all
 
+# Remove all build artifacts (target/).
 clean:
 	cargo clean

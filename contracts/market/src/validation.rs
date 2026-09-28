@@ -11,6 +11,14 @@ pub const MIN_DEPOSIT_AMOUNT: i128 = 10_000_000;
 /// payload size for every subsequent read of this market.
 pub const MAX_MARKET_TITLE_LENGTH: u32 = 500;
 
+/// Maximum allowed length (in bytes) for a market's `metadata_uri` (#914).
+///
+/// Metadata griefing mitigation: the URI is stored in persistent market
+/// storage and re-emitted in `MarketCreated`, so every byte is paid for by
+/// every subsequent reader/indexer. 512 bytes comfortably fits an `ipfs://`
+/// CIDv1, an `ar://` tx id, or an https URL; anything longer is rejected.
+pub const MAX_METADATA_URI_LENGTH: u32 = 512;
+
 /// Guard function to validate input before processing.
 ///
 /// This is a general-purpose validation guard that can be used in integration tests
@@ -40,7 +48,8 @@ fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractErr
     }
 
     const ONE_YEAR_SECONDS: u64 = 31_536_000;
-    if end_time > current_time + ONE_YEAR_SECONDS {
+    // Saturate instead of panicking on overflow near u64::MAX (#906).
+    if end_time > current_time.saturating_add(ONE_YEAR_SECONDS) {
         return Err(ContractError::InvalidTimestamp);
     }
 
@@ -69,11 +78,14 @@ pub fn validate_market_creation(
     Ok(())
 }
 
-/// Validates metadata URI format if provided
+/// Validates metadata URI format if provided (metadata griefing guard, #914).
 ///
 /// If metadata_uri is Some, it must:
 /// - Be non-empty
-/// - Be at most 2048 characters
+/// - Be at most [`MAX_METADATA_URI_LENGTH`] bytes
+/// - Contain only printable, non-whitespace ASCII (0x21..=0x7E), rejecting
+///   control characters, whitespace and non-ASCII bytes that could be used
+///   to spoof or corrupt the URI shown by frontends and indexers
 ///
 /// If metadata_uri is None, validation passes (optional field).
 ///
@@ -91,12 +103,13 @@ pub fn validate_market_creation(
 pub fn validate_metadata_uri(metadata_uri: &Option<String>) -> Result<(), ContractError> {
     if let Some(uri) = metadata_uri {
         let len = uri.len();
-        // Check non-empty
-        if len == 0 {
+        if len == 0 || len > MAX_METADATA_URI_LENGTH {
             return Err(ContractError::InvalidMetadataUri);
         }
-        // Check max length (2048 is standard URI limit)
-        if len > 2048 {
+        let mut buf = [0u8; MAX_METADATA_URI_LENGTH as usize];
+        let bytes = &mut buf[..len as usize];
+        uri.copy_into_slice(bytes);
+        if !bytes.iter().all(u8::is_ascii_graphic) {
             return Err(ContractError::InvalidMetadataUri);
         }
     }
@@ -111,9 +124,13 @@ fn validate_amount_positive(amount: i128) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Upper bound for any single amount (collateral or shares). Keeping amounts at
+/// or below `i128::MAX / 2` guarantees that adding two validated amounts can
+/// never overflow (#906).
+pub const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
+
 /// Validates that amount does not exceed reasonable limits
 fn validate_amount_reasonable(amount: i128) -> Result<(), ContractError> {
-    const MAX_REASONABLE_AMOUNT: i128 = i128::MAX / 2;
     if amount > MAX_REASONABLE_AMOUNT {
         return Err(ContractError::InvalidQuantity);
     }
@@ -152,10 +169,20 @@ fn validate_shares_not_empty(yes_shares: i128, no_shares: i128) -> Result<(), Co
     Ok(())
 }
 
-/// Validates share amounts
+/// Validates that neither share amount exceeds `MAX_REASONABLE_AMOUNT`, so
+/// downstream `yes + no` arithmetic cannot overflow (#906).
+fn validate_shares_bounded(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
+    if yes_shares > MAX_REASONABLE_AMOUNT || no_shares > MAX_REASONABLE_AMOUNT {
+        return Err(ContractError::InvalidShareAmount);
+    }
+    Ok(())
+}
+
+/// Validates share amounts: non-negative, not both zero, and bounded.
 pub fn validate_shares(yes_shares: i128, no_shares: i128) -> Result<(), ContractError> {
     validate_shares_non_negative(yes_shares, no_shares)?;
     validate_shares_not_empty(yes_shares, no_shares)?;
+    validate_shares_bounded(yes_shares, no_shares)?;
     Ok(())
 }
 
@@ -607,6 +634,37 @@ mod tests {
     }
 
     #[test]
+    fn test_shares_overflow_bound_rejected() {
+        assert!(validate_shares(MAX_REASONABLE_AMOUNT, MAX_REASONABLE_AMOUNT).is_ok());
+        assert_eq!(
+            validate_shares(i128::MAX, 0),
+            Err(ContractError::InvalidShareAmount)
+        );
+        assert_eq!(
+            validate_shares(0, MAX_REASONABLE_AMOUNT + 1),
+            Err(ContractError::InvalidShareAmount)
+        );
+    }
+
+    #[test]
+    fn test_collateral_amount_boundaries() {
+        assert!(validate_collateral_amount(MAX_REASONABLE_AMOUNT).is_ok());
+        assert_eq!(
+            validate_collateral_amount(MAX_REASONABLE_AMOUNT + 1),
+            Err(ContractError::InvalidQuantity)
+        );
+        assert_eq!(
+            validate_deposit_amount(0),
+            Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_end_time_no_overflow_near_u64_max() {
+        assert!(validate_end_time(u64::MAX, u64::MAX - 1).is_ok());
+    }
+
+    #[test]
     fn test_validate_cancelable_active_ok() {
         assert!(validate_cancelable(&MarketStatus::Active).is_ok());
     }
@@ -691,7 +749,10 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let contract_id = env.register(crate::MarketContract, ());
         env.as_contract(&contract_id, || {
-            assert_eq!(require_initialized(&env), Err(ContractError::NotInitialized));
+            assert_eq!(
+                require_initialized(&env),
+                Err(ContractError::NotInitialized)
+            );
         });
     }
 
@@ -740,7 +801,7 @@ mod tests {
     #[test]
     fn test_validate_metadata_uri_overlong_fails() {
         let env = soroban_sdk::Env::default();
-        let long_str = "a".repeat(2049);
+        let long_str = "a".repeat(MAX_METADATA_URI_LENGTH as usize + 1);
         let uri = Some(String::from_str(&env, &long_str));
         assert_eq!(
             validate_metadata_uri(&uri),
@@ -751,8 +812,25 @@ mod tests {
     #[test]
     fn test_validate_metadata_uri_exactly_max_length_passes() {
         let env = soroban_sdk::Env::default();
-        let max_str = "a".repeat(2048);
+        let max_str = "a".repeat(MAX_METADATA_URI_LENGTH as usize);
         let uri = Some(String::from_str(&env, &max_str));
         assert!(validate_metadata_uri(&uri).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_uri_rejects_whitespace_control_and_non_ascii() {
+        let env = soroban_sdk::Env::default();
+        for bad in [
+            "ipfs://Qm Xxx",
+            "ipfs://Qm\nXxx",
+            "ipfs://Qm\u{0}Xxx",
+            "ipfs://Qm\u{202E}Xxx",
+        ] {
+            let uri = Some(String::from_str(&env, bad));
+            assert_eq!(
+                validate_metadata_uri(&uri),
+                Err(ContractError::InvalidMetadataUri)
+            );
+        }
     }
 }

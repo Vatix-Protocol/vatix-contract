@@ -24,6 +24,10 @@ User-facing entrypoints that call `require_auth()` on the acting user (not an
 admin) are listed in the paragraph under each contract's table rather than as
 rows.
 
+The operational procedure for rotating the admin key (propose/accept,
+timelock, verification, rollback and emergency rotation) is documented in
+[`docs/admin-rotation-ceremony.md`](docs/admin-rotation-ceremony.md).
+
 Every row below follows the same two-step pattern unless noted otherwise:
 
 1. `caller.require_auth()` — cryptographic proof the caller signed the call.

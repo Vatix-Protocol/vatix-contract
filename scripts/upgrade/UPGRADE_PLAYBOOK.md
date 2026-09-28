@@ -228,10 +228,24 @@ mainnet-affecting transaction is submitted.
 
 ## WASM hash pinning
 
-Every upgrade pins the expected WASM hash for each contract in
-`deployments/<network>.json`. `upgrade.sh` recomputes the hash of the built
-artifact and aborts on mismatch, so a stale or tampered build cannot be
-submitted.
+Every upgrade pins the expected SHA-256 of each contract's release WASM in
+[`expected-hashes.json`](expected-hashes.json) (matched by `wasmFile`).
+`upgrade.sh` recomputes the hash of each built artifact during preflight and
+again immediately before upload, and aborts on mismatch, so a stale or
+tampered build cannot be submitted.
+
+Invariants:
+
+- **Fail closed.** A missing/invalid `expected-hashes.json`, a missing `jq`, an
+  unpinned (empty) hash, or a mismatch aborts before any contract is touched.
+- **Dev escape hatch.** `ALLOW_UNPINNED_HASHES=1` downgrades *unpinned* hashes
+  to a warning for testnet dry-runs; it never allows a mismatch and is refused
+  outright when `NETWORK=mainnet`.
+- **Pinning workflow.** Build with `bash scripts/verify-wasm-hash.sh <contract-dir>`,
+  paste the printed hash into `expectedSha256`, and commit it with the source
+  being deployed. `check-upgrade.sh` (Phase B) enforces the same pins in CI.
+- **Rollback.** Pins are data only; to roll back, restore the previous hashes
+  in `expected-hashes.json` and follow [Rollback](#rollback) with `rollback.sh`.
 
 ## Storage version compatibility matrix
 
@@ -265,7 +279,7 @@ runs can be traced in CI and ops dashboards.
 ## Staging dry-run checklist
 
 - [ ] `upgrade.sh --dry-run` completes with all preflight checks green.
-- [ ] WASM hashes match the pinned values in `deployments/<network>.json`.
+- [ ] WASM hashes match the pinned values in `scripts/upgrade/expected-hashes.json`.
 - [ ] Storage versions satisfy the compatibility matrix.
 - [ ] Admin address unchanged; privileged entrypoints still gated.
 - [ ] Resolution → Market and Market → Treasury callbacks verified on testnet.

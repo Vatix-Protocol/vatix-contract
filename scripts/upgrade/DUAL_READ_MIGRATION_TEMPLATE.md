@@ -173,6 +173,21 @@ Dual-read changes the *storage shape*, never the *authorization surface*.
   replayed or concurrent `set_market` with the same logical value leaves
   state unchanged, so retries and duplicate submissions are safe.
 
+## Staging dry-run
+
+Every dual-read bump must pass a staging (testnet) dry-run before mainnet:
+
+1. Deploy the **old** build to staging and seed records in the v(N) shape.
+2. Run `bash scripts/upgrade/staging_dry_run.sh --network testnet` against
+   the upgraded build; it must exit `0` (non-zero is a fail-closed stop, see
+   its stable exit codes).
+3. Verify both read branches on staging: an untouched v(N) record reads back
+   upcast with the new field's default, and a record written after the
+   upgrade reads back in the v(N+1) shape.
+4. Replay the same write twice and confirm state is unchanged (idempotency).
+5. Tick the matching boxes in `STAGING_DRY_RUN_CHECKLIST.md` and attach the
+   run output to the PR. Mainnet stays blocked until this is recorded.
+
 ## Rollback / flag strategy
 
 - Land the bump behind a feature flag or kill-switch when it touches the

@@ -83,13 +83,7 @@ fn update_position_sell_rejected_on_canceled_market() {
     let (env, contract_id, market_id, user, _token) = setup_canceled_market();
     let client = MarketContractClient::new(&env, &contract_id);
 
-    let result = client.try_update_position(
-        &user,
-        &market_id,
-        &(-1i128),
-        &0i128,
-        &6_000i128,
-    );
+    let result = client.try_update_position(&user, &market_id, &(-1i128), &0i128, &6_000i128);
     assert_eq!(result, Err(Ok(ContractError::MarketNotActive)));
 }
 
@@ -113,8 +107,7 @@ fn withdraw_rejected_on_canceled_market() {
     let (env, contract_id, market_id, user, _token) = setup_canceled_market();
     let client = MarketContractClient::new(&env, &contract_id);
 
-    let result =
-        client.try_withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
+    let result = client.try_withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
     assert_eq!(result, Err(Ok(ContractError::MarketNotActive)));
 }
 
@@ -344,7 +337,10 @@ fn reopen_canceled_market_restores_active_and_trading() {
 
     // Reopen via the explicit admin flow.
     let reopen_result = client.try_reopen_market(&admin, &market_id);
-    assert!(reopen_result.is_ok(), "reopen_market must succeed on a Canceled market");
+    assert!(
+        reopen_result.is_ok(),
+        "reopen_market must succeed on a Canceled market"
+    );
 
     // Verify the market_reopened event was emitted.
     let events = env.events().all();
@@ -352,7 +348,10 @@ fn reopen_canceled_market_restores_active_and_trading() {
         let t0: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
         t0 == soroban_sdk::Symbol::new(&env, "market_reopened")
     });
-    assert!(has_reopen_event, "market_reopened event must be emitted on successful reopen");
+    assert!(
+        has_reopen_event,
+        "market_reopened event must be emitted on successful reopen"
+    );
 
     // Trading is allowed again after reopen.
     let after_reopen = client.try_update_position(
@@ -362,7 +361,10 @@ fn reopen_canceled_market_restores_active_and_trading() {
         &0i128,
         &6_000i128,
     );
-    assert!(after_reopen.is_ok(), "trading must resume on a reopened market");
+    assert!(
+        after_reopen.is_ok(),
+        "trading must resume on a reopened market"
+    );
 }
 
 // ── #588 gap: withdraw_canceled_collateral is the one permitted withdrawal path ──
@@ -378,8 +380,7 @@ fn withdraw_unused_still_rejected_on_canceled_market() {
     let (env, contract_id, market_id, user, _token) = setup_canceled_market();
     let client = MarketContractClient::new(&env, &contract_id);
 
-    let result =
-        client.try_withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
+    let result = client.try_withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
     assert_eq!(
         result,
         Err(Ok(ContractError::MarketNotActive)),
@@ -419,8 +420,7 @@ fn withdraw_canceled_collateral_succeeds_on_canceled_market() {
     // Reclaim succeeds and returns the full deposited amount.
     let refund = client.withdraw_canceled_collateral(&user, &market_id);
     assert_eq!(
-        refund,
-        deposit,
+        refund, deposit,
         "refund must equal the full deposited collateral"
     );
 

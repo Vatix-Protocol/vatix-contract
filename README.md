@@ -499,9 +499,8 @@ This unified approach prevents artifact mismatches and ensures the WASM built lo
 [Clippy](https://doc.rust-lang.org/clippy/) is Rust's official linter and is enforced in CI. All warnings are treated as hard errors via `-D warnings`, so the build fails if any lint fires.
 
 ```bash
-# Run from the contract directory
-cd contracts/market
-cargo clippy -- -D warnings
+# Run from the repo root (checks every crate and target, same as CI)
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 To suppress a lint where it is intentionally acceptable, add a targeted attribute in the source rather than weakening the global flag:
@@ -512,6 +511,11 @@ fn my_function() { ... }
 ```
 
 The CI step is defined in `.github/workflows/ci.yml` and runs automatically on every push and pull request.
+
+## Formatting
+
+`rustfmt` is enforced workspace-wide in CI with `cargo fmt --all -- --check`.
+Rules live in the repo-root `rustfmt.toml`; run `cargo fmt --all` before pushing.
 
 ## Property Test Snapshots Policy (#766)
 

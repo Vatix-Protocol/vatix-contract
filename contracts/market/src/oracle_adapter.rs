@@ -179,13 +179,9 @@ impl OracleAdapter for ReflectorAdapter {
         // Call `lastprice(asset)` on the Reflector contract.
         // Reflector returns `Option<PriceData>` where PriceData = { price: i128, timestamp: u64 }.
         // When the oracle has no recent price for the asset it returns None.
-        let args: Vec<Val> =
-            soroban_sdk::vec![env, self.asset.clone().into_val(env)];
-        let price_data: Option<ReflectorPriceData> = env.invoke_contract(
-            &self.contract_id,
-            &Symbol::new(env, "lastprice"),
-            args,
-        );
+        let args: Vec<Val> = soroban_sdk::vec![env, self.asset.clone().into_val(env)];
+        let price_data: Option<ReflectorPriceData> =
+            env.invoke_contract(&self.contract_id, &Symbol::new(env, "lastprice"), args);
 
         let data = price_data.ok_or(ContractError::OraclePriceUnavailable)?;
 
@@ -289,8 +285,7 @@ impl OracleAdapter for PythAdapter {
         );
 
         // Step 2 — read the verified price for this feed.
-        let price_args: Vec<Val> =
-            soroban_sdk::vec![env, self.price_feed_id.clone().into_val(env)];
+        let price_args: Vec<Val> = soroban_sdk::vec![env, self.price_feed_id.clone().into_val(env)];
         let price_data: PythPrice = env.invoke_contract(
             &self.contract_id,
             &Symbol::new(env, "get_price"),
@@ -405,7 +400,12 @@ mod tests {
                 .instance()
                 .get(&soroban_sdk::symbol_short!("price"))
                 .unwrap_or(0);
-            PythPrice { price, conf: 0, exp: -8, publish_time: 1_000_000 }
+            PythPrice {
+                price,
+                conf: 0,
+                exp: -8,
+                publish_time: 1_000_000,
+            }
         }
     }
 
@@ -558,7 +558,10 @@ mod reflector_tests {
                 .instance()
                 .get(&soroban_sdk::symbol_short!("price"))
                 .unwrap_or(0);
-            Some(ReflectorPriceData { price, timestamp: 1_000_000 })
+            Some(ReflectorPriceData {
+                price,
+                timestamp: 1_000_000,
+            })
         }
     }
 

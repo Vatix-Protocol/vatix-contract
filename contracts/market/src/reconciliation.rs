@@ -92,8 +92,7 @@ pub fn get_position_token_parity(
         .unwrap_or((position.yes_shares, position.no_shares));
 
     let is_matched = position.is_settled
-        || (yes_token_balance == position.yes_shares
-            && no_token_balance == position.no_shares);
+        || (yes_token_balance == position.yes_shares && no_token_balance == position.no_shares);
 
     Ok(PositionTokenParity {
         yes_shares: position.yes_shares,
@@ -186,9 +185,7 @@ pub fn reconcile_position_tokens(
         token_client.burn(&market_id, user, &TokenKind::No, &(-no_delta));
     }
 
-    events::emit_position_tokens_reconciled(
-        env, market_id, user, admin, yes_delta, no_delta,
-    );
+    events::emit_position_tokens_reconciled(env, market_id, user, admin, yes_delta, no_delta);
 
     get_position_token_parity(env, market_id, user)
 }
@@ -262,14 +259,8 @@ mod tests {
         env.as_contract(&contract_id, || {
             storage::set_version(&env);
             storage::set_reconciliation_record(&env, &correlation_id, market_id, &user);
-            let err = reconcile_position_tokens(
-                &env,
-                &admin,
-                market_id,
-                &user,
-                &correlation_id,
-            )
-            .unwrap_err();
+            let err = reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id)
+                .unwrap_err();
             assert_eq!(err, ContractError::ReconciliationAlreadyApplied);
         });
     }
