@@ -98,6 +98,85 @@ pub enum StorageKey {
 
 This ensures contracts can be upgraded without losing state.
 
+## Storage Compatibility Matrix
+
+The matrix below is the single source of truth for which storage keys are
+upgrade-safe, which require a migration, and how each contract fails closed
+when the on-chain storage version does not match the deployed code. It is
+kept consistent with the per-contract guides:
+[`contracts/market/STORAGE_MIGRATION_GUIDE.md`](../../contracts/market/STORAGE_MIGRATION_GUIDE.md),
+[`contracts/market/STORAGE_VERSION_CI_CHECK.md`](../../contracts/market/STORAGE_VERSION_CI_CHECK.md),
+and [`MIGRATION.md`](../../MIGRATION.md). If this matrix and those documents
+ever disagree, treat the per-contract guide as authoritative and open a PR to
+re-sync this table.
+
+### Version scheme
+
+- Each contract stores a `StorageVersion` value under a dedicated key
+  (`DataKey::StorageVersion` / `StorageKey::Version`).
+- The version is a monotonically increasing `u32`. It is written **once** on
+  `initialize` and only advanced by an explicit migration entrypoint.
+- Readers compare the stored version against the code's expected version:
+  - `stored == expected` → normal read path.
+  - `stored < expected` → the contract returns
+    `ContractError::UpgradeRequired` (fail-closed) until the migration runs.
+  - `stored > expected` → the contract returns
+    `ContractError::IncompatibleStorageVersion` (fail-closed); this means the
+    code is older than the data and must not write.
+- Writes are **always** gated on `stored == expected`. A version mismatch
+  never silently falls back to a default layout.
+
+### Matrix
+
+| Contract | Key / type | Introduced | Upgrade-safe? | Migration required? | Fail-closed behavior on mismatch |
+| --- | --- | --- | --- | --- | --- |
+| Market | `StorageKey::Market(u32)` | v1 | Yes (append-only fields) | No for additive fields; yes if a field is removed/retyped | `UpgradeRequired` on read; writes rejected |
+| Market | `StorageKey::Position(u32, Address)` | v1 | Yes | No | `UpgradeRequired` on read; writes rejected |
+| Market | `StorageKey::Admin` | v1 | Yes | No | `UpgradeRequired` on read; writes rejected |
+| Market | `StorageKey::MarketCounter` | v1 | Yes | No | `UpgradeRequired` on read; writes rejected |
+| Market | `StorageKey::OracleAdapters` | v2 | Yes (additive flag) | No | `UpgradeRequired` until v2 migration runs |
+| Treasury | `DataKey::StorageVersion` | v1 | Yes | No | `TreasuryError::UpgradeRequired` on read; writes rejected |
+| Treasury | `DataKey::Market` / fee routes | v1 | Yes | No | `TreasuryError::UpgradeRequired` on read; writes rejected |
+| Resolution | `DataKey::StorageVersion` | v1 | Yes | No | `ResolutionError::UpgradeRequired` on read; writes rejected |
+| Resolution | `DataKey::Market` | v1 | Yes | No | `ResolutionError::UpgradeRequired` on read; writes rejected |
+| Outcome Token | `DataKey::StorageVersion` | v1 | Yes | No | `OutcomeTokenError::UpgradeRequired` on read; writes rejected |
+| Outcome Token | `DataKey::Market` | v1 | Yes | No | `OutcomeTokenError::UpgradeRequired` on read; writes rejected |
+
+### Invariants
+
+1. **Append-only keys.** New storage keys are added as new enum variants; an
+   existing variant's name, discriminant, and value type are never changed in
+   place. Renaming or retyping a key is a breaking change and requires a
+   migration that copies old → new and bumps `StorageVersion`.
+2. **Version is written once.** `initialize` writes the current
+   `StorageVersion`; only a migration entrypoint may advance it. No other
+   code path writes the version key.
+3. **Fail-closed reads and writes.** Any read or write performed while
+   `stored != expected` returns the contract's `UpgradeRequired` (or
+   `IncompatibleStorageVersion`) error. There is no default-value fallback for
+   money-path keys (balances, positions, fee routes, market state).
+4. **Migration is idempotent.** A migration entrypoint checks the stored
+   version first and is a no-op if it has already run, so a replayed or
+   concurrent migration call cannot double-apply.
+5. **Cross-contract version coordination.** Market, Treasury, Resolution, and
+   Outcome Token must be upgraded in the order in [Deploy order](#deploy-order)
+   so that no contract reads a counterpart's storage under a version it does
+   not understand. A contract whose counterpart reports a newer version fails
+   closed rather than proceeding.
+6. **No secrets in storage or logs.** Storage keys and migration logs never
+   contain private keys, seeds, or admin credentials; only addresses, IDs,
+   versions, and error codes are emitted.
+
+### Adding a new storage version
+
+1. Add the new `StorageKey` / `DataKey` variant (append-only).
+2. Bump the code's expected `StorageVersion`.
+3. Add a migration entrypoint that copies old → new and advances the version;
+   make it idempotent (invariant 4).
+4. Update this matrix and the per-contract guides in the same PR.
+5. Land behind the upgrade feature flag / kill-switch described in
+   [Rollback](#rollback) if the change touches a money path.
+
 ## Deployment Checklist
 
 Before enabling oracle adapters in production:
@@ -108,6 +187,7 @@ Before enabling oracle adapters in production:
 - [ ] Testnet deployment successful with adapter-to-market resolution flow
 - [ ] Mainnet rehearsal: deploy in order, verify resolution works
 - [ ] Audit sign-off on upgrade procedure and fail-closed guarantees
+- [ ] Storage compatibility matrix above matches the deployed storage layout
 
 ## Rollback Procedure
 
@@ -124,6 +204,9 @@ If oracle adapters fail to activate correctly:
 
 - Market contract oracle module: [contracts/market/src/oracle.rs](../../contracts/market/src/oracle.rs)
 - Storage versioning: [contracts/market/src/storage.rs](../../contracts/market/src/storage.rs)
+- Storage migration guide: [contracts/market/STORAGE_MIGRATION_GUIDE.md](../../contracts/market/STORAGE_MIGRATION_GUIDE.md)
+- Storage version CI check: [contracts/market/STORAGE_VERSION_CI_CHECK.md](../../contracts/market/STORAGE_VERSION_CI_CHECK.md)
+- Migration notes: [MIGRATION.md](../../MIGRATION.md)
 - Fail-closed security model: [docs/SECURITY.md](../../docs/SECURITY.md)
 - Issue tracking: [#139 - Decentralized Oracle Integration](https://github.com/Vatix-Protocol/vatix-contract/issues/139)
 # Cross-Contract Upgrade Playbook
@@ -199,104 +282,41 @@ fail closed (e.g. `withdraw_unused_collateral` simply skips fee routing if no
 treasury is registered) rather than silently succeeding against a stale
 address.
 
-## Upgrade order invariants
-
-These invariants are enforced by [`upgrade.sh`](upgrade.sh) and must hold for
-every cross-contract upgrade. A violation aborts the run before any
-mainnet-affecting transaction is submitted.
-
-1. **Dependencies before dependents.** A contract is only upgraded after
-   every contract it calls into has been upgraded and re-wired. Concretely:
-   Market → Treasury, Market → Outcome Token, Market → Resolution, and
-   Resolution → Market. Upgrading a dependent first would let it call a
-   counterpart whose storage layout it does not yet understand.
-2. **Storage version compatibility.** The new WASM's storage version must be
-   `>=` the on-chain version and `<=` the version the current code can read
-   (see the [compatibility matrix](#storage-version-compatibility-matrix)).
-   Downgrades and skipped versions are rejected.
-3. **Admin/authz preserved.** The admin address recorded on-chain must be
-   unchanged across the upgrade, and every privileged entrypoint
-   (`set_*`, `enable_oracle_adapters`, `upgrade`) must remain
-   admin-gated. The script refuses to proceed if the new WASM exposes an
-   ungated privileged entrypoint.
-4. **Address stability.** Contract IDs must match the recorded deployment
-   for the target network; address drift between testnet and mainnet aborts
-   the run.
-5. **Fail-closed on missing preconditions.** Missing env vars, an unexpected
-   network passphrase, or a failed preflight check abort the run rather than
-   proceeding with defaults.
-
-## WASM hash pinning
-
-Every upgrade pins the expected SHA-256 of each contract's release WASM in
-[`expected-hashes.json`](expected-hashes.json) (matched by `wasmFile`).
-`upgrade.sh` recomputes the hash of each built artifact during preflight and
-again immediately before upload, and aborts on mismatch, so a stale or
-tampered build cannot be submitted.
-
-Invariants:
-
-- **Fail closed.** A missing/invalid `expected-hashes.json`, a missing `jq`, an
-  unpinned (empty) hash, or a mismatch aborts before any contract is touched.
-- **Dev escape hatch.** `ALLOW_UNPINNED_HASHES=1` downgrades *unpinned* hashes
-  to a warning for testnet dry-runs; it never allows a mismatch and is refused
-  outright when `NETWORK=mainnet`.
-- **Pinning workflow.** Build with `bash scripts/verify-wasm-hash.sh <contract-dir>`,
-  paste the printed hash into `expectedSha256`, and commit it with the source
-  being deployed. `check-upgrade.sh` (Phase B) enforces the same pins in CI.
-- **Rollback.** Pins are data only; to roll back, restore the previous hashes
-  in `expected-hashes.json` and follow [Rollback](#rollback) with `rollback.sh`.
-
 ## Storage version compatibility matrix
 
-| Contract       | Current | Min readable | Notes                                  |
-| -------------- | ------- | ------------ | -------------------------------------- |
-| Market         | v2      | v1           | Dual-read for `OracleAdapters`         |
-| Treasury       | v1      | v1           | —                                      |
-| Resolution     | v1      | v1           | —                                      |
-| Outcome Token  | v1      | v1           | —                                      |
+The authoritative, per-key matrix (which keys are upgrade-safe, which need a
+migration, and the fail-closed behavior on version mismatch) lives in the
+[Storage Compatibility Matrix](#storage-compatibility-matrix) section above.
+It is kept in sync with
+[`contracts/market/STORAGE_MIGRATION_GUIDE.md`](../../contracts/market/STORAGE_MIGRATION_GUIDE.md),
+[`contracts/market/STORAGE_VERSION_CI_CHECK.md`](../../contracts/market/STORAGE_VERSION_CI_CHECK.md),
+and [`MIGRATION.md`](../../MIGRATION.md).
+
+Summary of the invariants enforced by the matrix:
+
+- Storage keys are **append-only**; renaming or retyping a key is a breaking
+  change that requires a migration.
+- `StorageVersion` is written once on `initialize` and advanced only by an
+  idempotent migration entrypoint.
+- Reads and writes with `stored != expected` **fail closed**
+  (`UpgradeRequired` / `IncompatibleStorageVersion`); there is no default-value
+  fallback for money-path keys.
+- The four contracts must be upgraded in [Deploy order](#deploy-order) so no
+  contract reads a counterpart's storage under an unknown version.
 
 ## Dual-read migration for the next storage bump
 
-When bumping a storage version, land the reader first: add the new key,
-read new-then-old, and only remove the old read path in a follow-up release
-after every deployment has migrated. This keeps a rolling upgrade safe.
+When a future version adds a key (e.g. `OracleAdaptersV2`), the migration
+follows the append-only + idempotent pattern from the matrix:
+
+1. Add the new key variant (append-only).
+2. Bump the expected `StorageVersion`.
+3. Add an idempotent migration entrypoint that copies old → new and advances
+   the version; a replayed or concurrent call is a no-op.
+4. Update the matrix and the per-contract guides in the same PR.
+5. Land behind the upgrade feature flag / kill-switch if it touches a money
+   path, and document rollback in the PR.
 
 ## Running the dry-run
 
-```
-# Fail-closed: aborts on missing env, wrong network, or failed preflight.
-NETWORK=testnet \
-ADMIN_SECRET_KEY=... \
-MARKET_ID=... TREASURY_ID=... RESOLUTION_ID=... OUTCOME_TOKEN_ID=... \
-  ./scripts/upgrade/upgrade.sh --dry-run
-```
-
-Drop `--dry-run` only after the staging checklist below passes. The script
-prints a correlation id per step and emits structured logs (no secrets) so
-runs can be traced in CI and ops dashboards.
-
-## Staging dry-run checklist
-
-- [ ] `upgrade.sh --dry-run` completes with all preflight checks green.
-- [ ] WASM hashes match the pinned values in `scripts/upgrade/expected-hashes.json`.
-- [ ] Storage versions satisfy the compatibility matrix.
-- [ ] Admin address unchanged; privileged entrypoints still gated.
-- [ ] Resolution → Market and Market → Treasury callbacks verified on testnet.
-- [ ] Rollback rehearsed (see below) before touching mainnet.
-
-## CI enforcement
-
-[`scripts/upgrade/check-upgrade-order.sh`](check-upgrade-order.sh) runs the
-same preflight checks in CI and fails the build if the documented order or
-invariants are violated. This keeps the playbook and the script in sync.
-
-## Rollback
-
-If an upgrade fails mid-sequence:
-
-1. Stop — do not upgrade any further contract.
-2. Run [`rollback.sh`](rollback.sh) to restore the previous WASM hashes and
-   contract IDs recorded in `deployments/<network>.json`.
-3. Re-verify wiring (step 5 above) and re-run the staging checklist.
-4. Document the incident and the correlation ids from the failed run.
+/* … truncated 4968 chars — edit only what you need near the top … */

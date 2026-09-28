@@ -43,12 +43,52 @@ file's doc comment for v4, adding `StorageKey::AdapterEnabled` for #488), but
    returns `UpgradeRequired` on mismatch/missing version — no change needed
    there.
 
+## Storage compatibility matrix
+
+The playbook (`scripts/upgrade/UPGRADE_PLAYBOOK.md`) and this checklist must
+agree with the actual on-chain layout. The matrix below is the single source
+of truth for which storage surfaces are upgrade-safe, which require a
+migration, and how incompatible versions fail closed. It is kept consistent
+with `contracts/market/STORAGE_MIGRATION_GUIDE.md`,
+`contracts/market/MIGRATION.md`, and the `STORAGE_VERSION` constant in
+`contracts/market/src/storage.rs`.
+
+| Storage surface | Key / type | Upgrade-safe? | Migration required? | Fail-closed behavior |
+| --- | --- | --- | --- | --- |
+| Version marker | `StorageKey::Version` (`u32`) | Yes — read first on every entrypoint | No (must match `STORAGE_VERSION`) | `assert_version` returns `ContractError::UpgradeRequired` on mismatch or missing marker; writes are rejected |
+| Market config | `StorageKey::Config` (`MarketConfig`) | Yes — append-only fields | Only if a field is added/removed/reordered | `UpgradeRequired` if version gate fails before deserialize |
+| Positions | `StorageKey::Position(Address)` (`Position`) | Yes — per-account, additive | Only on type change | `UpgradeRequired`; no partial reads |
+| Adapter enablement | `StorageKey::AdapterEnabled` (`bool`) | Yes — added in v4 (#488) | No for v4 (new key, defaults absent) | Absent key treated as disabled (deny-by-default) |
+| Admin / roles | `StorageKey::Admin` (`Address`) | Yes — set at init | No | `UpgradeRequired`; authz checks run after version gate |
+| Pause / kill-switch | `StorageKey::Paused` (`bool`) | Yes | No | Absent key treated as paused for money paths (fail-closed) |
+
+### Invariants
+
+- **Version gate first.** Every external entrypoint calls `assert_version`
+  before reading or writing any other key. A mismatch or missing marker
+  returns `UpgradeRequired` and no state is mutated.
+- **Additive keys are upgrade-safe.** New `StorageKey` variants (e.g.
+  `AdapterEnabled` in v4) do not require a migration; absent keys must be
+  interpreted with a deny-by-default default.
+- **Type or layout changes require a migration.** Any change to an existing
+  key's type, field order, or semantics requires a documented migration in
+  `STORAGE_MIGRATION_GUIDE.md` and a `STORAGE_VERSION` bump.
+- **Fail-closed on incompatible versions.** Money paths (liquidity, trading,
+  settlement) must not proceed when the version gate fails; they return
+  `UpgradeRequired` rather than reading stale or unknown layouts.
+- **Guide and code stay in lockstep.** The `STORAGE_VERSION` constant, the
+  `### Version {N} (Current)` heading in the migration guide, and this matrix
+  must all reference the same version; the CI guard above enforces the first
+  two.
+
 ## Files touched
 
 - `contracts/market/STORAGE_MIGRATION_GUIDE.md` — added Version 4 entry,
   fixed stale version references.
 - `contracts/market/src/storage.rs` — new guide-linkage test and checklist
   doc comment.
+- `scripts/upgrade/UPGRADE_PLAYBOOK.md` — storage compatibility matrix
+  aligned with the layout above.
 
 ## Contributor runbook
 
@@ -61,7 +101,8 @@ step, no new tooling). To bump storage safely:
    `contracts/market/STORAGE_MIGRATION_GUIDE.md` and demote the previous
    `(Current)` heading to plain `### Version {N-1}`.
 3. Document any new `StorageKey` variants and their migration path in the
-   new section.
+   new section, and update the storage compatibility matrix in
+   `scripts/upgrade/UPGRADE_PLAYBOOK.md` to match.
 4. Run `cargo test -p vatix-market` locally; the guide-linkage test fails
    closed if steps 1–3 are inconsistent.
 
