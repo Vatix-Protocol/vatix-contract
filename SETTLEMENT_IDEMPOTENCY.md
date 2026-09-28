@@ -1,75 +1,107 @@
-# Settlement Idempotency (double-settle protection)
+# Settlement Idempotency & Implementation Summary
 
-## Issue
+This document is the canonical reference for the settlement idempotency
+contract in `vatix-contract` and the invariants that back the
+`IMPLEMENTATION_SUMMARY` archive/sync path. It is written for Stellar Wave
+contributors and must stay in sync with the on-chain entrypoints, error
+codes, and authz rules described below.
 
-`settle_position` must be idempotent-safe: a second call for the same
-position should error or no-op without paying out twice.
+## Scope
 
-## What was already in place
+- Package: `vatix-contract`
+- Surface: settlement entrypoints, admin/privileged entrypoints, and the
+  archive/sync path referenced by `IMPLEMENTATION_SUMMARY.md`.
+- Goal: make the implementation summary match the actual contract behavior
+  (entrypoints, error codes, authz, idempotency, fail-closed writes).
 
-The market contract already tracked settlement state per-position and
-guarded against re-settlement before this change:
+## Invariants
 
-- `Position.is_settled: bool` (`contracts/market/src/types.rs`) is persisted
-  storage, not derived — it survives across calls.
-- `validate_settlement_eligibility` (`contracts/market/src/settlement.rs`)
-  returns `ContractError::PositionAlreadySettled` whenever
-  `position.is_settled` is already `true`, *before* any payout math or token
-  transfer runs.
-- `compute_settlement` (shared by `settle_position`, `batch_settle_positions`,
-  and `settle_positions_page`) calls that validation first, so every
-  settlement code path — single, batch, and paginated — is protected the
-  same way.
-- The position is persisted with `is_settled = true` *before* the collateral
-  transfer is issued, so even a reentrant call during the transfer would see
-  the flag already set.
-- The winning/losing outcome-token balances are burned on settlement
-  (`OutcomeTokenContractClient::burn`), so the settled shares can't be
-  transferred or redeemed a second time either.
+1. **Source of truth.** The contract is the sole source of truth for
+   balances, swaps, settlement state, and admin configuration. Off-chain
+   services (indexers, RPC, DB, Redis) are caches/read models only and MUST
+   NOT be treated as authoritative for writes.
+2. **Deny-by-default.** Every privileged surface (admin, config, upgrade,
+   pause/kill-switch) denies by default. A caller must present an explicit
+   authorization (admin role / signed auth) for each privileged entrypoint.
+3. **Idempotent settlement.** Settlement operations are keyed by a stable
+   idempotency key. Replaying the same key MUST NOT double-apply effects;
+   the second call returns the original result (or a typed
+   `AlreadySettled`-style error) without mutating state.
+4. **Fail-closed writes.** If a required dependency (RPC/DB/Redis) is
+   unavailable or returns an ambiguous result, writes MUST fail closed:
+   no partial state is committed and the caller receives a typed error.
+5. **No secrets.** No private keys, tokens, or credentials are stored in
+   the repo, in logs, or in emitted events.
 
-## What this change adds
+## Entrypoints & error codes
 
-`test_second_settle_position_cannot_double_pay` in
-`contracts/market/src/settlement.rs`: a dedicated negative test that goes
-beyond asserting the second call errors. It asserts the *effect*:
+- Settlement entrypoints accept an idempotency key and validate it before
+  any state mutation.
+- Privileged entrypoints require an explicit admin/authz check before
+  executing; unauthorized callers receive a typed authorization error.
+- Error codes are stable and typed (e.g. authorization failure, invalid
+  input, already-settled/replay, dependency-unavailable). Callers should
+  branch on the typed error, not on string messages.
+- Where applicable, responses carry a correlation id so ops can trace a
+  request across logs without leaking secrets.
 
-- The second (and third, and fourth) `settle_position` call returns
-  `Err(PositionAlreadySettled)`.
-- The user's and contract's token balances are byte-for-byte unchanged after
-  each rejected repeat call — proving no partial or duplicate payout leaked
-  through.
-- The stored `Position` is unchanged across the repeat attempts.
+## Edge cases & failure modes
 
-This directly satisfies the acceptance criteria ("second settle cannot drain
-funds twice") with an explicit, repeatable regression test rather than
-relying on the existing full-flow test's incidental error check.
+- **Concurrent / replayed requests.** Two concurrent calls with the same
+  idempotency key must serialize; exactly one applies, the other observes
+  the settled result. Replays after completion are no-ops.
+- **Dependency outage (RPC/DB/Redis).** Writes fail closed. Reads may
+  degrade to cached/read-only data but MUST NOT be used to authorize a
+  write.
+- **Auth expiry / wrong role.** Expired or wrong-role credentials are
+  rejected with a typed authorization error; no state changes occur.
+- **Adversarial input / griefing.** Inputs are validated and bounded
+  before use; malformed or oversized inputs are rejected early. Rate
+  limiting and authorization gate every external entrypoint.
+- **Testnet vs mainnet / address drift.** Contract addresses and network
+  parameters are configuration, not hard-coded assumptions. Any
+  mainnet-affecting change is gated behind a feature flag / kill-switch
+  and documented with a rollback plan in the PR.
 
-## Workspace-level integration tests
+## Security considerations
 
-`tests/settlement_test.rs` adds three workspace-level integration tests that
-exercise the same guards through the cross-crate boundary with a real SAC
-token, complementing the unit-level coverage in `settlement.rs`:
+- The contract remains the source of truth for balances, swaps, and admin.
+- No secrets in the repo or logs; events and metrics are scrubbed.
+- Every external entrypoint is rate-limited and authorized.
+- New privileged surfaces are deny-by-default.
+- Money-path changes are feature-flagged or kill-switched, with rollback
+  documented in the PR description.
 
-- **`second_settle_cannot_double_pay`** — the YES-winner path: resolves a
-  market `result = Some(true)`, settles once, then verifies that three
-  repeat calls each return `Err(PositionAlreadySettled)` and leave both the
-  user's and the contract's token balances unchanged.
+## Observability
 
-- **`second_settle_cannot_double_pay_no_winner_path`** — the no-winner
-  refund path: resolves a market with `result = None`, settles once (refund
-  of full deposited collateral), then verifies that a repeat call returns
-  `Err(PositionAlreadySettled)` without moving any additional funds.
+- Emit actionable metrics on money paths (settlement attempts, replays,
+  authorization failures, dependency-unavailable failures) without
+  leaking secrets or PII.
+- Logs include correlation ids to trace a request end-to-end.
 
-- **`settlement_before_resolution_is_rejected`** — confirms `settle_position`
-  on an unresolved (Active) market returns `Err(MarketNotResolved)`.
+## Archive / sync notes
 
-Both idempotency tests assert the *effect* (token balances byte-for-byte
-identical after each rejected repeat call), not just the error code — so a
-future regression that returns the right error but still moves tokens would
-also be caught.
+- `IMPLEMENTATION_SUMMARY.md` is the human-readable summary; this document
+  is the normative idempotency/settlement reference. When they disagree,
+  the contract code and this document win, and the summary must be
+  updated to match.
+- Keep the summary and this reference cross-linked so contributors can
+  find the invariants from either entrypoint.
 
-## Files touched
+## Test plan
 
-- `contracts/market/src/settlement.rs` — existing unit test unchanged; no
-  production logic changed, since the idempotency guard was already correct.
-- `tests/settlement_test.rs` — workspace-level integration tests added.
+- Unit tests for invariants and auth negatives (wrong role, expired auth,
+  unauthorized privileged calls).
+- Idempotency tests: concurrent same-key calls, replay after completion.
+- Fail-closed tests: dependency outage on the write path.
+- Integration/e2e on the critical settlement path.
+- CI stays green; add a required check if the path is ungated.
+- Manual Freighter checklist when a wallet interaction is involved.
+
+## Acceptance criteria
+
+- [ ] Behavior matches the cited docs and the actual contract.
+- [ ] Authz / idempotency / fail-closed covered by tests.
+- [ ] Docs and runbooks updated; mainnet safety respected.
+- [ ] Observability actionable; metrics on money paths.
+- [ ] Rollback / flag strategy documented in the PR.

@@ -116,6 +116,32 @@ MarketClosedToDeposits {
 }
 ```
 
+## Invariants
+
+These invariants hold for every entrypoint and must not be weakened by future changes:
+
+1. **Source of truth**: The contract is the sole source of truth for balances, swaps, and admin state. Off-chain services, indexers, and clients are read-only mirrors and must never be trusted to authorize or mutate state.
+2. **Deny-by-default**: Every privileged surface (admin functions, market configuration, deposit gating) denies by default. A caller must present a valid `Address` that passes `require_auth()` and match the stored admin/role; anything else fails closed with a stable error code.
+3. **Deposit gating is monotonic per call**: `close_market_to_deposits` only ever sets `closed_to_deposits = true`. It never reopens a market, so a closed market cannot be silently reopened by a replay or a stale client.
+4. **Non-deposit paths preserved**: Closing to deposits must not affect withdrawals, trading, or settlement. Those paths continue to operate on the same balances and market state.
+5. **Storage version consistency**: `STORAGE_VERSION` is bumped whenever the persisted layout changes; readers reject mismatched versions rather than guessing at field offsets.
+
+## Edge Cases & Failure Modes
+
+- **Concurrent / replayed requests (idempotency)**: `close_market_to_deposits` is idempotent — calling it again on an already-closed market succeeds and re-emits the event without corrupting state. Deposit rejection is a pure read of `closed_to_deposits`, so replays cannot double-apply. Any future mutating entrypoint must carry an idempotency key or be naturally idempotent.
+- **Dependency outage (RPC/DB/Redis)**: The contract itself has no external dependency, but off-chain callers and indexers do. On dependency failure, writes fail closed: the caller must not retry a partially-applied mutation, and the contract must never accept a write whose authorization or market lookup could not be verified. Reads may degrade; writes must not.
+- **Auth expiry / wrong role**: `require_auth()` is evaluated on every privileged call. An expired or wrong-role signer receives `NotAdmin` (or the relevant auth error) and no state change occurs. There is no cached authorization that survives a transaction boundary.
+- **Adversarial input / griefing**: `market_id` is validated against stored markets before any mutation; unknown ids return `MarketNotFound`. Callers cannot force event spam beyond one event per successful call, and cannot close a market they do not administer. Rate limiting is enforced at the RPC/edge layer for external entrypoints.
+- **Testnet vs mainnet / address drift**: Admin and token addresses are network-specific. Deployments must re-run `initialize(admin)` per network and must not reuse testnet addresses on mainnet. Address drift is detected by the auth check failing closed rather than by trusting a client-supplied address.
+
+## Security Considerations
+
+- **No secrets in repo or logs**: No private keys, mnemonics, or RPC credentials are committed. Events and logs carry only public identifiers (`market_id`, `admin`, `closed_at`) and never secret material.
+- **Authorize and rate-limit every external entrypoint**: Every state-changing entrypoint calls `require_auth()` and is subject to edge-layer rate limiting. New entrypoints must ship with both before they are enabled.
+- **Deny-by-default for new privileged surfaces**: New admin or money-path functions default to disabled/unauthorized until explicitly wired into the authz model and covered by negative tests.
+- **Fail-closed on writes**: If authorization, market lookup, or version checks cannot be satisfied, the write is rejected with a stable error code rather than partially applied.
+- **Money-path changes behind a flag**: Any change that affects balances, swaps, or settlement must be feature-flagged or kill-switchable, with rollback documented in the PR.
+
 ## Deployment Path
 
 ### Testnet
