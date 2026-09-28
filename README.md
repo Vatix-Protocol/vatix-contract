@@ -55,6 +55,15 @@ See [`docs/cross-contract-call-graph.md`](docs/cross-contract-call-graph.md) for
 
 Please review our [Security Policy](SECURITY.md) for information on reporting contract vulnerabilities.
 
+### Hardening follow-up issue archives
+
+The following issue archives document the repo’s residual hardening follow-ups for authz, observability, and the contributor operating model:
+
+- [COMPLETE_ISSUE_966.md](COMPLETE_ISSUE_966.md) — follow-up 4 across authz, ops-safe logging, and docs
+- [COMPLETE_ISSUE_967.md](COMPLETE_ISSUE_967.md) — follow-up 5 across authz, runbooks, and fail-closed policy
+- [COMPLETE_ISSUE_968.md](COMPLETE_ISSUE_968.md) — follow-up 6 across client trust, traceability, and rollback controls
+- [COMPLETE_ISSUE_969.md](COMPLETE_ISSUE_969.md) — follow-up 7 across final authz and docs hardening
+
 ### Storage Migrations
 
 The Market contract uses storage versioning to ensure data integrity across upgrades. See comprehensive documentation:
