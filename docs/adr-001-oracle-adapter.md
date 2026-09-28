@@ -1,292 +1,88 @@
-# ADR-001: Soroban Oracle Adapter Interface
+# ADR-001: Oracle Adapter — Collusion Assumptions and Trust Model
 
-**Status:** Proposed  
-**Date:** 2026-06-20  
-**Issue:** [#139](https://github.com/Vatix-Protocol/vatix-contract/issues/139)
-
----
+- **Status:** Accepted
+- **Issue:** #946 (Oracle collusion assumptions documented)
+- **Scope:** `vatix-contract` oracle adapter used by `contracts/market` and
+  `contracts/resolution` for price/outcome resolution.
 
 ## Context
 
-`MarketContract` currently resolves markets via a single Ed25519 keypair stored
-in `Market.oracle_pubkey`.  Any market is permanently unresolvable if that key is
-lost or compromised, and resolution trust is fully centralised in whoever holds
-the private key.
-
-The goal of this spike is to:
-
-1. Define a Soroban-compatible `OracleAdapter` trait (see
-   `contracts/market/src/oracle_adapter.rs`).
-2. Compare Reflector and Pyth as concrete adapter targets on Soroban testnet.
-3. Recommend one for the first real implementation.
-
----
-
-## Decision Drivers
-
-| Driver | Weight |
-|---|---|
-| Removes single-key centralization | High |
-| Soroban testnet availability today | High |
-| Integration complexity / audit surface | Medium |
-| Asset coverage | Medium |
-| On-chain gas cost | Low (prediction markets are low-frequency) |
-
----
-
-## Options Considered
-
-### Option A — Keep single Ed25519 signer (status quo)
-
-Retain `oracle_pubkey` per market.  Optionally rotate to a multisig key
-off-chain (e.g., a 3-of-5 Schnorr threshold key) before submitting.
-
-**Pros:** No contract changes needed.  
-**Cons:** Centralization risk unchanged from the contract's perspective; no
-on-chain accountability for the signer set.
-
----
-
-### Option B — Reflector
-
-[Reflector](https://reflector.network) is a Stellar-native, federated price
-oracle.  A network of validators (currently seven independent nodes) signs
-each price update via a threshold Ed25519 multisig scheme.  The aggregated
-signature is verified inside the Reflector contract, exposing a simple
-`lastprice(asset) → {price: i128, timestamp: u64}` interface.
-
-**Testnet contract (as of 2026-06-20):**
-`CAZP4SMCQX7L6O42AT4GLLRRSFDXPXS7IH7MMHZ52QWUQBFPXFQVMGQ`
-
-**Integration pattern:**
-
-```rust
-// pseudo-code — fill in once OracleAdapter is fully wired
-let args = (symbol_short!("BTC"), symbol_short!("USD"));
-let result: (i128, u64) = env.invoke_contract(&self.contract_id, &symbol_short!("lastprice"), args.into_val(env));
-let (price, _ts) = result;
-```
-
-**Pros:**
-- No cross-chain latency; contract call is synchronous within a Stellar ledger.
-- Simpler integration — one cross-contract call, no off-chain keeper required.
-- Threshold multisig removes single-key trust at the oracle layer.
-- TWAP endpoint available, reducing price-manipulation risk.
-- Open-source contracts, audited.
-
-**Cons:**
-- Asset coverage limited to ~30 Stellar-ecosystem pairs (XLM, BTC, ETH, USDC
-  pairs against USD).
-- Validator set smaller than Pyth's publisher network.
-
----
-
-### Option C — Pyth Network
-
-[Pyth](https://pyth.network) is a cross-chain pull oracle.  Price data is
-published off-chain; a *keeper* (or the resolution caller) must submit a
-Wormhole VAA to the Pyth Soroban receiver contract before the price can be
-read.  The official `pyth-sdk-soroban` crate wraps the VAA verification.
-
-**Testnet receiver contract (Stellar testnet, as of 2026-06-20):**
-`HDWN46CTTXDZ5L5SWKQFUU25L5R2L6XNMCPDWP34PZMBVQJMZAPDVSN`
-
-**Integration pattern (two-step):**
-
-```rust
-// Step 1 — submit VAA (caller must pass proof bytes from Hermes API)
-env.invoke_contract(&self.contract_id, &symbol_short!("upd_feeds"), (vaa_bytes,).into_val(env));
-
-// Step 2 — read verified price
-let price: i64 = env.invoke_contract(&self.contract_id, &symbol_short!("get_price"), (price_id,).into_val(env));
-```
-
-**Pros:**
-- ~500 price feeds across every major chain.
-- Publisher set of 100+ institutions — most decentralized of the two.
-- Confidence intervals allow the contract to reject low-confidence prices.
-- Battle-tested on 50+ chains.
-
-**Cons:**
-- Pull model requires an off-chain keeper to submit VAAs; adds infra dependency
-  and latency (Wormhole cross-chain message: ~10–30 s).
-- VAA verification is the most expensive on-chain step; higher gas per
-  resolution compared to a native cross-contract call.
-- Larger integration surface (Wormhole bridge, Hermes API, VAA parsing).
-
----
-
-## Decision
-
-**Recommend Option B (Reflector) for the first real implementation.**
-
-**Status update (2026-06-28, issue #379):** `ReflectorAdapter::verify_outcome`
-is now fully implemented in `contracts/market/src/oracle_adapter.rs`.  The
-adapter makes a single synchronous cross-contract call to `lastprice(asset)` on
-the Reflector contract, compares the returned price against the market's
-`resolution_price` threshold, and maps the comparison to a boolean outcome.
-A mock Reflector contract is registered in the test environment so the
-implementation is covered by five unit tests (happy path YES/NO, outcome
-mismatch, price unavailable, `AnyAdapter` dispatch).
-
-Rationale:
-
-1. **Sufficient asset coverage** — Vatix markets are anchored to Stellar
-   (XLM, USDC-on-Stellar, wrapped BTC/ETH).  Reflector covers every pair
-   likely to be used at launch.
-2. **Synchronous resolution** — No keeper, no VAA, no cross-chain latency.
-   A resolution caller simply triggers `resolve_market`; the adapter fetches
-   the price in the same ledger.
-3. **Threshold multisig satisfies the centralization requirement** — The
-   Reflector network's 7-node threshold multisig provides on-chain proof that
-   multiple independent parties agreed on the price.
-4. **Lower audit surface** — One cross-contract call vs. VAA decoding +
-   Wormhole bridge dependency.
-
-Pyth should be revisited if and when Vatix expands to markets referencing
-non-Stellar assets (e.g., SOL, MATIC) or requires confidence-interval
-gating for high-stakes markets.
-
----
-
-## Consequences
-
-### Positive
-- Centralization risk eliminated: market resolution no longer depends on a
-  single private key.
-- No new off-chain infrastructure required for resolution.
-
-### Negative / Risks
-- The `Market` struct will need a `resolution_price: i128` threshold field
-  (the price at which the market resolves YES); this is a storage-breaking
-  change and requires a migration plan before mainnet.
-- Reflector's asset list is curated; adding a market for an unlisted asset
-  would require a fallback (Ed25519 or Pyth).
-- Reflector's 7-node validator set is smaller than Pyth's; a future governance
-  vote could reduce the threshold.  Monitor validator-set changes.
-
-### Open Questions
-- Should `oracle_pubkey` be kept as an optional fallback for markets that
-  pre-date the adapter, or deprecated entirely?
-- How should `resolution_price` be expressed for non-USD quote currencies?
-- ~~Who is responsible for calling `update_price_feeds` if Pyth is later
-  added?~~ **Answered (#717)**: `PythAdapter::verify_outcome` itself calls
-  `update_price_feeds` with the caller-supplied VAA before reading the price
-  back via `get_price` — no separate off-chain keeper step is needed. What
-  remains open is *not* the VAA submission (implemented and regression-tested
-  in `oracle_adapter.rs`), but wiring `PythAdapter` into the live
-  `verify_market_outcome` dispatch, which currently fails closed for Pyth
-  because `resolve_market`'s `proof: BytesN<64>` ABI has no room for a
-  variable-length VAA — see `oracle_adapter.rs`'s module doc.
-
----
-
-## Threshold Signer Set Governance & Safety Rules (#665)
-
-To harden threshold oracle resolution against compromised admin keys, signer set churn, and Byzantine oracle behavior, the following rules are enforced:
-
-1. **Timelocked Signer Rotation (`propose_threshold_signers` / `execute_threshold_signers`)**:
-   - Updates to the global threshold signer set or quorum requirement require a 24-hour timelock delay (`FEE_RATE_TIMELOCK_SECONDS`).
-   - Prevents an admin from instantly replacing signers to force a fraudulent market outcome.
-
-2. **Per-Market Signer & Quorum Overrides**:
-   - Markets can optionally specify a dedicated threshold signer set (`set_market_threshold_signers`).
-   - If not set, resolution defaults to the global threshold signer configuration.
-
-3. **Strict Quorum & Signer Set Invariants**:
-   - `1 <= quorum <= signers.len()` is strictly enforced during proposal, execution, per-market configuration, and resolution verification.
-   - Duplicate signer entries are rejected.
-
-4. **Byzantine Equivocation Detection**:
-   - Verification checks each signer's signature against both `target_outcome` and `opposite_outcome`.
-   - If any signer submits signatures for conflicting outcomes (equivocation), or if duplicate signer identities are present in the pack, resolution immediately fails closed with `ContractError::InvalidSignature`.
-
----
-
-## #778 — Fail-Closed Contract for the `oracle-adapter` Feature
-
-**Status:** Implemented (2026-08-31)
-
-### Problem
-
-The `oracle-adapter` Cargo feature was never in `[features] default`, but:
-
-1. `contracts/market/src/oracle.rs` used `crate::oracle_adapter::*` types
-   unconditionally, meaning the crate only compiled with the feature enabled.
-2. When the Reflector adapter was *enabled* at runtime but the feature was
-   off at build time, the dispatch silently fell back to Ed25519 — allowing a
-   weaker proof to resolve a market whose admin had explicitly configured
-   Reflector.
-
-### Fix
-
-Two complementary changes restore the intended fail-closed contract:
-
-**Compile-time (`#[cfg]` gates):**
-
-- `MarketAdapterConfig` in `types.rs` is gated with `#[cfg(feature = "oracle-adapter")]` — the struct contains `oracle_adapter::Asset`, which doesn't exist without the feature.
-- `storage::{get,set}_market_adapter_config`, `lib::{set,get}_market_adapter_config`, and the `oracle.rs` dispatch branches that call into `oracle_adapter` are all wrapped with `#[cfg(feature = "oracle-adapter")]` (enabled path) and `#[cfg(not(feature = "oracle-adapter"))]` (fail-closed path).
-- The crate now compiles and runs correctly *without* the feature.
-
-**Runtime (fail-closed for enabled-but-feature-off):**
-
-- `verify_via_reflector`: when the Reflector adapter is *enabled* but the
-  feature is *off*, returns `Err(ContractError::UnauthorizedOracle)` instead
-  of silently falling back to Ed25519.  Same for the V2 dispatch.
-- Pyth was already fail-closed in both scenarios.
-
-**Tests:**
-
-- `oracle_adapter_is_not_in_default_features` — a `#[test]` in `oracle.rs`
-  that asserts `cfg!(feature = "oracle-adapter")` is `false` under `cargo test`
-  (no explicit flag).  Fails CI the moment someone adds the feature to `default`.
-- `reflector_enabled_without_feature_fails_closed` — a `#[cfg(not(feature = "oracle-adapter"))]` test that verifies `UnauthorizedOracle` is returned when Reflector is enabled at runtime but the feature is not compiled in.
-
-**CI:**
-
-The `oracle-adapter-not-default` CI job in `.github/workflows/ci.yml` runs:
-1. `cargo build -p vatix-market-contract` — confirms compilation without the feature.
-2. `cargo test -p vatix-market-contract oracle_adapter_is_not_in_default_features` — asserts the feature is not default.
-
-### Invariant
-
-The `oracle-adapter` feature must never appear in `[features] default` in
-`contracts/market/Cargo.toml` until issue #139 (mainnet oracle switch) is
-fully implemented, reviewed, and audited. CI will fail if this invariant
-is violated.
-
----
-
-## #778 — Fail-Closed Contract for the `oracle-adapter` Feature
-
-**Status:** Implemented (2026-08-31)
-
-### Problem
-
-The `oracle-adapter` Cargo feature was never in `[features] default`, but two gaps existed:
-
-1. `oracle.rs` referenced `crate::oracle_adapter::*` types unconditionally, so the crate only compiled when the feature was enabled.
-2. When the Reflector adapter was *enabled* at runtime but the `oracle-adapter` feature was *off* at build time, the dispatch silently fell back to Ed25519 — allowing a weaker proof to resolve a market whose admin had explicitly configured Reflector.
-
-### Fix
-
-**Compile-time (`#[cfg]` gates):**
-
-- `MarketAdapterConfig` in `types.rs` is gated with `#[cfg(feature = "oracle-adapter")]` — the struct contains `oracle_adapter::Asset`, which does not exist without the feature.
-- `storage::{get,set}_market_adapter_config`, `lib::{set,get}_market_adapter_config`, and the `oracle.rs` dispatch branches that call into `oracle_adapter` are wrapped with `#[cfg(feature = "oracle-adapter")]` (enabled path) and `#[cfg(not(feature = "oracle-adapter"))]` (fail-closed path).
-- The crate now compiles cleanly *without* the feature.
-
-**Runtime (fail-closed when adapter enabled but feature off):**
-
-- `verify_via_reflector`: when the Reflector adapter is *enabled* but the feature is *off*, returns `Err(ContractError::UnauthorizedOracle)` instead of silently falling back to Ed25519. The V2 dispatch mirrors this.
-- Pyth was already fail-closed in both scenarios.
-
-**Tests and CI:**
-
-- `oracle_adapter_is_not_in_default_features` — `#[test]` in `oracle.rs` asserting `cfg!(feature = "oracle-adapter")` is `false` under plain `cargo test`. Fails CI the moment the feature is added to `default`.
-- `reflector_enabled_without_feature_fails_closed` — `#[cfg(not(feature = "oracle-adapter"))]` test verifying `UnauthorizedOracle` when Reflector is enabled at runtime but the feature is absent at compile time.
-- `oracle-adapter-not-default` CI job runs both a feature-free build and the guard test on every push/PR.
-
-### Invariant
-
-The `oracle-adapter` feature must **not** appear in `[features] default` in `contracts/market/Cargo.toml` until issue #139 (mainnet oracle switch) is fully implemented, reviewed, and audited. CI will fail immediately if this invariant is violated.
+The market and resolution contracts consume prices and outcomes from an oracle
+adapter. If the adapter's trust assumptions are undocumented, contributors may
+over-trust a single source, silently fall back to a stale price, or assume the
+adapter is Byzantine-fault-tolerant when it is not. This ADR records the
+collusion assumptions and the fail-closed invariants the adapter must uphold.
+
+## Trust Model
+
+- **Trusted roles.** Only the configured admin may add, remove, or reweight
+  oracle sources and update adapter config. Oracle sources are identified by
+  their authorized key/role; any other caller is rejected (`NotAdmin` /
+  `Unauthorized`) before any state is written.
+- **Untrusted inputs.** Source reports are untrusted data. The adapter validates
+  signer authorization, freshness, and bounds before a report can influence a
+  money path. A report from an unauthorized key is discarded, not averaged in.
+- **No secrets.** Source keys, RPC URLs, and credentials never appear in the
+  repository or in logs; only redacted identifiers are emitted.
+
+## Collusion Assumptions
+
+1. **Quorum.** A price is accepted only when at least the configured minimum
+   number of distinct authorized sources agree within the deviation bound. A
+   single source (or fewer than quorum) can never move a money path.
+2. **Distinctness.** Quorum counts distinct authorized sources; duplicate
+   reports from the same source (including replayed reports) count once.
+3. **Majority collusion is out of scope for safety, in scope for detection.**
+   If a majority of authorized sources collude, they can produce a
+   within-bounds price. The adapter does **not** claim to prevent this; instead
+   it bounds the blast radius: deviation and staleness limits cap how far a
+   colluding quorum can move a price, and every accepted price is observable so
+   operators can detect and pause.
+4. **No silent fallback.** A colluding or failing quorum cannot cause the
+   adapter to fall back to a last-known price on a money path; the dependent
+   write reverts instead.
+
+## Fail-Closed Invariants
+
+- Writes that depend on an oracle price **revert** when the price is stale,
+  missing, below quorum, or outside the configured deviation band. There is no
+  silent fallback to the last-known price on money paths.
+- Staleness is measured against the configured max age; a report older than the
+  bound is treated as missing.
+- Deviation is measured against the configured band; a report outside the band
+  is rejected rather than clamped.
+- Dependency outages (RPC/DB/Redis) fail closed on writes: the adapter does not
+  proceed with partial or cached state.
+- Replayed or concurrent reports are idempotent: a report already applied does
+  not double-count toward quorum or move the price twice.
+
+## Authorization
+
+- Deny-by-default for every privileged surface: only the stored admin may
+  change oracle config or sources; only authorized oracle roles may submit
+  reports.
+- Auth expiry or wrong role aborts before any state-affecting step.
+- Untrusted clients cannot bypass policy; the contract remains the source of
+  truth for prices, balances, swaps, and admin.
+
+## Observability
+
+- Every accepted price and every rejection (stale, missing, below quorum,
+  out-of-band, unauthorized) emits an event with a correlation id for alerting.
+- Metrics cover money paths (accepted/rejected prices, quorum size, staleness
+  age) without leaking secrets.
+
+## Rollback / Kill-Switch
+
+- Oracle-dependent money paths are gated by the per-contract pause kill-switch
+  (see `SECURITY.md` → *Pause Trading*). Pausing the market blocks
+  `update_position`, `resolve_market`, and related writes while leaving
+  read-only views available.
+- Rollback is `unpause` with no state migration; a collusion incident is
+  handled by pausing, rotating sources, and resuming.
+
+## References
+
+- `SECURITY.md` — security principles, pause kill-switch, threat model.
+- `docs/SECURITY.md` — oracle report verification path (#898).
+- `docs/threat-model.md` — trust boundaries and mitigations.

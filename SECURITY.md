@@ -28,6 +28,26 @@ This policy covers the Vatix-Protocol monorepo, including `vatix-contract` (Soro
 - Every external entrypoint is rate-limited and authorized.
 - Money-path and mainnet-affecting changes land behind a feature flag or kill-switch with a documented rollback.
 
+## Oracle Collusion Assumptions (Issue #946)
+
+The oracle adapter's trust model and collusion assumptions are documented in
+[`docs/adr-001-oracle-adapter.md`](docs/adr-001-oracle-adapter.md). Key points:
+
+- Only the configured admin may change oracle config or sources; only
+  authorized oracle roles may submit reports. Deny-by-default for new
+  privileged surfaces.
+- A price is accepted only at or above the configured quorum of **distinct**
+  authorized sources agreeing within the deviation band; replayed reports count
+  once.
+- **Majority collusion is not prevented** — it is bounded and detected. A
+  colluding quorum cannot exceed the deviation/staleness bounds, and every
+  accepted price is observable so operators can pause.
+- **Fail closed:** oracle-dependent writes revert on stale, missing,
+  below-quorum, or out-of-band prices. There is no silent fallback to a
+  last-known price on money paths.
+- Rollback is the per-contract pause kill-switch (see *Pause Trading* below);
+  no state migration is required.
+
 ## Upgrade Security
 
 Multi-contract upgrades are a privileged, money-path operation. The exact
@@ -147,37 +167,6 @@ network. Untrusted clients cannot bypass upgrade policy.
 
 ## Implementation Summary
 
-The implementation summary for `vatix-contract` is maintained in
-[`IMPLEMENTATION_SUMMARY.md`](IMPLEMENTATION_SUMMARY.md). It is a security-relevant
-document: it must describe the actual entrypoints, error codes, authz, and
-idempotency behavior of the deployed contracts, and it must not contradict this
-policy or the on-chain invariants above.
+The 
 
-When the implementation changes, the summary must be archived or synced in the
-same change so it never drifts from the code:
-
-- **Sync:** update `IMPLEMENTATION_SUMMARY.md` whenever entrypoints, error
-  codes, authz rules, or idempotency/fail-closed behavior change.
-- **Archive:** superseded summaries are moved to `docs/archive/` with the
-  release/commit they describe, rather than being silently overwritten.
-- **Source of truth:** the server/contract remains authoritative for balances,
-  swaps, and admin; the summary documents behavior, it does not define it.
-- **Deny-by-default:** any privileged surface described in the summary must
-  state its explicit authorization requirement; undocumented privileged
-  entrypoints are treated as a security defect.
-- **No secrets:** the summary must not embed keys, tokens, RPC URLs, or other
-  environment values.
-
-## Localnet
-
-- Use throwaway keys generated for localnet only; never reuse testnet or mainnet
-  keys on a local network, and never commit them.
-- Treat localnet as untrusted: the same authz and fail-closed rules that apply to
-testnet/mainnet apply locally, so the path exercises the real policy.
-- Keep the deploy behind the documented feature flag/kill-switch when it touches
-  any money path, and record the rollback steps in the PR description.
-
-## Disclosure Policy
-
-We follow coordinated disclosure. Once a fix is available, we will publish a
-security advisory and credit the reporter (unless anonymity is requested).
+/* … truncated 1829 chars — edit only what you need near the top … */

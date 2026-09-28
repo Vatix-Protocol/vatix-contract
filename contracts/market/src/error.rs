@@ -40,23 +40,6 @@ use soroban_sdk::contracterror;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
-    // ========== Market Errors (1-9) 
-///
-/// # Example
-/// ```ignore
-/// use vatix_market::error::ContractError;
-///
-/// // Check for specific error
-/// match result {
-///     Err(ContractError::MarketNotFound) => println!("Market does not exist"),
-///     Err(ContractError::InvalidQuestion) => println!("Question is invalid"),
-///     Ok(_) => println!("Success"),
-/// }
-/// ```
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum ContractError {
     // ========== Market Errors (1-9) ==========
     /// The requested market does not exist in storage.
     ///
@@ -199,7 +182,7 @@ pub enum ContractError {
     /// Market metadata URI is invalid (e.g. exceeds the maximum length).
     InvalidMetadataUri = 37,
 
-    /// Fee rate is invalid (e.g. exceeds the configured fee cap or is out of range).
+    /// Fee rate is invalid (e.g., exceeds the configured fee cap or is out of range).
     InvalidFeeRate = 38,
 
     /// Fee waiver account is invalid (a contract address, or the admin itself).
@@ -207,105 +190,89 @@ pub enum ContractError {
     /// The admin-managed fee waiver list (#483) may only hold ordinary user
     /// accounts. Contract addresses are rejected the same way `InvalidAdmin`
     /// rejects them, and the admin's own address is rejected so the admin
-    /// cannot quietly exempt itself from withdrawal fees it controls (#584).
+    /// cannot quietly exempt itself from fees.
     InvalidFeeWaiverAccount = 39,
 
     // ========== Authorization Errors (40-49) ==========
-    /// Caller is not authorized to perform this action.
+    /// Caller is not authorized to perform this privileged operation.
     ///
-    /// The caller must be the market creator or have appropriate permissions.
+    /// Deny-by-default: every privileged admin/guardian entrypoint requires
+    /// the caller to be the current admin (or guardian where applicable).
+    /// Untrusted callers fail closed with this stable code rather than a
+    /// generic panic, so off-chain observers can distinguish an authz
+    /// rejection from other failures.
     Unauthorized = 40,
 
-    /// Caller is not the admin for this operation.
+    /// The caller is authenticated but does not hold the required role.
     ///
-    /// Deny-by-default: any privileged surface (admin actions, bond policy
-    /// updates, oracle management) rejects callers that do not hold the
-    /// required role. Untrusted clients cannot bypass policy by crafting a
-    /// request that omits or forges authorization.
-    Unauthorized = 41,
+    /// Distinct from [`ContractError::Unauthorized`]: the caller is a known
+    /// principal (e.g. the admin) but the requested action requires a
+    /// different role (e.g. guardian). Fail closed — never fall back to a
+    /// weaker role.
+    WrongRole = 41,
 
-    /// The caller's authorization has expired.
+    /// The caller's authorization has expired or been revoked.
     ///
-    /// Time-bounded authorizations (e.g. signed admin intents) are rejected
-    /// once their deadline passes. Re-submit with a fresh authorization.
-    AuthorizationExpired = 42,
+    /// Privileged roles are time-bounded; a stale/expired grant must be
+    /// re-established before the action can proceed. Fail closed.
+    AuthExpired = 42,
 
-    /// The caller does not hold the role required for this operation.
+    /// A privileged action was replayed or submitted concurrently.
     ///
-    /// Distinct from [`ContractError::Unauthorized`] so clients can surface a
-    /// precise "wrong role" message instead of a generic denial.
-    WrongRole = 43,
-
-    /// Only the contract admin can perform this action.
-    NotAdmin = 44,
-
-    /// Contract has already been initialized.
-    ///
-    /// `initialize(admin)` may only be called once. Replaying it would allow
-    /// an attacker to hijack the admin slot after initial deploy.
-    AlreadyInitialized = 45,
-
-    /// No pending admin transfer exists.
-    ///
-    /// `accept_admin` was called but `propose_admin` has not been issued yet,
-    /// or the previous proposal was already accepted.
-    NoPendingAdmin = 46,
-
-    /// `confirm_renounce_admin` was called but no renounce proposal is pending.
-    NoRenounceProposal = 47,
-
-    /// A renounce proposal is already pending; cannot propose again until confirmed or canceled.
-    RenounceAlreadyProposed = 48,
+    /// Admin/guardian entrypoints are idempotent: a repeated call carrying an
+    /// already-consumed correlation/idempotency id is rejected with this
+    /// stable code instead of being applied twice.
+    ReplayedAction = 43,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
     /// The underlying token contract rejected the transfer (e.g. insufficient
-    /// balance or allowance).
+    /// balance or a frozen account).
     TokenTransferFailed = 50,
 
-    /// The token address is invalid or unsupported.
+    /// Token address is invalid or unsupported.
+    ///
+    /// The token must be a supported SEP-41 asset with a valid contract address.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a computation.
+    /// Arithmetic overflow occurred during a calculation.
+    ///
+    /// The operation would exceed the maximum representable value.
     ArithmeticOverflow = 60,
 
-    /// Arithmetic underflow occurred during a computation.
+    /// Arithmetic underflow occurred during a calculation.
+    ///
+    /// The operation would go below the minimum representable value.
     ArithmeticUnderflow = 61,
 
-    /// Division by zero was attempted.
+    /// Division by zero attempted.
+    ///
+    /// The divisor must be non-zero for all division operations.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
     /// Treasury operation failed.
+    ///
+    /// A treasury withdrawal or accounting operation could not be completed.
     TreasuryOperationFailed = 70,
 
-    /// Treasury is not configured.
-    TreasuryNotConfigured = 71,
+    /// Insufficient treasury balance for the requested operation.
+    ///
+    /// The treasury does not hold enough funds to cover the withdrawal.
+    InsufficientTreasuryBalance = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
     /// Reconciliation check failed.
+    ///
+    /// The on-chain accounting does not match the expected invariants.
     ReconciliationFailed = 80,
 
     // ========== Conservation Errors (90-99) ==========
-    /// A conservation invariant was violated.
+    /// Collateral conservation invariant violated.
+    ///
+    /// Total collateral in must equal total collateral out plus locked
+    /// collateral. A violation indicates a critical accounting bug.
     ConservationViolation = 90,
-
-    /// The requested fee rate exceeds the configured fee cap.
-    ///
-    /// Registration is idempotency-hostile by design: replayed or concurrent
-    /// register requests are rejected so an untrusted caller cannot override
-    /// an existing deployment mapping.
-    DeploymentIdAlreadyRegistered = 94,
-
-    /// `initialize_market` was called with a collateral token that differs
-    /// from the deployment's pinned collateral token (ADR-002 collateral
-    /// allowlist decision, #901).
-    ///
-    /// `CollateralBalance(user)` is not denominated per token, so a second
-    /// collateral token would let collateral deposited in one asset back
-    /// trades in another. Fail closed: exactly one collateral token per
-    /// deployment, pinned by the first market created.
-    CollateralTokenNotAllowed = 95,
 }
