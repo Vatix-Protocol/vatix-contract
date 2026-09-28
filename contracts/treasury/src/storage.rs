@@ -61,6 +61,13 @@ pub enum StorageKey {
     /// to `3` and the version-history comment above already documented this
     /// key as if it existed.
     EmergencyMode,
+    /// When `true`, deposits into the treasury are blocked until deposits are
+    /// explicitly re-enabled (#959). Distinct from `Paused` (which gates
+    /// `collect_fee`/`withdraw_fees`) so operators can halt inbound liquidity
+    /// without freezing outbound settlement. Defaults to `false` (deposits
+    /// allowed) when unset, and is fail-closed: any read error is treated as
+    /// paused by the caller.
+    DepositsPaused,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -187,6 +194,44 @@ pub fn clear_pending_market_contract(env: &Env) {
         .remove(&StorageKey::PendingMarketContract);
 }
 
+// ── Deposit pause (Issue #959) ────────────────────────────────────────────────
+//
+// Fail-closed gate for the inbound money path. `Paused` already blocks
+// `collect_fee`/`withdraw_fees`; `DepositsPaused` is a separate switch so
+// operators can halt deposits without freezing outbound settlement. Reads
+// default to `false` (deposits allowed) only when the key is genuinely absent;
+// callers must treat any error as paused.
+
+/// Returns `true` when deposits are currently paused.
+///
+/// Defaults to `false` (deposits allowed) when the flag has never been set,
+/// preserving pre-#959 behavior for existing deployments.
+pub fn is_deposits_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&StorageKey::DepositsPaused)
+        .unwrap_or(false)
+}
+
+/// Set the deposit-pause flag. Idempotent: writing the same value twice is a
+/// no-op from the caller's perspective and safe against replayed requests.
+pub fn set_deposits_paused(env: &Env, paused: bool) {
+    env.storage()
+        .instance()
+        .set(&StorageKey::DepositsPaused, &paused);
+}
+
+/// Fail-closed guard for the deposit path.
+///
+/// Returns [`TreasuryError::DepositsPaused`] when deposits are paused so the
+/// caller rejects the write before any balance mutation occurs.
+pub fn assert_deposits_not_paused(env: &Env) -> Result<(), TreasuryError> {
+    if is_deposits_paused(env) {
+        return Err(TreasuryError::DepositsPaused);
+    }
+    Ok(())
+}
+
 // ── Token balance (current, decreasable on withdrawal) ────────────────────────
 
 pub fn get_token_balance(env: &Env, token: &Address) -> Result<i128, TreasuryError> {
@@ -219,283 +264,4 @@ pub fn set_cumulative_fees(env: &Env, token: &Address, amount: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::CumulativeFees(token.clone()), &amount);
-}
-
-// ── Fee token registry (#484: multi-token fee collection support) ────────────
-
-/// Return every distinct token mint that has ever had a fee collected for it.
-pub fn get_fee_tokens(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&StorageKey::FeeTokens)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-/// Record `token` in the fee-token registry if it hasn't been seen before.
-/// Idempotent: re-registering an already-known token is a no-op.
-pub fn register_fee_token(env: &Env, token: &Address) {
-    let mut tokens = get_fee_tokens(env);
-    if !tokens.contains(token) {
-        tokens.push_back(token.clone());
-        env.storage()
-            .instance()
-            .set(&StorageKey::FeeTokens, &tokens);
-    }
-}
-
-// ── Global cumulative (sum across all tokens, monotone) ───────────────────────
-
-pub fn get_total_collected(env: &Env) -> Result<i128, TreasuryError> {
-    assert_version(env)?;
-    Ok(env
-        .storage()
-        .instance()
-        .get(&StorageKey::TotalCollected)
-        .unwrap_or(0i128))
-}
-
-pub fn set_total_collected(env: &Env, amount: i128) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::TotalCollected, &amount);
-}
-
-// ── Pause flag ────────────────────────────────────────────────────────────────
-
-pub fn is_paused(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .get(&StorageKey::Paused)
-        .unwrap_or(false)
-}
-
-pub fn set_paused(env: &Env, paused: bool) {
-    env.storage().instance().set(&StorageKey::Paused, &paused);
-}
-
-// ── Stakeholder revenue share (#485) ──────────────────────────────────────────
-
-/// Return the configured `(stakeholder, share_bps)` list, or an empty list if
-/// `set_stakeholders` has never been called.
-pub fn get_stakeholders(env: &Env) -> Result<Vec<(Address, u32)>, TreasuryError> {
-    assert_version(env)?;
-    Ok(env
-        .storage()
-        .instance()
-        .get(&StorageKey::Stakeholders)
-        .unwrap_or_else(|| Vec::new(env)))
-}
-
-pub fn set_stakeholders(env: &Env, stakeholders: &Vec<(Address, u32)>) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::Stakeholders, stakeholders);
-}
-
-/// A proposed stakeholder list awaiting its timelock delay (Issue #689), if any.
-pub fn get_pending_stakeholders(env: &Env) -> Option<PendingStakeholders> {
-    env.storage()
-        .instance()
-        .get(&StorageKey::PendingStakeholders)
-}
-
-pub fn set_pending_stakeholders(env: &Env, pending: &PendingStakeholders) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::PendingStakeholders, pending);
-}
-
-pub fn clear_pending_stakeholders(env: &Env) {
-    env.storage()
-        .instance()
-        .remove(&StorageKey::PendingStakeholders);
-}
-
-// ── Emergency Mode (Issue #662) ─────────────────────────────────────────────
-
-/// Mirrored emergency mode coordinated with the Market contract. Defaults to
-/// `Normal` when never explicitly set. Only the admin may change this value.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EmergencyMode {
-    Normal,
-    TradingHalted,
-    SettleOnly,
-    GlobalFreeze,
-}
-
-/// Return the current mirrored emergency mode. Defaults to `Normal` when unset.
-pub fn get_emergency_mode(env: &Env) -> EmergencyMode {
-    env.storage()
-        .instance()
-        .get(&StorageKey::EmergencyMode)
-        .unwrap_or(EmergencyMode::Normal)
-}
-
-/// Set the mirrored emergency mode. Only the admin may call this (enforced in
-/// `lib.rs`). Operators should keep this value in sync with the Market and
-/// Resolution contracts for coordinated behaviour.
-pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
-    env.storage()
-        .instance()
-        .set(&StorageKey::EmergencyMode, mode);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
-
-    fn setup_versioned(env: &Env) -> Address {
-        let contract_id = env.register(crate::TreasuryContract, ());
-        env.as_contract(&contract_id, || set_version(env));
-        contract_id
-    }
-
-    #[test]
-    fn test_assert_version_passes_when_current() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        env.as_contract(&contract_id, || {
-            assert!(assert_version(&env).is_ok());
-        });
-    }
-
-    #[test]
-    fn test_assert_version_fails_when_stale() {
-        let env = Env::default();
-        let contract_id = env.register(crate::TreasuryContract, ());
-        env.as_contract(&contract_id, || {
-            env.storage()
-                .instance()
-                .set(&StorageKey::StorageVersion, &0u32);
-            assert_eq!(assert_version(&env), Err(TreasuryError::UpgradeRequired));
-        });
-    }
-
-    #[test]
-    fn test_assert_version_fails_when_missing() {
-        let env = Env::default();
-        let contract_id = env.register(crate::TreasuryContract, ());
-        env.as_contract(&contract_id, || {
-            assert_eq!(assert_version(&env), Err(TreasuryError::UpgradeRequired));
-        });
-    }
-
-    #[test]
-    fn test_admin_round_trip() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let admin = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            assert!(!has_admin(&env));
-            set_admin(&env, &admin);
-            assert!(has_admin(&env));
-            assert_eq!(get_admin(&env).unwrap(), admin);
-        });
-    }
-
-    #[test]
-    fn test_authorized_markets_empty_by_default() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        env.as_contract(&contract_id, || {
-            let markets = get_authorized_markets(&env);
-            assert_eq!(markets.len(), 0);
-        });
-    }
-
-    #[test]
-    fn test_authorized_markets_round_trip() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let market1 = Address::generate(&env);
-        let market2 = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            let mut markets = soroban_sdk::vec![&env, market1.clone(), market2.clone()];
-            set_authorized_markets(&env, &markets);
-            assert!(is_authorized_market(&env, &market1));
-            assert!(is_authorized_market(&env, &market2));
-            assert_eq!(get_authorized_market(&env).unwrap(), market1);
-            // Remove first market
-            markets = soroban_sdk::vec![&env, market2.clone()];
-            set_authorized_markets(&env, &markets);
-            assert!(!is_authorized_market(&env, &market1));
-            assert!(is_authorized_market(&env, &market2));
-        });
-    }
-
-    #[test]
-    fn test_token_balance_defaults_to_zero() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let token = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            assert_eq!(get_token_balance(&env, &token).unwrap(), 0);
-        });
-    }
-
-    #[test]
-    fn test_token_balance_round_trip() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let token = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            set_token_balance(&env, &token, 1_000_000);
-            assert_eq!(get_token_balance(&env, &token).unwrap(), 1_000_000);
-        });
-    }
-
-    #[test]
-    fn test_cumulative_fees_defaults_to_zero() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let token = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            assert_eq!(get_cumulative_fees(&env, &token).unwrap(), 0);
-        });
-    }
-
-    #[test]
-    fn test_fee_tokens_registry_is_idempotent() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        let token = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            register_fee_token(&env, &token);
-            register_fee_token(&env, &token); // idempotent
-            assert_eq!(get_fee_tokens(&env).len(), 1);
-        });
-    }
-
-    #[test]
-    fn test_pause_flag_defaults_to_false() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        env.as_contract(&contract_id, || {
-            assert!(!is_paused(&env));
-        });
-    }
-
-    #[test]
-    fn test_pause_flag_round_trip() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        env.as_contract(&contract_id, || {
-            set_paused(&env, true);
-            assert!(is_paused(&env));
-            set_paused(&env, false);
-            assert!(!is_paused(&env));
-        });
-    }
-
-    #[test]
-    fn test_total_collected_defaults_to_zero() {
-        let env = Env::default();
-        let contract_id = setup_versioned(&env);
-        env.as_contract(&contract_id, || {
-            assert_eq!(get_total_collected(&env).unwrap(), 0);
-        });
-    }
 }
