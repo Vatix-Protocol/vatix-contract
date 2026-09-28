@@ -30,16 +30,33 @@
 #
 # Run `make help` for a one-line summary of every target.
 
-.PHONY: default all help test build verify fmt clean \
+.PHONY: default all help test build verify size-check fmt clean \
 	localnet-up localnet-deploy localnet-smoke localnet-down
 
 default: build
+
+# --- Wasm size budget (issue #948) ----------------------------------------
+#
+# Rationale: Soroban charges for the uploaded Wasm by byte size, and the
+# network enforces a hard cap on contract size. An unbounded artifact can
+# silently push the contract past the deployable limit or blow up upload
+# fees, so we pin an explicit budget and fail the build when it is exceeded.
+#
+# The budget is intentionally generous relative to the current artifact so
+# normal feature work is not blocked, but tight enough to catch accidental
+# bloat (e.g. pulling in a heavy dependency or debug symbols).
+#
+# Raise this only with a PR that explains the size increase and confirms the
+# artifact still deploys on testnet. This check is deterministic and offline:
+# it only inspects the local artifact and never touches the network.
+WASM_MAX_BYTES ?= 262144
 
 # Print a one-line summary of every target.
 help:
 	@echo "build           Build deployable WASM via 'stellar contract build' (default)"
 	@echo "test            Build, then run 'cargo test'"
 	@echo "verify          Print the WASM hash to check reproducibility"
+	@echo "size-check      Fail if the WASM exceeds WASM_MAX_BYTES (default $(WASM_MAX_BYTES))"
 	@echo "fmt             Format all crates with 'cargo fmt --all'"
 	@echo "clean           Remove build artifacts ('cargo clean')"
 	@echo "localnet-up     Start local Soroban network + funded identity"
@@ -61,6 +78,28 @@ build:
 	stellar contract build
 	@echo "WASM artifact:"
 	@ls -lh target/wasm32v1-none/release/*.wasm
+
+# Enforce the Wasm size budget (issue #948).
+#
+# Fail-closed: if the artifact is missing or unreadable, or if it exceeds
+# WASM_MAX_BYTES, this target exits non-zero with an actionable message.
+# Deterministic and offline-safe: it only reads the local artifact.
+# Wire this into CI as a required check so an oversized Wasm fails the build.
+size-check:
+	@test -f $(WASM) || \
+		{ echo "size-check: missing WASM artifact '$(WASM)'; run 'make build' first." >&2; exit 1; }
+	@test -r $(WASM) || \
+		{ echo "size-check: WASM artifact '$(WASM)' is not readable." >&2; exit 1; }
+	@bytes=$$(wc -c < $(WASM) | tr -d ' '); \
+		if [ -z "$$bytes" ]; then \
+			echo "size-check: could not determine size of '$(WASM)'." >&2; exit 1; \
+		fi; \
+		if [ "$$bytes" -gt "$(WASM_MAX_BYTES)" ]; then \
+			echo "size-check: FAIL '$(WASM)' is $$bytes bytes, budget is $(WASM_MAX_BYTES) bytes." >&2; \
+			echo "size-check: reduce the artifact or raise WASM_MAX_BYTES with justification in the PR." >&2; \
+			exit 1; \
+		fi; \
+		echo "size-check: OK '$(WASM)' is $$bytes bytes (budget $(WASM_MAX_BYTES))."
 
 # Verify the WASM build is reproducible by displaying its hash.
 # Compare this hash across environments to ensure consistency.
