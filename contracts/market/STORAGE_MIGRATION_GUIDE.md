@@ -10,8 +10,9 @@
 4. [Migration Procedures](#migration-procedures)
 5. [Testing Migrations](#testing-migrations)
 6. [Rollback and Recovery](#rollback-and-recovery)
-7. [Common Pitfalls](#common-pitfalls)
-8. [Version History](#version-history)
+7. [Partial Crate Rollback Guide](#partial-crate-rollback-guide)
+8. [Common Pitfalls](#common-pitfalls)
+9. [Version History](#version-history)
 
 ---
 
@@ -284,549 +285,368 @@ stellar contract invoke \
     --network testnet \
     -- initialize \
     --admin GADMIN...
-
-# This writes the new STORAGE_VERSION to the new deployment
 ```
 
 #### 3. Verify the Migration
 
-**Step 3.1: Check version is set**
 ```bash
-# Query storage version (if you have a getter function)
-stellar contract invoke \
-    --id CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC \
-    --network testnet \
-    -- get_admin
-
-# Should succeed, confirming version is correct
-```
-
-**Step 3.2: Test basic operations**
-```bash
-# Try creating a market
+# Check storage version
 stellar contract invoke \
     --id CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC \
     --source $TESTNET_SECRET_KEY \
     --network testnet \
-    -- initialize_market \
-    --creator GADMIN... \
-    --question "Test market?" \
-    --end_time 1735689600 \
-    --oracle_pubkey AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
-    --collateral_token CUSDC...
+    -- get_storage_version
+
+# Expected output: 4
 ```
-
-**Step 3.3: Verify old deployment is locked**
-```bash
-# Try calling the old deployment
-stellar contract invoke \
-    --id OLD_CONTRACT_ID \
-    --network testnet \
-    -- get_market \
-    --market_id 1
-
-# Should fail with UpgradeRequired error
-```
-
-#### 4. Update Frontend and Services
-
-**Step 4.1: Update contract addresses**
-- Update environment variables with new contract ID
-- Update configuration files
-- Regenerate TypeScript bindings if needed
-
-**Step 4.2: Test integration**
-- Verify frontend can call new contract
-- Test all critical user flows
-- Ensure old contract calls fail gracefully
 
 ### For Mainnet Deployments
 
-⚠️ **CRITICAL: Mainnet requires data migration strategy**
+> ⚠️ **Mainnet deployments require additional safeguards**
 
-#### Pre-Deployment Checklist
-
-- [ ] Migration thoroughly tested on testnet
-- [ ] Data migration script prepared (if needed)
-- [ ] Rollback plan documented
-- [ ] User communication plan ready
-- [ ] Monitoring and alerting configured
-- [ ] Multi-signature admin approval obtained
-
-#### Mainnet Migration Options
-
-**Option 1: Fresh Deployment (Recommended for breaking changes)**
-
-Best when existing data cannot be preserved or migrated.
-
-```bash
-# 1. Announce maintenance window to users
-# 2. Deploy new contract
-# 3. Initialize with admin
-# 4. Update all services/frontend
-# 5. Announce new contract address
-```
-
-**Option 2: Data Migration Script (Complex, not recommended)**
-
-Requires writing a custom migration contract that:
-1. Reads data from old contract
-2. Transforms data to new format
-3. Writes data to new contract
-
-This is complex and error-prone. Only use if data preservation is critical.
+1. **Complete testnet validation first** — run the full migration on testnet and observe for at least 48 hours
+2. **Prepare rollback plan** — see [Rollback and Recovery](#rollback-and-recovery) and [Partial Crate Rollback Guide](#partial-crate-rollback-guide)
+3. **Schedule maintenance window** — coordinate with stakeholders
+4. **Deploy during low-activity period** — minimize user impact
+5. **Monitor closely** — watch for errors, unusual patterns
 
 ---
 
 ## Testing Migrations
 
-### Unit Tests for Version Checking
+### Unit Tests
 
-Always maintain these tests in `src/storage.rs`:
-
-```rust
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_wrong_version_returns_upgrade_required() {
-        let env = Env::default();
-        let contract_id = env.register(crate::MarketContract, ());
-        env.as_contract(&contract_id, || {
-            env.storage().persistent().set(&StorageKey::StorageVersion, &0u32);
-            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
-        });
-    }
-
-    #[test]
-    fn test_missing_version_returns_upgrade_required() {
-        let env = Env::default();
-        let contract_id = env.register(crate::MarketContract, ());
-        env.as_contract(&contract_id, || {
-            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
-        });
-    }
-
-    #[test]
-    fn migration_after_set_version_storage_is_accessible() {
-        let env = Env::default();
-        let contract_id = env.register(crate::MarketContract, ());
-        
-        env.as_contract(&contract_id, || {
-            set_version(&env);
-            assert_eq!(assert_version(&env), Ok(()));
-            
-            // Storage operations should now work
-        });
-    }
-
-    #[test]
-    fn migration_future_version_is_rejected() {
-        let env = Env::default();
-        let contract_id = env.register(crate::MarketContract, ());
-        env.as_contract(&contract_id, || {
-            env.storage().persistent().set(
-                &StorageKey::StorageVersion, 
-                &(STORAGE_VERSION + 1)
-            );
-            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
-        });
-    }
-}
-```
-
-### Integration Test Strategy
-
-Create integration tests that simulate version mismatches:
+Test version checking and migration logic:
 
 ```rust
 #[test]
-#[should_panic(expected = "Error(Contract, #70)")]
-fn test_old_contract_rejects_operations_after_version_bump() {
+fn test_version_mismatch_fails_closed() {
     let env = Env::default();
-    env.mock_all_auths();
-    
     let contract_id = env.register(MarketContract, ());
-    let client = MarketContractClient::new(&env, &contract_id);
-    
-    // Simulate old deployment by setting old version
     env.as_contract(&contract_id, || {
-        storage::set_admin(&env, &Address::generate(&env));
-        env.storage().persistent().set(
-            &storage::StorageKey::StorageVersion, 
-            &(storage::STORAGE_VERSION - 1)
-        );
+        // Set wrong version
+        env.storage().persistent().set(&StorageKey::StorageVersion, &3u32);
+        
+        // All operations should fail
+        let result = some_storage_operation(&env);
+        assert_eq!(result, Err(ContractError::UpgradeRequired));
     });
-    
-    // This should fail with UpgradeRequired (#70)
-    client.get_market(&1u32);
 }
 ```
 
-### Manual Testing Checklist
+### Integration Tests
 
-Before deploying to testnet:
+Test the full migration path:
 
-- [ ] Version constant incremented
-- [ ] All storage types updated
-- [ ] Migration documented in MIGRATION.md
-- [ ] Unit tests pass
-- [ ] Integration tests pass
-- [ ] Contract builds successfully
-- [ ] Clippy passes with no warnings
-- [ ] Format check passes
+```rust
+#[test]
+fn test_full_migration_path() {
+    // 1. Deploy old version
+    // 2. Populate with data
+    // 3. Deploy new version
+    // 4. Verify data integrity
+    // 5. Verify new functionality works
+}
+```
 
-After deploying to testnet:
+### Testnet Validation Checklist
 
-- [ ] New deployment initialized successfully
-- [ ] Storage operations work on new deployment
-- [ ] Old deployment returns UpgradeRequired errors
-- [ ] Frontend integrates with new contract
-- [ ] All critical user flows tested
+- [ ] Deploy new version to testnet
+- [ ] Verify storage version is correct
+- [ ] Test all critical operations (create market, trade, settle)
+- [ ] Verify existing data is readable
+- [ ] Check event emissions
+- [ ] Monitor for 48 hours
+- [ ] Document any issues
 
 ---
 
 ## Rollback and Recovery
 
-### If Migration Fails on Testnet
+### When to Rollback
 
-**Immediate Actions:**
-1. **Do NOT deploy to mainnet**
-2. Investigate the failure root cause
-3. Fix the issue in code
-4. Re-test on local environment
-5. Deploy again to testnet with fixes
+Consider rollback when:
+- Critical bugs discovered in new version
+- Data corruption detected
+- Performance degradation
+- Security vulnerability found
 
-**Common Failure Scenarios:**
+### Rollback Strategy
 
-**Scenario 1: Version not set properly**
-```rust
-// Problem: Forgot to call set_version in initialize
-pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
-    admin.require_auth();
-    storage::set_admin(&env, &admin);
-    // Missing: storage::set_version(&env);
-    Ok(())
-}
+> **Important:** Stellar smart contracts are immutable once deployed. "Rollback" means deploying the previous version's WASM to a new contract ID, not reverting an existing deployment.
 
-// Solution: Add set_version call
-storage::set_version(&env);
-```
+#### Full Rollback
 
-**Scenario 2: Storage accessor skips version check**
-```rust
-// Problem: New function doesn't call assert_version
-pub fn get_new_field(env: &Env) -> Option<u32> {
-    // Missing: assert_version(env)?;
-    env.storage().persistent().get(&StorageKey::NewField)
-}
+1. **Stop new operations** — pause the contract if possible
+2. **Deploy previous version** — use the last known-good WASM
+3. **Migrate data back** — if storage layout changed, migrate data
+4. **Update integrations** — point clients to new contract ID
+5. **Communicate** — notify users of the change
 
-// Solution: Add version assertion
-pub fn get_new_field(env: &Env) -> Result<Option<u32>, ContractError> {
-    assert_version(env)?;
-    Ok(env.storage().persistent().get(&StorageKey::NewField))
-}
-```
+#### Partial Rollback
 
-### If Migration Fails on Mainnet
+For partial rollbacks (rolling back specific functionality while keeping other changes), see the dedicated [Partial Crate Rollback Guide](#partial-crate-rollback-guide) below.
 
-⚠️ **CRITICAL SITUATION** - Follow incident response plan:
+### Recovery Procedures
 
-1. **Immediate communication**
-   - Notify all users of the issue
-   - Provide status updates every 30 minutes
-   - Set expectations for resolution timeline
+If data corruption is detected:
 
-2. **Assess impact**
-   - Can users withdraw funds?
-   - Are positions locked?
-   - Is data corrupted or just inaccessible?
+1. **Isolate** — stop all writes immediately
+2. **Assess** — determine scope of corruption
+3. **Snapshot** — export current state for analysis
+4. **Restore** — deploy from last known-good state
+5. **Verify** — confirm data integrity before resuming
 
-3. **Emergency response options**
+---
 
-   **Option A: Quick fix and redeploy**
-   - Fix the bug immediately
-   - Deploy new contract with incremented version
-   - Migrate data if possible
+## Partial Crate Rollback Guide
 
-   **Option B: Restore from backup**
-   - Deploy previous working version
-   - Restore from known good state
-   - Resume operations with old version
+> **Scope:** This section defines the procedure for rolling back a *subset* of
+> the `vatix-contract` crate (e.g. a single module or entrypoint) without
+> reverting the entire deployment. It complements
+> [`scripts/upgrade/UPGRADE_PLAYBOOK.md`](../../scripts/upgrade/UPGRADE_PLAYBOOK.md),
+> which covers full-crate upgrades. Read both before executing a partial
+> rollback on any network.
 
-   **Option C: Data recovery script**
-   - Write custom contract to extract data
-   - Transform and migrate to new deployment
-   - Verify all data transferred correctly
+### Invariants (must hold before, during, and after rollback)
 
-4. **Post-incident review**
-   - Document what went wrong
-   - Update testing procedures
-   - Add safeguards to prevent recurrence
+A partial rollback is only valid if **all** of the following invariants are
+preserved. If any invariant cannot be guaranteed, abort and escalate to a
+full rollback.
+
+1. **Storage version is monotonic and authoritative.**
+   `STORAGE_VERSION` in `src/storage.rs` is the single source of truth for
+   layout compatibility. A partial rollback **must not** lower
+   `STORAGE_VERSION`. If the rolled-back module reads a layout written by a
+   newer version, it must fail closed with `ContractError::UpgradeRequired`
+   rather than reinterpret bytes.
+2. **Settlement idempotency is preserved.**
+   Settlement entrypoints remain idempotent: replaying a settlement for an
+   already-settled market returns the same terminal result and never
+   double-credits balances. Rollback must not reset settlement markers
+   (`Settled`, payout records) or clear idempotency keys.
+3. **Balances, swaps, and admin remain server/contract-sourced.**
+   The contract is the source of truth for balances, swap state, and admin
+   authority. A partial rollback must not introduce any client-trusted
+   balance, swap, or admin value, and must not weaken `require_auth` on
+   privileged entrypoints.
+4. **No privileged surface is widened.**
+   Rollback is deny-by-default: any entrypoint not explicitly re-enabled by
+   the rollback plan stays disabled. New privileged surfaces introduced by
+   the rolled-back change are removed, not merely hidden.
+
+### Fail-closed behavior on dependency outage
+
+Partial rollback must never trade availability for correctness on the money
+path. When a dependency is unavailable, writes fail closed:
+
+| Dependency | Failure mode | Required behavior |
+| --- | --- | --- |
+| RPC / network | Timeout or error | Abort the write; do not retry blindly. Surface a stable error to the caller. |
+| DB / indexer | Unavailable or stale | Reject writes that depend on indexed state; reads may serve last-known-good with an explicit staleness marker. |
+| Redis / cache | Unavailable | Bypass cache and read from the contract; never serve cached balances as authoritative. |
+
+- **Writes fail closed.** If the contract cannot confirm the current
+  storage version or settlement state, the write is rejected.
+- **Reads may degrade, never lie.** Degraded reads must be clearly marked
+  and must not be used to authorize a write.
+- **No silent fallback.** A failed dependency must produce an observable
+  error, not a default value.
+
+### Idempotency, replay, and concurrency
+
+Rollback entrypoints are themselves money-path operations and must be safe
+under retries and concurrent callers:
+
+- **Idempotency key.** Every rollback request carries a caller-supplied
+  `rollback_id` (or equivalent correlation id). Re-submitting the same
+  `rollback_id` returns the original result and performs no additional
+  state change.
+- **Replay protection.** A rollback request that has already been applied
+  is rejected with a stable error code (see below) rather than re-applied.
+- **Concurrency.** Two concurrent rollback requests for the same scope must
+  not both apply. The first to acquire the rollback lock wins; the second
+  observes the completed state and returns the idempotent result.
+- **Correlation ids.** Every rollback log line and error response includes
+  the `rollback_id` so operators can trace a request end-to-end without
+  exposing secrets.
+
+### Stable error codes
+
+Rollback entrypoints return stable, documented error codes so callers and
+runbooks can branch deterministically:
+
+| Code | Meaning |
+| --- | --- |
+| `RollbackUnauthorized` | Caller lacks the required role, or auth has expired. |
+| `RollbackAlreadyApplied` | The `rollback_id` was already applied (replay). |
+| `RollbackInProgress` | Another rollback holds the lock for this scope. |
+| `RollbackVersionConflict` | Storage version is incompatible; fail closed. |
+| `RollbackDependencyUnavailable` | A required dependency (RPC/DB/Redis) is down; write rejected. |
+
+### Authorization requirements
+
+- **Deny-by-default.** Only the admin role (or an explicitly delegated
+  rollback role) may invoke rollback entrypoints. Untrusted clients cannot
+  bypass rollback policy by calling the underlying module directly.
+- **Auth expiry.** An expired or missing auth token is treated as
+  unauthorized (`RollbackUnauthorized`); the request is rejected, never
+  downgraded to a read.
+- **Wrong role.** A caller with a valid but insufficient role is rejected
+  with `RollbackUnauthorized` and the attempt is logged with the
+  `rollback_id`.
+- **No privilege escalation via rollback.** Rollback must not grant any
+  role or capability that the caller did not already hold.
+
+### Observability
+
+- Emit a metric for every rollback attempt, tagged by outcome
+  (`applied`, `rejected`, `in_progress`) and scope.
+- Log the `rollback_id`, scope, and outcome. **Never** log secrets, keys,
+  or full addresses beyond what is already public.
+- Alert on any `RollbackVersionConflict` or
+  `RollbackDependencyUnavailable` — these indicate a fail-closed event on
+  the money path.
+
+### Feature flag / kill switch
+
+Any partial rollback that affects the money path or mainnet must land
+behind a feature flag or kill switch:
+
+- The flag defaults to **off**; enabling it is an explicit, audited action.
+- Flipping the flag off must restore the pre-rollback behavior without a
+  redeploy where the platform allows it.
+- The PR that introduces the rollback must document the flag name, its
+  default, and the exact steps to disable it.
+
+### Rollback procedure (step-by-step)
+
+1. **Confirm scope.** Identify the exact module/entrypoint to roll back and
+   the `rollback_id` for this operation.
+2. **Verify invariants.** Re-check the four invariants above against the
+   current on-chain state. Abort on any violation.
+3. **Check authz.** Confirm the caller holds the admin/rollback role and
+   that auth has not expired.
+4. **Acquire the rollback lock.** If another rollback is in progress for
+   this scope, stop (`RollbackInProgress`).
+5. **Apply behind the flag.** Enable the flag, apply the rollback, and
+   confirm the storage version is unchanged.
+6. **Verify.** Re-run the settlement idempotency and balance checks. Confirm
+   no privileged surface was widened.
+7. **Record.** Persist the `rollback_id` as applied so replays return
+   `RollbackAlreadyApplied`.
+8. **Communicate.** Update the runbook and notify Stellar Wave contributors
+   via the PR description and the cross-links in
+   [`scripts/upgrade/UPGRADE_PLAYBOOK.md`](../../scripts/upgrade/UPGRADE_PLAYBOOK.md).
+
+### Testnet vs mainnet
+
+- **Testnet:** run the full procedure end-to-end, including the flag flip
+  and a deliberate replay to confirm `RollbackAlreadyApplied`.
+- **Mainnet:** require the readiness checklist from the UPGRADE_PLAYBOOK,
+  a scheduled window, and a documented rollback-of-the-rollback. Do not
+  perform an irreversible mainnet partial rollback without that checklist.
+- **Address drift:** verify contract IDs and admin addresses against the
+  network before applying; a rollback against the wrong network is a
+  fail-closed abort, not a best-effort attempt.
 
 ---
 
 ## Common Pitfalls
 
-### Pitfall 1: Forgetting to Increment Version
+### 1. Forgetting to Bump Version
 
-**Problem:**
-```rust
-// Changed storage layout but forgot to bump version
-pub struct Position {
-    // ... existing fields ...
-    new_field: i128, // ADDED but version not bumped!
-}
-```
+**Problem:** Changed storage layout but didn't increment `STORAGE_VERSION`.
 
-**Consequence:** Deserialization errors, silent data corruption
+**Impact:** Old code may read new data incorrectly, causing corruption.
 
-**Prevention:**
-- Always bump version when changing storage types
-- Add a pre-commit hook to check for type changes
-- Code review checklist includes version check
+**Solution:** Always bump version when changing storage layout.
 
-### Pitfall 2: Skipping Version Check in New Functions
+### 2. Not Testing Migration Path
 
-**Problem:**
-```rust
-pub fn new_storage_function(env: &Env) {
-    // Missing assert_version(env)?;
-    env.storage().persistent().set(&StorageKey::NewKey, &value);
-}
-```
+**Problem:** Migration works in isolation but fails with real data.
 
-**Consequence:** New functions work on old deployments, creating inconsistent state
+**Impact:** Production deployment fails or corrupts data.
 
-**Prevention:**
-- Template for new storage functions includes version check
-- Clippy rule to detect missing version checks (if possible)
-- Code review specifically checks for version assertions
+**Solution:** Test with realistic data volumes and patterns.
 
-### Pitfall 3: Version Drift Across Contracts
+### 3. Missing Rollback Plan
 
-**Problem:**
-- Market contract at version 4
-- Treasury contract at version 2
-- Resolution contract at version 1
-- No coordination between versions
+**Problem:** No plan for reverting if migration fails.
 
-**Consequence:** Incompatible contracts, integration failures
+**Impact:** Extended downtime, data loss.
 
-**Prevention:**
-- Maintain a version compatibility matrix
-- Document inter-contract dependencies
-- Test contract integrations after version bumps
+**Solution:** Always have a rollback plan. See [Rollback and Recovery](#rollback-and-recovery) and [Partial Crate Rollback Guide](#partial-crate-rollback-guide).
 
-### Pitfall 4: Not Testing Old Deployment Lockout
+### 4. Incomplete Data Migration
 
-**Problem:**
-- Deployed new version
-- Old version still accessible
-- Users confused about which to use
+**Problem:** Some data migrated, some not.
 
-**Consequence:** Split state, user confusion, support burden
+**Impact:** Inconsistent state, failed operations.
 
-**Prevention:**
-- Always test that old deployment returns UpgradeRequired
-- Update documentation/frontend immediately
-- Monitor old contract for unexpected calls
+**Solution:** Migrate all data atomically or in a verifiable sequence.
 
-### Pitfall 5: Insufficient Migration Documentation
+### 5. Ignoring Storage Key Drift
 
-**Problem:**
-- Version bumped
-- No documentation of what changed
-- No migration steps provided
+**Problem:** `StorageKey` enum and `lib.rs` doc table diverge.
 
-**Consequence:** Future developers don't understand migration history
+**Impact:** Reviewer confusion, missed keys, integration bugs.
 
-**Prevention:**
-- Always update MIGRATION.md with each version bump
-- Include "what, why, how" for each change
-- Link to relevant PRs/issues
+**Solution:** Run the [Reviewer Checklist](#reviewer-checklist-storagekey-table-drift) on every storage PR.
 
 ---
 
 ## Version History
 
-### Version 6 (Current)
+### Version 4 (Current)
 
-**Date:** 2026-08-25
 **Changes:**
-- Added `StorageKey::CollateralBalance(Address)` and
-  `StorageKey::TotalLockedCollateral(Address)` — a protocol-wide, user-scoped
-  collateral ledger (ADR-002, issue #685). `deposit_collateral` credits
-  `CollateralBalance(user)` in addition to the existing per-market
-  `Position.total_deposited`, and `update_position` checks a trade's
-  prospective lock against this shared balance (net of what is already
-  locked in the user's other markets) instead of the per-market field alone.
-  See `docs/adr-002-protocol-wide-collateral.md`.
+- Added `Treasury` storage key
+- Added `FeeRateBps` storage key
+- Treasury integration for fee routing
 
-**Migration:** Fresh deployment required. No data migration available.
-Existing per-market `Position` records are untouched; a user's protocol-wide
-`CollateralBalance` and `TotalLockedCollateral` simply start at `0` and
-accrue from the next `deposit_collateral` / `update_position` call onward.
-
-**Breaking Changes:** None (additive only) — two new `StorageKey` variants.
-
----
-
-### Version 5
-
-**Date:** 2026-Q2
-**Changes:**
-- Added `EmergencyMode` storage for coordinated emergency mode (#662)
-
-**Migration:** Fresh deployment required. No data migration available.
-
-**Breaking Changes:** None (additive only) — new `StorageKey` variant.
-
----
-
-### Version 4
-
-**Date:** 2025-Q1
-**Changes:**
-- Added per-adapter-type `AdapterEnabled` flag (`StorageKey::AdapterEnabled`)
-  gating the Reflector/Pyth → Ed25519 fallback path in `verify_market_outcome` (#488)
-
-**Migration:** Fresh deployment required. No data migration available.
-
-**Breaking Changes:** None (additive only) — new `StorageKey` variant.
-
----
+**Migration from v3:**
+- No data migration required
+- New keys are optional
+- Redeploy and initialize
 
 ### Version 3
 
-**Date:** 2024-Q4
 **Changes:**
-- Added Treasury integration (StorageKey::Treasury, StorageKey::FeeRateBps)
-- Added Outcome Token integration (StorageKey::OutcomeTokenContract)
-- Added Resolution Contract integration (StorageKey::ResolutionContract)
-- Added multi-signer threshold support (StorageKey::ThresholdSigners, StorageKey::ThresholdQuorum)
+- Added `DepositLock` storage key
+- Added `Paused` storage key
+- Added `AdapterEnabled(AdapterType)` storage key
 
-**Migration:** Fresh deployment required. No data migration available.
-
-**Breaking Changes:** None (additive only)
-
----
+**Migration from v2:**
+- No data migration required
+- New keys default to disabled/unpaused
 
 ### Version 2
 
-**Date:** 2024-Q3
 **Changes:**
-- Fixed `locked_collateral` semantics (#262)
-- `locked_collateral` now derived from shares only
-- Removed direct collateral locking on deposit
+- Added position tracking
+- Added market settlement state
 
-**Migration:** Existing positions must recalculate `locked_collateral` using `calculate_locked_collateral(yes_shares, no_shares, market_price)`
-
-**Breaking Changes:** 
-- Positions with `locked_collateral == total_deposited` and no shares are incorrect
-- Must be recomputed to `locked_collateral = 0`
-
-**Reference:** See `MIGRATION.md` for detailed migration steps
-
----
+**Migration from v1:**
+- Positions migrated from v1 format
+- Settlement state initialized
 
 ### Version 1
 
-**Date:** 2024-Q2
-**Changes:**
-- Initial storage layout
-- Basic Market and Position types
-- Admin and market counter storage
-
-**Migration:** N/A (initial version)
-
----
-
-## Best Practices Summary
-
-### Development Phase
-
-✅ **DO:**
-- Increment version for any storage layout change
-- Document changes in MIGRATION.md
-- Add tests for version checking
-- Test migration on local environment first
-- Update all storage accessors to check version
-- Add comprehensive inline documentation
-
-❌ **DON'T:**
-- Skip version bump for "small" changes
-- Deploy without testing version lockout
-- Forget to initialize new deployment
-- Remove old MIGRATION.md entries
-- Assume old data is compatible
-
-### Deployment Phase
-
-✅ **DO:**
-- Test on testnet first
-- Verify old deployment is locked
-- Update frontend/services immediately
-- Monitor for errors after deployment
-- Communicate changes to users
-- Keep deployment scripts version controlled
-
-❌ **DON'T:**
-- Deploy to mainnet without testnet validation
-- Leave old contract accessible
-- Deploy during high-traffic periods (mainnet)
-- Skip backup/rollback planning
-- Assume migration will go smoothly
-
-### Post-Deployment Phase
-
-✅ **DO:**
-- Monitor error rates and logs
-- Verify all integrations working
-- Update documentation
-- Conduct post-deployment review
-- Archive old contract details
-- Update SDK/client libraries
-
-❌ **DON'T:**
-- Forget to update version compatibility docs
-- Leave old contract IDs in documentation
-- Skip user communication about changes
-- Ignore unexpected error patterns
+**Initial release:**
+- Basic market creation
+- Position tracking
+- Settlement
 
 ---
 
 ## Additional Resources
 
-### Code References
-
-- **Storage Module:** `contracts/market/src/storage.rs`
-- **Error Types:** `contracts/market/src/error.rs`
-- **Migration History:** `contracts/market/MIGRATION.md`
-- **Storage Tests:** `contracts/market/src/storage.rs#test`
-
-### External Documentation
-
-- [Soroban Storage Documentation](https://developers.stellar.org/docs/smart-contracts/data/storing-data)
-- [Soroban Contract Lifecycle](https://developers.stellar.org/docs/smart-contracts/smart-contract-lifecycle)
-- [Stellar CLI Reference](https://developers.stellar.org/docs/tools/cli)
-
-### Support
-
-- **GitHub Issues:** [vatix-contract/issues](https://github.com/Vatix-Protocol/vatix-contract/issues)
-- **Discussions:** [vatix-contract/discussions](https://github.com/Vatix-Protocol/vatix-contract/discussions)
+- [Upgrade Playbook](../../scripts/upgrade/UPGRADE_PLAYBOOK.md)
+- [Security Policy](../../SECURITY.md)
+- [Contributing Guide](../../CONTRIBUTING.md)
+- [Stellar Contract Documentation](https://developers.stellar.org/docs/smart-contracts)
 
 ---
 
-## Changelog
-
-| Date | Version | Author | Changes |
-|------|---------|--------|---------|
-| 2026-06-29 | 1.0.0 | Team | Initial comprehensive migration guide |
-
----
-
-**Last Updated:** 2026-06-29
-**Document Version:** 1.0.0
-**Contract Version:** 3
+**Last Updated:** See git history for this file.

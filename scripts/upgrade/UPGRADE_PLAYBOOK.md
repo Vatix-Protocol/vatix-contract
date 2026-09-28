@@ -198,6 +198,75 @@ If oracle adapters fail to activate correctly:
 3. Market contract can be redeployed with `OracleAdapters` key removed from storage
 4. Outcome token and treasury are not affected
 
+### Partial Crate Rollback Guide
+
+A **partial crate rollback** reverts one or more of the four crates to a
+previously pinned WASM hash while the others keep running the newer code.
+This is the common recovery path when a single crate's upgrade misbehaves
+(e.g. Resolution registers a bad adapter) and a full four-crate rollback is
+unnecessary. Partial rollback is **only** safe when the invariants below hold;
+otherwise fall back to the full ordered rollback in
+[`rollback.sh`](rollback.sh) and the market storage guide.
+
+#### Invariants (must hold before and after a partial rollback)
+
+1. **Storage version compatibility.** The rolled-back crate's on-chain
+   storage version must be readable by the code you are reverting to. Never
+   roll a crate back across a storage-version bump unless a dual-read path
+   exists (see [Dual-read migration](#dual-read-migration-for-the-next-storage-bump)).
+   A version mismatch must surface as `ContractError::UpgradeRequired` /
+   `TreasuryError::UpgradeRequired` — never a silent misread.
+2. **Settlement idempotency.** Rollback entrypoints are idempotent and
+   replay-safe: re-issuing a rollback for an already-reverted crate is a
+   no-op that returns the same terminal result, keyed by a stable
+   `rollback_id`. Concurrent or replayed requests must not double-apply.
+3. **Source of truth.** Balances, swaps, and admin state remain owned by the
+   server/contract. A partial rollback must not introduce a second writer for
+   any of these; the rolled-back crate continues to read the same
+   authoritative storage keys.
+4. **Wiring integrity.** Cross-contract addresses registered in step 5 of
+   [Deploy order](#deploy-order) must still resolve after the rollback. If a
+   rolled-back crate changes an address it previously published, re-wire it
+   before re-enabling traffic.
+
+#### Fail-closed behavior
+
+- **Dependency outage (RPC/DB/Redis).** If any dependency needed to verify
+  the target WASM hash, storage version, or wiring is unreachable, the
+  rollback **fails closed**: no write is applied and the crate stays on its
+  current code. Reads may degrade, but writes never proceed on unverified
+  state.
+- **Privileged surfaces.** Rollback entrypoints are deny-by-default. Only an
+  authorized admin role may invoke them; untrusted clients cannot bypass
+  rollback policy. Auth expiry or a wrong role returns a stable
+  `Unauthorized` error and applies no state change.
+- **Adversarial input.** Malformed `rollback_id`, unknown crate id, or a
+  target hash that does not match a pinned deployment record is rejected
+  before any write.
+
+#### Idempotency, replay, and concurrency
+
+- Every rollback request carries a client-supplied `rollback_id` and a
+  correlation id echoed in logs/metrics (no secrets).
+- Replaying a completed `rollback_id` returns the recorded terminal result
+  rather than re-applying.
+- Concurrent requests for the same crate serialize on the crate's rollback
+  lock; the loser observes the winner's terminal result.
+
+#### Authz and failure modes
+
+- **Role:** admin-only. Non-admin callers are rejected with `Unauthorized`.
+- **Expiry:** an expired admin session is treated as unauthorized; re-auth
+  is required before retrying.
+- **Wrong role:** rejected without leaking whether the crate exists.
+
+#### Testnet vs mainnet
+
+Partial rollback is rehearsed on testnet first. Contract IDs and pinned WASM
+hashes differ between testnet and mainnet (`deployments/testnet.json` vs the
+mainnet record); never reuse a testnet hash on mainnet. Mainnet partial
+rollback requires the readiness checklist and audit sign-off above.
+
 ---
 
 ## References
