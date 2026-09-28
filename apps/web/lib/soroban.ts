@@ -32,6 +32,83 @@ export const INDEXER_API_URL =
 export { MARKET_CONTRACT_ID } from "./contract-client";
 
 // ---------------------------------------------------------------------------
+// Freighter network passphrase resolution & validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable error codes for Freighter network passphrase handling.
+ * Callers can branch on these without parsing messages.
+ */
+export type FreighterNetworkErrorCode =
+  | "FREIGHTER_NETWORK_MISSING_CONFIG"
+  | "FREIGHTER_NETWORK_UNAVAILABLE"
+  | "FREIGHTER_NETWORK_MISMATCH";
+
+export class FreighterNetworkError extends Error {
+  readonly code: FreighterNetworkErrorCode;
+
+  constructor(code: FreighterNetworkErrorCode, message: string) {
+    super(message);
+    this.name = "FreighterNetworkError";
+    this.code = code;
+  }
+}
+
+/**
+ * Resolve the expected network passphrase from config.
+ * Fail-closed: throws when the passphrase is not configured.
+ */
+export function resolveExpectedNetworkPassphrase(): string {
+  const passphrase = NETWORK_PASSPHRASE.trim();
+  if (!passphrase) {
+    throw new FreighterNetworkError(
+      "FREIGHTER_NETWORK_MISSING_CONFIG",
+      "NEXT_PUBLIC_NETWORK_PASSPHRASE is not set. Configure the expected network passphrase.",
+    );
+  }
+  return passphrase;
+}
+
+/**
+ * Read the network passphrase currently selected in Freighter.
+ * Fail-closed: throws when Freighter is unavailable or returns no passphrase.
+ */
+export async function getFreighterNetworkPassphrase(): Promise<string> {
+  const { getNetworkDetails, error } = await import("@stellar/freighter-api");
+  if (error) {
+    throw new FreighterNetworkError(
+      "FREIGHTER_NETWORK_UNAVAILABLE",
+      error.message,
+    );
+  }
+  const details = await getNetworkDetails();
+  const passphrase = details?.networkPassphrase?.trim();
+  if (!passphrase) {
+    throw new FreighterNetworkError(
+      "FREIGHTER_NETWORK_UNAVAILABLE",
+      "Freighter did not report a network passphrase.",
+    );
+  }
+  return passphrase;
+}
+
+/**
+ * Assert that the connected Freighter network matches the configured network.
+ * Deny-by-default: any mismatch (or missing config) rejects signing.
+ */
+export async function assertFreighterNetworkMatches(): Promise<string> {
+  const expected = resolveExpectedNetworkPassphrase();
+  const actual = await getFreighterNetworkPassphrase();
+  if (actual !== expected) {
+    throw new FreighterNetworkError(
+      "FREIGHTER_NETWORK_MISMATCH",
+      "Connected Freighter network does not match the configured network passphrase.",
+    );
+  }
+  return expected;
+}
+
+// ---------------------------------------------------------------------------
 // Market reads (indexer API)
 // ---------------------------------------------------------------------------
 
@@ -85,11 +162,12 @@ interface SendResult {
  * Invoke a contract function using Freighter for signing.
  *
  * Flow:
- *   1. Fetch the caller's account from Horizon (sequence number)
- *   2. Build an unsigned InvokeHostFunction transaction via stellar-sdk
- *   3. Simulate via Soroban RPC (fills resource fees)
- *   4. Sign with Freighter
- *   5. Submit via Soroban RPC
+ *   1. Verify the connected Freighter network matches the configured network
+ *   2. Fetch the caller's account from Horizon (sequence number)
+ *   3. Build an unsigned InvokeHostFunction transaction via stellar-sdk
+ *   4. Simulate via Soroban RPC (fills resource fees)
+ *   5. Sign with Freighter
+ *   6. Submit via Soroban RPC
  */
 export async function invokeContract(
   functionName: "deposit" | "withdraw",
@@ -101,16 +179,19 @@ export async function invokeContract(
     );
   }
 
+  // 1. Fail-closed: reject when Freighter is on the wrong network.
+  const networkPassphrase = await assertFreighterNetworkMatches();
+
   const server = new rpc.Server(SOROBAN_RPC_URL);
 
-  // 1. Load source account (needed for sequence number)
+  // 2. Load source account (needed for sequence number)
   const account = await server.getAccount(args.address);
 
-  // 2. Build the transaction
+  // 3. Build the transaction
   const contract = new Contract(CONTRACT_ID);
   const tx = new TransactionBuilder(account, {
     fee: "100",
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase,
   })
     .addOperation(
       contract.call(
@@ -122,24 +203,24 @@ export async function invokeContract(
     .setTimeout(30)
     .build();
 
-  // 3. Simulate to get resource fees and footprint
+  // 4. Simulate to get resource fees and footprint
   const sim = await server.simulateTransaction(tx);
   if (rpc.Api.isSimulationError(sim)) {
     throw new Error(`Simulation failed: ${sim.error}`);
   }
   const preparedTx = rpc.assembleTransaction(tx, sim).build();
 
-  // 4. Sign with Freighter
+  // 5. Sign with Freighter
   const { signTransaction } = await import("@stellar/freighter-api");
   const { signedTxXdr, error } = await signTransaction(preparedTx.toXDR(), {
-    networkPassphrase: NETWORK_PASSPHRASE,
+    networkPassphrase,
     address: args.address,
   });
   if (error) throw new Error(error.message);
 
-  // 5. Submit
+  // 6. Submit
   const sent = await server.sendTransaction(
-    TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE),
+    TransactionBuilder.fromXDR(signedTxXdr, networkPassphrase),
   ) as SendResult;
 
   return { hash: sent.hash };

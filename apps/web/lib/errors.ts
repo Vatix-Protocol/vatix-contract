@@ -85,7 +85,123 @@ export function marketErrorMessage(code: number): string | undefined {
   return MARKET_ERROR_MESSAGES[code];
 }
 
+/**
+ * Stable error codes for the Freighter wallet integration path. These are
+ * surfaced to callers (and logged) instead of raw wallet/RPC messages so that
+ * network-mismatch and configuration failures are actionable and never leak
+ * secrets. See `docs/freighter-integration-guide.md`.
+ */
+export const FREIGHTER_ERROR_CODES = {
+  /** The connected Freighter network does not match the expected passphrase. */
+  NETWORK_MISMATCH: "FREIGHTER_NETWORK_MISMATCH",
+  /** No expected network passphrase was configured for this environment. */
+  MISSING_NETWORK_PASSPHRASE: "FREIGHTER_MISSING_NETWORK_PASSPHRASE",
+  /** Freighter did not report a network passphrase for the active connection. */
+  MISSING_WALLET_PASSPHRASE: "FREIGHTER_MISSING_WALLET_PASSPHRASE",
+  /** The wallet connection attempt was rejected or failed. */
+  CONNECT_FAILED: "FREIGHTER_CONNECT_FAILED",
+} as const;
+
+export type FreighterErrorCode =
+  (typeof FREIGHTER_ERROR_CODES)[keyof typeof FREIGHTER_ERROR_CODES];
+
+/**
+ * Error thrown by the Freighter integration when a network/passphrase invariant
+ * is violated. Carries a stable `code` so callers can branch on it and so logs
+ * stay free of secrets (only the code and a correlation id are emitted).
+ */
+export class FreighterError extends Error {
+  readonly code: FreighterErrorCode;
+  readonly correlationId?: string;
+
+  constructor(code: FreighterErrorCode, message: string, correlationId?: string) {
+    super(message);
+    this.name = "FreighterError";
+    this.code = code;
+    this.correlationId = correlationId;
+  }
+}
+
+/**
+ * Human-readable copy for each Freighter error code, safe to show in the UI.
+ */
+export const FREIGHTER_ERROR_MESSAGES: Record<FreighterErrorCode, string> = {
+  [FREIGHTER_ERROR_CODES.NETWORK_MISMATCH]:
+    "Your Freighter wallet is connected to a different network than this app expects. Switch networks in Freighter and try again.",
+  [FREIGHTER_ERROR_CODES.MISSING_NETWORK_PASSPHRASE]:
+    "This app isn't configured with an expected Stellar network. Contact support.",
+  [FREIGHTER_ERROR_CODES.MISSING_WALLET_PASSPHRASE]:
+    "Freighter didn't report a network passphrase. Reconnect your wallet and try again.",
+  [FREIGHTER_ERROR_CODES.CONNECT_FAILED]:
+    "Couldn't connect to Freighter. Make sure the extension is installed and unlocked.",
+};
+
+/**
+ * Resolves the expected Stellar network passphrase for the current environment.
+ * Fails closed: returns `undefined` when no passphrase is configured so callers
+ * can reject signing rather than defaulting to an unsafe network.
+ */
+export function resolveExpectedNetworkPassphrase(
+  configured?: string | null,
+): string | undefined {
+  const value = configured?.trim();
+  return value ? value : undefined;
+}
+
+/**
+ * Validates that the passphrase reported by the connected Freighter wallet
+ * matches the expected network passphrase. Deny-by-default: any missing or
+ * mismatched passphrase throws a `FreighterError` so signing/transactions are
+ * rejected before they reach the network.
+ */
+export function assertFreighterNetwork(
+  walletPassphrase: string | null | undefined,
+  expectedPassphrase: string | null | undefined,
+  correlationId?: string,
+): void {
+  const expected = resolveExpectedNetworkPassphrase(expectedPassphrase);
+  if (!expected) {
+    throw new FreighterError(
+      FREIGHTER_ERROR_CODES.MISSING_NETWORK_PASSPHRASE,
+      FREIGHTER_ERROR_MESSAGES[FREIGHTER_ERROR_CODES.MISSING_NETWORK_PASSPHRASE],
+      correlationId,
+    );
+  }
+
+  const actual = walletPassphrase?.trim();
+  if (!actual) {
+    throw new FreighterError(
+      FREIGHTER_ERROR_CODES.MISSING_WALLET_PASSPHRASE,
+      FREIGHTER_ERROR_MESSAGES[FREIGHTER_ERROR_CODES.MISSING_WALLET_PASSPHRASE],
+      correlationId,
+    );
+  }
+
+  if (actual !== expected) {
+    throw new FreighterError(
+      FREIGHTER_ERROR_CODES.NETWORK_MISMATCH,
+      FREIGHTER_ERROR_MESSAGES[FREIGHTER_ERROR_CODES.NETWORK_MISMATCH],
+      correlationId,
+    );
+  }
+}
+
+/**
+ * Returns the user-facing message for a Freighter error code, falling back to
+ * the generic connect-failure copy for unknown codes.
+ */
+export function freighterErrorMessage(code: string): string {
+  return (
+    FREIGHTER_ERROR_MESSAGES[code as FreighterErrorCode] ??
+    FREIGHTER_ERROR_MESSAGES[FREIGHTER_ERROR_CODES.CONNECT_FAILED]
+  );
+}
+
 export function parseContractError(err: unknown): string {
+  if (err instanceof FreighterError) {
+    return err.message;
+  }
+
   const message = err instanceof Error ? err.message : String(err);
 
   // Soroban host trap, e.g. `Error(Contract, #10)` — surfaced as-is by the
