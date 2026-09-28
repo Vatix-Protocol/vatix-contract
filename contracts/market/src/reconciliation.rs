@@ -235,11 +235,11 @@ mod tests {
 
         let parity = env.as_contract(&contract_id, || {
             storage::set_version(&env);
-            let mut position = Position::new_empty(market_id, &user);
+            let mut position = Position::new_empty(market_id, user.clone());
             position.yes_shares = 100;
             position.no_shares = 50;
             position.is_settled = true;
-            storage::set_position(&env, market_id, &user, &position);
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             get_position_token_parity(&env, market_id, &user).unwrap()
         });
 

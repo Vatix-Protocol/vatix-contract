@@ -13,6 +13,30 @@
 //!    `fee_rate_bps` range (0–10_000) and edge `amount`s near zero and near the
 //!    `validate_amount_reasonable` ceiling (`i128::MAX / 2`) — see the
 //!    "Dust rule" note on [`validation::calculate_fee`] fuzz coverage below.
+//!
+//! ## #897: no underflow across deposit/withdraw sequences
+//!
+//! The [`deposit_withdraw_sequences`] module drives the *real* contract
+//! entrypoints (`deposit_collateral` / `withdraw_unused_collateral` through
+//! `MarketContractClient`, a Stellar asset token, and optionally a registered
+//! treasury) with random operation sequences, fee rates, and fee waivers.
+//! After every operation it checks, against an independent model:
+//!
+//! 6. **Exact accounting**: a successful withdraw of `amount` reduces
+//!    `total_deposited` by exactly `amount + fee` (#377); a deposit raises it
+//!    by exactly `amount`. `total_deposited` never goes negative.
+//! 7. **Fee-on-top boundary**: a withdraw succeeds iff
+//!    `amount + fee <= total_deposited - locked_collateral`; otherwise it fails
+//!    with `InsufficientCollateral` — never a panic, wrap, or partial payout.
+//! 8. **Atomic failure**: any rejected operation (insufficient funds, cooldown,
+//!    invalid or extreme amount) leaves the position and every token balance
+//!    unchanged.
+//! 9. **Token conservation**: `user + market + treasury` balances are constant,
+//!    the market holds `total_deposited` plus any fee retained without a
+//!    treasury, and the treasury holds exactly the fees routed to it (its
+//!    `total_collected` agrees).
+//! 10. **Waivers**: a waived user never pays a fee and can withdraw its whole
+//!     available balance.
 
 use crate::error::ContractError;
 use crate::positions;
@@ -23,17 +47,24 @@ use crate::withdraw::withdraw_unused_collateral;
 use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
 
-/// Strategy for random position state with valid invariant: locked <= deposited
+/// Strategy for random position state with valid invariant: locked <= deposited.
+///
+/// `locked` is derived from the shares/price exactly as `update_position`
+/// does, and `deposited` is that lock plus random slack — the only states the
+/// contract can reach (a trade that would lock more than is deposited is
+/// rejected). Pairing arbitrary shares with an independent `deposited` would
+/// fabricate impossible states and fail the invariant spuriously.
 fn arb_valid_position() -> impl Strategy<Value = (i128, i128, i128, i128)> {
-    // deposited in 0..10M, shares in 0..1M, locked derived from shares/price
-    (0i128..=10_000_000i128).prop_flat_map(|total_deposited| {
-        (
-            0i128..=1_000_000i128, // yes_shares
-            0i128..=1_000_000i128, // no_shares
-            0i128..=10_000i128,    // market_price
-            Just(total_deposited),
-        )
-    })
+    (
+        0i128..=1_000_000i128,  // yes_shares
+        0i128..=1_000_000i128,  // no_shares
+        0i128..=10_000i128,     // market_price
+        0i128..=10_000_000i128, // unlocked slack
+    )
+        .prop_map(|(yes, no, price, slack)| {
+            let locked = positions::calculate_locked_collateral(yes, no, price);
+            (yes, no, price, locked + slack)
+        })
 }
 
 /// Strategy for fuzzing withdraw amount against available collateral
@@ -127,13 +158,12 @@ proptest! {
     }
 
     /// Invariant B: on success, total_deposited decreases by exactly `amount`
-    /// (no fee, no locked shares).
+    /// (fee rate explicitly 0 — the default is 50 bps — and no locked shares).
     #[test]
     fn prop_successful_withdraw_decrements_deposited(
-        deposited in 1i128..=10_000_000i128,
-        amount in 1i128..=10_000_000i128,
+        (deposited, amount) in (1i128..=10_000_000i128)
+            .prop_flat_map(|deposited| (Just(deposited), 1i128..=deposited)),
     ) {
-        prop_assume!(amount <= deposited);
 
         let env = Env::default();
         env.mock_all_auths();
@@ -160,6 +190,7 @@ proptest! {
             storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
+            storage::set_fee_rate_bps(&env, 0);
         });
 
         soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token)
@@ -417,7 +448,7 @@ mod fee_rounding_invariants {
             // granularity rather than rounding up in its own favor.
             if fee_rate_bps > 0 && amount < 10_000 / fee_rate_bps.max(1) {
                 prop_assert_eq!(fee_amount, 0,
-                    "expected fee to floor to 0 for tiny amount={amount} at bps={fee_rate_bps}");
+                    "expected fee to floor to 0 for tiny amount={} at bps={}", amount, fee_rate_bps);
             }
         }
 
@@ -454,8 +485,8 @@ mod fee_rounding_invariants {
                 }
                 None => {
                     prop_assert_eq!(result, Err(ContractError::ArithmeticOverflow),
-                        "expected graceful ArithmeticOverflow (not a panic/wrap) for amount={amount} bps={fee_rate_bps}, got {:?}",
-                        result);
+                        "expected graceful ArithmeticOverflow (not a panic/wrap) for amount={} bps={}, got {:?}",
+                        amount, fee_rate_bps, result);
                 }
             }
         }
@@ -469,7 +500,7 @@ mod fee_rounding_invariants {
             let fee_amount = validation::calculate_fee(amount, 10_000i128)
                 .expect("calculate_fee must not error for valid inputs");
             prop_assert_eq!(fee_amount, amount,
-                "expected fee_amount == amount at 10_000 bps, got fee={fee_amount} amount={amount}");
+                "expected fee_amount == amount at 10_000 bps, got fee={} amount={}", fee_amount, amount);
         }
 
         /// At a zero fee rate, fee_amount must always be exactly zero
@@ -481,7 +512,473 @@ mod fee_rounding_invariants {
             let fee_amount = validation::calculate_fee(amount, 0i128)
                 .expect("calculate_fee must not error for valid inputs");
             prop_assert_eq!(fee_amount, 0,
-                "expected fee_amount == 0 at 0 bps, got fee={fee_amount} for amount={amount}");
+                "expected fee_amount == 0 at 0 bps, got fee={} for amount={}", fee_amount, amount);
         }
+    }
+}
+
+/// #897: random deposit/withdraw sequences through the real entrypoints.
+///
+/// Every case builds a fresh market backed by a Stellar asset token, picks a
+/// fee rate (0–100 %), optionally waives the user's fee and optionally
+/// registers a treasury, then replays a random list of operations. After
+/// each operation the on-chain state is compared with an independent model
+/// (see invariants 6–10 in the module docs).
+mod deposit_withdraw_sequences {
+    extern crate std;
+
+    use super::*;
+    use crate::MarketContractClient;
+    use soroban_sdk::testutils::Ledger as _;
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
+    use vatix_treasury_contract::{TreasuryContract, TreasuryContractClient};
+
+    const COOLDOWN: u64 = 3_600;
+    const USER_FUNDS: i128 = 1_000_000_000_000;
+    const PRICE_BPS: i128 = 5_000;
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Deposit(i128),
+        /// Withdraw after the cooldown has elapsed.
+        Withdraw(i128),
+        /// Withdraw the largest amount whose `amount + fee` fits `available`.
+        WithdrawMax,
+        /// One stroop more than `WithdrawMax` — must be rejected.
+        WithdrawMaxPlusOne,
+        /// Withdraw without waiting out the post-deposit cooldown.
+        WithdrawImmediately(i128),
+        /// Invalid / overflow-prone amounts — must fail closed.
+        WithdrawExtreme(i128),
+        /// Buy YES shares to lock part of the deposit.
+        Trade(i128),
+    }
+
+    fn arb_op() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            3 => (1i128..=1_000_000_000i128).prop_map(Op::Deposit),
+            3 => (1i128..=1_000_000_000i128).prop_map(Op::Withdraw),
+            2 => Just(Op::WithdrawMax),
+            2 => Just(Op::WithdrawMaxPlusOne),
+            1 => (1i128..=1_000_000_000i128).prop_map(Op::WithdrawImmediately),
+            1 => prop_oneof![
+                Just(0i128),
+                Just(-1i128),
+                Just(i128::MIN),
+                Just(i128::MAX),
+                Just(i128::MAX / 2),
+                Just(i128::MAX / 2 + 1),
+            ]
+            .prop_map(Op::WithdrawExtreme),
+            1 => (1i128..=500_000_000i128).prop_map(Op::Trade),
+        ]
+    }
+
+    fn arb_fee_bps() -> impl Strategy<Value = i128> {
+        prop_oneof![
+            Just(0i128),
+            Just(50i128),
+            Just(10_000i128),
+            1i128..=10_000i128
+        ]
+    }
+
+    /// Independent model of what the contract should hold.
+    #[derive(Default)]
+    struct Model {
+        deposited: i128,
+        user: i128,
+        market: i128,
+        treasury: i128,
+        last_deposit: Option<u64>,
+    }
+
+    struct Harness {
+        env: Env,
+        client: MarketContractClient<'static>,
+        market_addr: Address,
+        user: Address,
+        token: TokenClient<'static>,
+        treasury: Option<Address>,
+        market_id: u32,
+        fee_bps: i128,
+        waived: bool,
+    }
+
+    impl Harness {
+        fn new(fee_bps: i128, waived: bool, with_treasury: bool) -> Self {
+            let env = Env::default();
+            env.mock_all_auths();
+            env.ledger().set_timestamp(1_000_000);
+
+            let admin = Address::generate(&env);
+            let user = Address::generate(&env);
+            let market_addr = env.register(crate::MarketContract, ());
+            env.as_contract(&market_addr, || {
+                storage::set_admin(&env, &admin);
+                storage::set_version(&env);
+                storage::set_fee_rate_bps(&env, fee_bps);
+                if waived {
+                    storage::add_fee_waiver(&env, &user);
+                }
+            });
+            let client = MarketContractClient::new(&env, &market_addr);
+
+            let token_addr = env
+                .register_stellar_asset_contract_v2(Address::generate(&env))
+                .address();
+            StellarAssetClient::new(&env, &token_addr).mint(&user, &USER_FUNDS);
+
+            let market_id = client.initialize_market(
+                &admin,
+                &String::from_str(&env, "fuzz #897"),
+                &(env.ledger().timestamp() + 300 * 86_400), // < 1y market cap; ops advance ~1h each
+                &BytesN::from_array(&env, &[1u8; 32]),
+                &token_addr,
+                &None,
+            );
+
+            let treasury = with_treasury.then(|| {
+                let treasury = env.register(TreasuryContract, ());
+                TreasuryContractClient::new(&env, &treasury).initialize(&admin, &market_addr);
+                env.as_contract(&market_addr, || storage::set_treasury(&env, &treasury));
+                treasury
+            });
+
+            let token = TokenClient::new(&env, &token_addr);
+            Harness {
+                env,
+                client,
+                market_addr,
+                user,
+                token,
+                treasury,
+                market_id,
+                fee_bps,
+                waived,
+            }
+        }
+
+        fn position(&self) -> Position {
+            self.env.as_contract(&self.market_addr, || {
+                storage::get_position(&self.env, self.market_id, &self.user)
+                    .unwrap()
+                    .unwrap_or_else(|| Position::new_empty(self.market_id, self.user.clone()))
+            })
+        }
+
+        /// Fee the model expects, computed independently of `calculate_fee`.
+        fn fee(&self, amount: i128) -> i128 {
+            if self.waived {
+                0
+            } else {
+                amount * self.fee_bps / 10_000
+            }
+        }
+
+        fn available(&self) -> i128 {
+            let p = self.position();
+            p.total_deposited - p.locked_collateral
+        }
+
+        fn max_withdrawable(&self) -> i128 {
+            let available = self.available();
+            if available <= 0 {
+                return 0;
+            }
+            let mut a = available * 10_000 / (10_000 + if self.waived { 0 } else { self.fee_bps });
+            while a + 1 + self.fee(a + 1) <= available {
+                a += 1;
+            }
+            while a > 0 && a + self.fee(a) > available {
+                a -= 1;
+            }
+            a
+        }
+
+        fn skip_cooldown(&self) {
+            self.env
+                .ledger()
+                .set_timestamp(self.env.ledger().timestamp() + COOLDOWN + 1);
+        }
+
+        fn in_cooldown(&self, model: &Model) -> bool {
+            model
+                .last_deposit
+                .is_some_and(|t| self.env.ledger().timestamp() - t < COOLDOWN)
+        }
+
+        fn try_withdraw(&self, amount: i128) -> Result<(), ContractError> {
+            match self
+                .client
+                .try_withdraw_unused_collateral(&self.user, &self.market_id, &amount)
+            {
+                Ok(_) => Ok(()),
+                Err(Ok(e)) => Err(e),
+                // A host-level failure (trap, overflow panic) is never acceptable.
+                Err(Err(e)) => panic!("withdraw({amount}) trapped the host: {e:?}"),
+            }
+        }
+    }
+
+    /// Apply a withdraw of `amount` and update the model per invariants 6–8.
+    fn check_withdraw(h: &Harness, model: &mut Model, amount: i128) -> Result<(), TestCaseError> {
+        let before = h.position();
+        let result = h.try_withdraw(amount);
+
+        if h.in_cooldown(model) {
+            prop_assert_eq!(result, Err(ContractError::WithdrawCooldownActive));
+            return Ok(());
+        }
+
+        let fee = h.fee(amount);
+        let available = before.total_deposited - before.locked_collateral;
+        if amount + fee <= available {
+            prop_assert_eq!(
+                result,
+                Ok(()),
+                "amount={} fee={} available={}",
+                amount,
+                fee,
+                available
+            );
+            model.deposited -= amount + fee;
+            model.user += amount;
+            model.market -= amount;
+            if fee > 0 {
+                if h.treasury.is_some() {
+                    model.market -= fee;
+                    model.treasury += fee;
+                }
+                // Without a treasury the fee stays in the market's balance.
+            }
+        } else {
+            prop_assert_eq!(
+                result,
+                Err(ContractError::InsufficientCollateral),
+                "amount={} fee={} available={}",
+                amount,
+                fee,
+                available
+            );
+        }
+        Ok(())
+    }
+
+    fn check_invariants(h: &Harness, model: &Model) -> Result<(), TestCaseError> {
+        let p = h.position();
+        prop_assert!(
+            p.total_deposited >= 0,
+            "total_deposited underflowed: {}",
+            p.total_deposited
+        );
+        prop_assert_eq!(
+            p.total_deposited,
+            model.deposited,
+            "total_deposited drifted from model"
+        );
+        prop_assert!(
+            p.locked_collateral <= p.total_deposited,
+            "locked {} > deposited {}",
+            p.locked_collateral,
+            p.total_deposited
+        );
+
+        // Single market: the protocol-wide balance (ADR-002) must track the
+        // per-market deposit exactly — withdrawals debit it (#897).
+        let protocol_balance = h.env.as_contract(&h.market_addr, || {
+            storage::get_collateral_balance(&h.env, &h.user)
+        });
+        prop_assert_eq!(
+            protocol_balance,
+            model.deposited,
+            "CollateralBalance drifted"
+        );
+
+        prop_assert_eq!(h.token.balance(&h.user), model.user, "user balance");
+        prop_assert_eq!(
+            h.token.balance(&h.market_addr),
+            model.market,
+            "market balance"
+        );
+        let treasury_balance = h.treasury.as_ref().map_or(0, |t| h.token.balance(t));
+        prop_assert_eq!(treasury_balance, model.treasury, "treasury balance");
+        if let Some(t) = &h.treasury {
+            prop_assert_eq!(
+                TreasuryContractClient::new(&h.env, t).total_collected(),
+                model.treasury,
+                "treasury total_collected must equal fees routed"
+            );
+        }
+        prop_assert_eq!(
+            model.user + model.market + model.treasury,
+            USER_FUNDS,
+            "tokens created or destroyed"
+        );
+        // Market custody covers every deposit still owed to the user.
+        prop_assert!(model.market >= model.deposited);
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        /// Invariants 6–10 across random sequences, fee rates, waivers and
+        /// treasury configurations.
+        #[test]
+        fn prop_deposit_withdraw_sequence_never_underflows(
+            fee_bps in arb_fee_bps(),
+            waived in any::<bool>(),
+            with_treasury in any::<bool>(),
+            ops in proptest::collection::vec(arb_op(), 1..24),
+        ) {
+            let h = Harness::new(fee_bps, waived, with_treasury);
+            let mut model = Model { user: USER_FUNDS, ..Model::default() };
+
+            for op in ops {
+                match op {
+                    Op::Deposit(amount) => {
+                        h.client.deposit_collateral(&h.user, &h.market_id, &amount);
+                        model.deposited += amount;
+                        model.user -= amount;
+                        model.market += amount;
+                        model.last_deposit = Some(h.env.ledger().timestamp());
+                    }
+                    Op::Withdraw(amount) => {
+                        h.skip_cooldown();
+                        check_withdraw(&h, &mut model, amount)?;
+                    }
+                    Op::WithdrawMax => {
+                        h.skip_cooldown();
+                        let max = h.max_withdrawable();
+                        if max > 0 {
+                            check_withdraw(&h, &mut model, max)?;
+                            // Fee-on-top boundary: exactly `max` fits.
+                            prop_assert!(h.available() >= 0);
+                        }
+                    }
+                    Op::WithdrawMaxPlusOne => {
+                        h.skip_cooldown();
+                        let over = h.max_withdrawable() + 1;
+                        let before = h.position();
+                        prop_assert_eq!(h.try_withdraw(over), Err(ContractError::InsufficientCollateral));
+                        prop_assert_eq!(h.position(), before);
+                    }
+                    Op::WithdrawImmediately(amount) => {
+                        check_withdraw(&h, &mut model, amount)?;
+                    }
+                    Op::WithdrawExtreme(amount) => {
+                        h.skip_cooldown();
+                        let before = h.position();
+                        let result = h.try_withdraw(amount);
+                        prop_assert!(result.is_err(), "extreme amount {} must be rejected", amount);
+                        prop_assert_eq!(h.position(), before, "rejected withdraw mutated the position");
+                    }
+                    Op::Trade(yes) => {
+                        let before = h.position();
+                        let traded = h
+                            .client
+                            .try_update_position(&h.user, &h.market_id, &yes, &0i128, &PRICE_BPS)
+                            .is_ok();
+                        let after = h.position();
+                        // Trading moves the lock, never the deposit.
+                        prop_assert_eq!(after.total_deposited, before.total_deposited);
+                        if !traded {
+                            prop_assert_eq!(after, before);
+                        }
+                    }
+                }
+                check_invariants(&h, &model)?;
+            }
+        }
+
+        /// Invariant 10: a waived user can drain exactly its whole available
+        /// balance at any fee rate, and pays nothing.
+        #[test]
+        fn prop_waived_user_withdraws_full_available_fee_free(
+            fee_bps in arb_fee_bps(),
+            deposit in 1i128..=1_000_000_000i128,
+            with_treasury in any::<bool>(),
+        ) {
+            let h = Harness::new(fee_bps, true, with_treasury);
+            h.client.deposit_collateral(&h.user, &h.market_id, &deposit);
+            h.skip_cooldown();
+
+            prop_assert_eq!(h.try_withdraw(deposit), Ok(()));
+            prop_assert_eq!(h.position().total_deposited, 0);
+            prop_assert_eq!(h.token.balance(&h.user), USER_FUNDS);
+            prop_assert_eq!(h.token.balance(&h.market_addr), 0);
+            // Nothing left: even one stroop more now fails closed.
+            prop_assert_eq!(h.try_withdraw(1), Err(ContractError::InsufficientCollateral));
+        }
+
+        /// Invariant 7 at the exact boundary for a single deposit: the largest
+        /// fitting amount succeeds and leaves only fee dust; one more fails.
+        #[test]
+        fn prop_fee_on_top_boundary_is_exact(
+            fee_bps in arb_fee_bps(),
+            deposit in 1i128..=1_000_000_000i128,
+        ) {
+            let h = Harness::new(fee_bps, false, false);
+            h.client.deposit_collateral(&h.user, &h.market_id, &deposit);
+            h.skip_cooldown();
+
+            let max = h.max_withdrawable();
+            if max == 0 {
+                prop_assert_eq!(h.try_withdraw(1), Err(ContractError::InsufficientCollateral));
+            } else {
+                prop_assert_eq!(h.try_withdraw(max + 1), Err(ContractError::InsufficientCollateral));
+                prop_assert_eq!(h.try_withdraw(max), Ok(()));
+                let left = h.position().total_deposited;
+                prop_assert_eq!(left, deposit - max - h.fee(max));
+                prop_assert!(left >= 0);
+            }
+        }
+    }
+
+    /// Regression found by `prop_deposit_withdraw_sequence_never_underflows`:
+    /// withdrawing everything used to leave the protocol-wide
+    /// `CollateralBalance` untouched, so a later trade could lock collateral
+    /// that had already been paid out (locked 1 > deposited 0).
+    #[test]
+    fn withdrawn_collateral_cannot_back_new_trades() {
+        let h = Harness::new(0, false, false);
+        h.client
+            .deposit_collateral(&h.user, &h.market_id, &44_250_427);
+        h.skip_cooldown();
+        h.try_withdraw(44_250_427).unwrap();
+
+        let result =
+            h.client
+                .try_update_position(&h.user, &h.market_id, &2i128, &0i128, &PRICE_BPS);
+        assert_eq!(
+            result.err(),
+            Some(Ok(ContractError::InsufficientCollateral))
+        );
+        let p = h.position();
+        assert_eq!((p.total_deposited, p.locked_collateral), (0, 0));
+    }
+
+    /// Deterministic regression: repeated full round-trips at 100 % fee never
+    /// push `total_deposited` below zero.
+    #[test]
+    fn repeated_round_trips_at_max_fee_stay_non_negative() {
+        let h = Harness::new(10_000, false, true);
+        let mut routed = 0i128;
+        for _ in 0..5 {
+            h.client.deposit_collateral(&h.user, &h.market_id, &1_001);
+            h.skip_cooldown();
+            let max = h.max_withdrawable();
+            assert!(max > 0);
+            h.try_withdraw(max).unwrap();
+            routed += h.fee(max);
+            assert!(h.position().total_deposited >= 0);
+        }
+        let treasury = h.treasury.as_ref().unwrap();
+        assert_eq!(h.token.balance(treasury), routed);
+        assert_eq!(
+            h.token.balance(&h.market_addr),
+            h.position().total_deposited
+        );
     }
 }

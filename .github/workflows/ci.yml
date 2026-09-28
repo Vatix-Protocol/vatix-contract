@@ -248,6 +248,20 @@ jobs:
       - name: Check workspace members
         run: bash scripts/check-workspace-members.sh
 
+  # #892 — AUTH_TABLE coverage.
+  # Fails CI when a contract entrypoint that calls `require_auth()` is not
+  # documented in AUTH_TABLE.md, or when AUTH_TABLE.md still lists an
+  # entrypoint that no longer exists. Enforces the "Authorization
+  # (AUTH_TABLE)" section of .github/PULL_REQUEST_TEMPLATE.md. Pure bash/awk,
+  # so it runs without a Rust toolchain and fails fast.
+  auth-table-coverage:
+    name: AUTH_TABLE coverage (#892)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check AUTH_TABLE.md covers every auth-gated entrypoint
+        run: bash scripts/check-auth-table.sh
+
   build-contracts:
     name: Build all contract crates
     runs-on: ubuntu-latest

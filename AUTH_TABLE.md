@@ -5,6 +5,25 @@ Inventory of every admin-gated (or otherwise privileged) mutator across the
 check each one performs. Produced as part of the auth-hardening pass; keep
 this in sync whenever an admin entrypoint is added, removed, or renamed.
 
+## Keeping this table in sync (#892)
+
+This table is enforced, not advisory:
+
+- **CI check**: `bash scripts/check-auth-table.sh` (job *AUTH_TABLE coverage*
+  in `.github/workflows/ci.yml`) fails when
+  1. any `pub fn` in a contract's `#[contractimpl]` block calls
+     `require_auth()` but its name does not appear in backticks in this file
+     (a new or renamed privileged entrypoint that was not documented), or
+  2. a table row below names an entrypoint that no longer exists in that
+     contract (a removed or renamed entrypoint left behind as a stale row).
+- **PR template**: the *Authorization (AUTH_TABLE)* section of
+  `.github/PULL_REQUEST_TEMPLATE.md` asks every PR that adds, removes,
+  renames, or re-gates an entrypoint to update this table in the same PR.
+
+User-facing entrypoints that call `require_auth()` on the acting user (not an
+admin) are listed in the paragraph under each contract's table rather than as
+rows.
+
 Every row below follows the same two-step pattern unless noted otherwise:
 
 1. `caller.require_auth()` — cryptographic proof the caller signed the call.
@@ -38,15 +57,25 @@ Every row below follows the same two-step pattern unless noted otherwise:
 | `propose_outcome_token_contract` / `execute_outcome_token_contract` / `cancel_outcome_token_contract` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked outcome-token-contract rotation. |
 | `propose_resolution_contract` / `execute_resolution_contract` / `cancel_resolution_contract` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked resolution-contract rotation; gates `resolve_market` once set. |
 | `propose_threshold_signers` / `execute_threshold_signers` / `cancel_threshold_signers` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked global threshold-signer/quorum rotation (#665). |
-| `set_market_threshold_signers`  | ✅ | ✅ | Immediate (not timelocked) per-market signer/quorum override — scoped to a single `Active` market rather than the global admin key set, which is why it isn't timelocked like the global family above. |
-| `set_threshold_signers`         | ✅ | ✅ | Legacy immediate global signer/quorum setter, retained only for test backward-compatibility; prefer the `propose_threshold_signers` timelock family for production changes. |
+| `set_market_threshold_signers`  | ✅ | ✅ | Immediate (not timelocked) per-market signer/quorum override — scoped to a single `Active` market rather than the global admin key set, which is why it isn't timelocked like the global family above. The legacy immediate global setter `set_threshold_signers` has been removed; the timelocked `propose_threshold_signers` family is the only global path. |
+| `set_treasury_contract`         | ✅ | ✅ | Immediate (not timelocked) treasury-address setter (#770) alongside the timelocked `propose_treasury_contract` family; performs no address validation, so prefer the timelocked family in production. The registered treasury receives every withdraw fee via `collect_fee` (#895). |
+| `set_market_adapter_config`     | ✅ | ✅ | Per-market Reflector/Pyth adapter config (#681). Required before an enabled Reflector adapter can resolve that market — a missing config fails closed with `OraclePriceUnavailable`. |
+| `enable_oracle_adapters`        | ✅ (`authorized_caller`) | ✅ | One-way adapter-only lock. Once set, **every** Ed25519 resolution path (`resolve_market`, `resolve_market_v2`, `resolve_market_threshold`, `resolve_market_threshold_v2`, and the `verify_signature*` views) rejects with `UnauthorizedOracle` (#898). There is no disable entrypoint by design. |
 | `set_fee_rate` (propose) / `execute_fee_rate_change` / `cancel_fee_rate_change` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked; fee cap is re-checked at *both* proposal and execution time so a cap lowered mid-flight can't let a stale rate through. `cancel_fee_rate_change` (Issue #748) clears a pending change before it takes effect; returns `NoPendingFeeChange` if nothing is pending. |
 | `set_fee_cap`                   | ✅ | ✅ | Hard upper bound on `set_fee_rate`. |
 | `add_fee_waiver` / `remove_fee_waiver` | ✅ | ✅ | Admin cannot waive itself (#584). |
 | `reconcile_position_tokens`     | ✅ | ✅ | Admin-gated repair of a `Position` / `OutcomeToken` divergence (see `reconciliation.rs`); mints/burns `OutcomeToken` balances to match `Position`, never the reverse. |
 
 `execute_*` entrypoints above are intentionally public — access control is
-the timelock (`effective_at`), not caller identity. `settle_position`,
+the timelock (`effective_at`), not caller identity.
+
+`resolve_market`, `resolve_market_v2`, `resolve_market_threshold`, and
+`resolve_market_threshold_v2` call `resolver.require_auth()` on the submitting
+address, but the access control is the oracle signature (or signer quorum),
+plus the pause, emergency-mode, adapter-lock, V1 kill-switch, network-binding
+and resolution-contract (dispute) gates listed in
+[docs/SECURITY.md § Oracle report verification path](docs/SECURITY.md#oracle-report-verification-path-898).
+`settle_position`,
 `batch_settle_positions`, `settle_positions_page`, `update_position`,
 `deposit_collateral`, `withdraw_unused_collateral`,
 `withdraw_canceled_collateral`, `buy_yes`/`buy_no`/`sell_yes`/`sell_no`, and
@@ -60,6 +89,7 @@ are out of scope for this table.
 | `initialize`           | ✅ | n/a (bootstraps admin) | |
 | `withdraw_fees`        | ✅ | ✅ | |
 | `propose_admin` / `execute_admin` / `cancel_admin` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | 48h timelock (`ADDRESS_TIMELOCK_SECONDS`) admin rotation. |
+| `transfer_admin`       | ✅ (`caller`) | ✅ | Immediate (not timelocked) admin hand-over, retained alongside the timelocked `propose_admin` family; fails closed with `NotInitialized` before `initialize`. Prefer the timelocked family for production rotations. |
 | `add_market`           | ✅ | ✅ | |
 | `remove_market`        | ✅ | ✅ | |
 | `propose_market_contract` / `execute_market_contract` / `cancel_market_contract` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked market-contract rotation. **Fixed by #720**: `execute_market_contract` used to overwrite the entire `AuthorizedMarkets` registry with a single-element vec, silently deregistering every market previously added via `add_market` (no `market_removed` event, no error) — registry drift between the two entrypoints that both mutate `AuthorizedMarkets`. It now appends idempotently, matching `add_market`. |
@@ -80,7 +110,7 @@ identity — it is a market-contract-facing entrypoint, not an admin mutator.
 | `set_default_challenge_window`  | ✅ | ✅ (`require_admin`) | **Reviewed for #723**: intentionally *not* timelocked, unlike the propose/execute families below. `challenge_window_secs` is advisory only — `propose`/`propose_v2`/`appeal` each take their own `challenge_window_seconds` argument (bounded by the fixed `MIN_CHALLENGE_WINDOW_SECONDS`/`MAX_CHALLENGE_WINDOW_SECONDS` constants) and store it immutably on the candidate at creation time; the default is never read by any of them. An instant admin change here cannot move an existing candidate's `challenge_deadline` or constrain a future proposer's chosen window, so it carries none of the "instant address/config change" risk the timelock pattern exists to prevent. See the doc comment on `set_default_challenge_window` in `lib.rs` and its regression tests in `test.rs`. |
 | `propose_factory` / `execute_factory` / `cancel_factory` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Timelocked (`ADDRESS_TIMELOCK_SECONDS`, 48h) factory rotation. **`propose_factory` and `cancel_factory` were calling `require_admin` (address equality) with no `admin.require_auth()` at all** — any caller could pass the real admin's address as the argument and pass the equality check without ever proving they hold that key, silently rotating the factory after the timelock. Fixed by this pass: both now call `admin.require_auth()` before the equality check, matching every other admin mutator in this file. |
 | `propose_market_contract` / `execute_market_contract` / `cancel_market_contract` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅, execute n/a | Same gap found and fixed in this pass: `propose_market_contract` and `cancel_market_contract` now call `admin.require_auth()`. |
-| `set_treasury`                  | ✅ | ✅ (`require_admin`) | Optional treasury recipient for the slashed-bond treasury cut. |
+| `propose_treasury` / `execute_treasury` / `cancel_treasury` | propose ✅, execute —, cancel ✅ | propose ✅, cancel ✅ (`require_admin`), execute n/a | Timelocked (`ADDRESS_TIMELOCK_SECONDS`, #687) optional treasury recipient for the slashed-bond treasury cut. Replaces the former immediate `set_treasury`. |
 | `slash_collateral`              | ✅ | ✅ (`require_admin`) | |
 | `arbitrate_uphold_proposer`      | ✅ | ✅ (`require_admin`) | Terminal, timelocked (`ARBITRATION_TIMELOCK_SECONDS`, 48h) dispute path: upholds the proposer once `MAX_APPEAL_ROUNDS` are exhausted. |
 | `void_market`                    | ✅ | ✅ (`require_admin`) | Terminal, timelocked dispute path: voids the market (→ `Canceled`) when neither side can be safely vindicated on-chain. |
@@ -141,7 +171,7 @@ Not previously covered by this table at all — added by this pass.
 | Entrypoint            | require_auth | admin/role-equality check | Notes |
 |------------------------|:---:|:---:|-------|
 | `initialize`           | ✅ (`admin`) | n/a (bootstraps admin) | Guarded by `AlreadyInitialized`. |
-| `set_market_contract`  | ✅ (`admin`) | ✅ (`config.admin`) | Updates the sole address allowed to `mint`/`burn`. |
+| `propose_market_contract` / `execute_market_contract` / `cancel_market_contract` | propose ✅ (`admin`), execute —, cancel ✅ (`admin`) | propose ✅, cancel ✅ (`config.admin`), execute n/a | Timelocked rotation of the sole address allowed to `mint`/`burn`. Replaces the former immediate `set_market_contract`. |
 | `set_metadata`         | ✅ (`admin`) | ✅ (`config.admin`) | Updates SAC-compatible `name`/`symbol`. |
 | `pause` / `unpause`    | ✅ (`admin`) | ✅ (`config.admin`) | Issue #750. Administratively freezes all token mutations (`mint`, `burn`, `transfer`) until `unpause` is called. `ContractPaused` error returned on any attempt while frozen. Defaults to `false` (unpaused) on fresh deployment. Emits `ContractPaused` / `ContractUnpaused` events. |
 | `mint`                 | ✅ (`config.market_contract`) | n/a — role check *is* the auth check | Only the registered market contract may mint; not admin-gated by design. Blocked with `ContractPaused` while paused (#750). |

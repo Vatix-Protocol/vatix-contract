@@ -170,6 +170,9 @@ pub fn withdraw_unused_collateral(
         .ok_or(ContractError::ArithmeticOverflow)?;
 
     storage::set_position(&env, market_id, &user, &position)?;
+    // The withdrawn amount and the fee both leave the user's protocol-wide
+    // collateral (#897); otherwise they could still back new trades.
+    storage::debit_collateral_balance(&env, &user, total_deducted);
 
     // 8. Route fee to treasury if one is registered (External Calls)
     let contract_address = env.current_contract_address();
@@ -217,7 +220,20 @@ pub fn withdraw_unused_collateral(
 mod tests {
     use super::*;
     use crate::types::{AdapterType, Market};
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _, Ledger as _},
+        Address, BytesN, Env, String, TryFromVal,
+    };
+
+    /// True if the most recent contract invocation published a `large_withdraw`
+    /// event (the first topic of a `#[contractevent]` is its snake_case name).
+    fn has_large_withdraw_event(env: &Env) -> bool {
+        env.events().all().iter().any(|(_, topics, _)| {
+            topics.get(0).is_some_and(|t| {
+                Symbol::try_from_val(env, &t).is_ok_and(|s| s == Symbol::new(env, "large_withdraw"))
+            })
+        })
+    }
 
     fn setup_env() -> Env {
         Env::default()
@@ -569,6 +585,8 @@ mod tests {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
         });
         assert!(result.is_ok());
+        // Capture before any further invocation replaces the event buffer.
+        let events = env.events().all();
 
         // User receives exactly the requested amount.
         assert_eq!(token_client.balance(&user), 40);
@@ -583,7 +601,6 @@ mod tests {
         assert_eq!(updated.total_deposited, 56); // 100 - 40 - 4
 
         // The explicit "fee retained" event was emitted.
-        let events = env.events().all();
         let has_retained_event = events.iter().any(|(_, topics, _)| {
             let topic0: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
             topic0 == soroban_sdk::Symbol::new(&env, "fee_retained_no_treasury")
@@ -620,6 +637,7 @@ mod tests {
             is_settled: false,
         };
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         let treasury_addr = env.register(TreasuryContract, ());
         TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &contract_id);
 
@@ -638,11 +656,11 @@ mod tests {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
         });
         assert!(result.is_ok());
+        let events = env.events().all();
 
         assert_eq!(token_client.balance(&user), 40);
         assert_eq!(token_client.balance(&treasury_addr), 4);
 
-        let events = env.events().all();
         let has_retained_event = events.iter().any(|(_, topics, _)| {
             let topic0: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&env);
             topic0 == soroban_sdk::Symbol::new(&env, "fee_retained_no_treasury")
@@ -682,6 +700,7 @@ mod tests {
             is_settled: false,
         };
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         let treasury_addr = env.register(TreasuryContract, ());
         TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &contract_id);
 
@@ -745,6 +764,7 @@ mod tests {
             is_settled: false,
         };
         let admin = Address::generate(&env);
+        env.mock_all_auths();
         let treasury_addr = env.register(TreasuryContract, ());
         TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &contract_id);
 
@@ -821,19 +841,17 @@ mod tests {
             storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
+            // Isolate the audit-event path from the default 50 bps fee.
+            storage::set_fee_rate_bps(&env, 0);
         });
         env.mock_all_auths();
         StellarAssetClient::new(&env, &token).mint(&contract_id, &amount);
-        env.events().all(); // clear setup events
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, amount)
         });
         assert!(result.is_ok());
-        let events = env.events().all();
         assert!(
-            !events
-                .iter()
-                .any(|e| e.topics.iter().any(|t| t.to_string().contains("large_withdraw"))),
+            !has_large_withdraw_event(&env),
             "LargeWithdraw audit event should not be emitted below threshold"
         );
     }
@@ -860,19 +878,17 @@ mod tests {
             storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();
             storage::set_position(&env, market_id, &user, &position).unwrap();
+            // Isolate the audit-event path from the default 50 bps fee.
+            storage::set_fee_rate_bps(&env, 0);
         });
         env.mock_all_auths();
         StellarAssetClient::new(&env, &token).mint(&contract_id, &amount);
-        env.events().all(); // clear setup events
         let result = env.as_contract(&contract_id, || {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, amount)
         });
         assert!(result.is_ok());
-        let events = env.events().all();
         assert!(
-            events
-                .iter()
-                .any(|e| e.topics.iter().any(|t| t.to_string().contains("large_withdraw"))),
+            has_large_withdraw_event(&env),
             "LargeWithdraw audit event should be emitted at/above threshold"
         );
     }
@@ -951,6 +967,9 @@ mod tests {
             total_deposited: 1_000,
             is_settled: false,
         };
+        // Start past the cooldown so `now - WITHDRAW_COOLDOWN_SECONDS` does
+        // not saturate to 0 (which would put the deposit at `now`).
+        env.ledger().set_timestamp(WITHDRAW_COOLDOWN_SECONDS * 2);
         env.as_contract(&contract_id, || {
             storage::set_version(&env);
             storage::set_market(&env, market_id, &market).unwrap();

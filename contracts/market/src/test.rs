@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod test {
+    extern crate std;
+    use std::string::ToString;
+
     use crate::{
         storage,
         types::{Market, MarketStatus},
@@ -7,7 +10,7 @@ mod test {
     };
     use soroban_sdk::{
         testutils::{Address as _, BytesN as _, Events, Ledger},
-        Address, BytesN, Env, String,
+        Address, BytesN, Env, String, TryFromVal,
     };
     use vatix_resolution_contract::{ResolutionContract, ResolutionContractClient};
 
@@ -27,6 +30,22 @@ mod test {
         });
 
         (env, admin, client, contract_id)
+    }
+
+    /// Register an integration contract directly in storage. Used by tests
+    /// whose subject is not the timelocked `propose_*`/`execute_*` setter
+    /// itself, so the 48h timelock does not push their markets past
+    /// `end_time`.
+    fn register_resolution_contract(env: &Env, contract_id: &Address, resolution: &Address) {
+        env.as_contract(contract_id, || {
+            storage::set_resolution_contract(env, resolution)
+        });
+    }
+
+    fn register_outcome_token_contract(env: &Env, contract_id: &Address, outcome_token: &Address) {
+        env.as_contract(contract_id, || {
+            storage::set_outcome_token_contract(env, outcome_token)
+        });
     }
 
     fn get_market_from_storage(env: &Env, contract_id: &Address, market_id: u32) -> Market {
@@ -90,7 +109,7 @@ mod test {
         let admin = Address::generate(&env);
 
         // Initialize should succeed with a valid account address
-        let result = client.initialize(&admin);
+        let result = client.try_initialize(&admin);
         assert!(result.is_ok());
 
         // Verify admin was set
@@ -152,10 +171,12 @@ mod test {
         assert!(events.len() > 0);
 
         // Check for contract_initialized_event
-        let event_found = events.iter().any(|e| {
-            e.topics
-                .iter()
-                .any(|t| t.to_string().contains("contract_initialized"))
+        let event_found = events.iter().any(|(_, topics, _)| {
+            topics.get(0).is_some_and(|t| {
+                soroban_sdk::Symbol::try_from_val(&env, &t).is_ok_and(|name| {
+                    name == soroban_sdk::Symbol::new(&env, "contract_initialized")
+                })
+            })
         });
         assert!(event_found, "contract_initialized_event should be emitted");
     }
@@ -557,7 +578,7 @@ mod test {
             &non_existent_market_id,
             &outcome,
             &invalid_signature,
-            &0u64,
+            &(env.ledger().timestamp() + 3_600),
         );
     }
 
@@ -599,7 +620,7 @@ mod test {
             &market_id_str,
             &outcome,
             &invalid_signature,
-            &0u64,
+            &(env.ledger().timestamp() + 3_600),
         );
     }
 
@@ -634,7 +655,7 @@ mod test {
             &market_id_str,
             &outcome,
             &invalid_signature,
-            &0u64,
+            &(env.ledger().timestamp() + 3_600),
         );
     }
 
@@ -665,7 +686,7 @@ mod test {
             &market_id_str,
             &outcome,
             &invalid_signature,
-            &0u64,
+            &(env.ledger().timestamp() + 3_600),
         );
 
         assert_eq!(
@@ -711,7 +732,13 @@ mod test {
         // Resolve market with valid signature
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &0u64);
+        client.resolve_market(
+            &resolver,
+            &market_id_str,
+            &outcome,
+            &signature,
+            &(env.ledger().timestamp() + 3_600),
+        );
 
         // Verify market is now Resolved
         let market_after = get_market_from_storage(&env, &contract_id, market_id);
@@ -929,7 +956,12 @@ mod test {
         );
         assert_paused!(client.try_settle_positions_page(&market_id, &0u32, &10u32));
         assert_paused!(client.try_close_market_to_deposits(&admin, &market_id));
-        assert_paused!(client.try_reconcile_position_tokens(&admin, &market_id, &user));
+        assert_paused!(client.try_reconcile_position_tokens(
+            &admin,
+            &market_id,
+            &user,
+            &BytesN::from_array(&env, &[1u8; 32])
+        ));
         assert_paused!(client.try_propose_treasury_contract(&admin, &Address::generate(&env)));
         assert_paused!(client.try_execute_treasury_contract());
         assert_paused!(client.try_cancel_treasury_contract(&admin));
@@ -950,7 +982,6 @@ mod test {
         assert_paused!(client.try_execute_threshold_signers());
         assert_paused!(client.try_cancel_threshold_signers(&admin));
         assert_paused!(client.try_set_market_threshold_signers(&admin, &market_id, &signers, &1u32));
-        assert_paused!(client.try_set_threshold_signers(&admin, &signers, &1u32));
         assert_paused!(client.try_propose_outcome_token_contract(&admin, &Address::generate(&env)));
         assert_paused!(client.try_execute_outcome_token_contract());
         assert_paused!(client.try_cancel_outcome_token_contract(&admin));
@@ -1031,7 +1062,13 @@ mod test {
         // Resolve market with valid signature
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &0u64);
+        client.resolve_market(
+            &resolver,
+            &market_id_str,
+            &outcome,
+            &signature,
+            &(env.ledger().timestamp() + 3_600),
+        );
 
         // Verify event was emitted
         let events = env.events().all();
@@ -1120,10 +1157,11 @@ mod test {
         );
     }
 
-    /// Passing `expires_at = 0` disables expiry enforcement — the call must
-    /// succeed regardless of the current ledger timestamp (backwards compat).
+    /// #701: `expires_at = 0` no longer disables expiry enforcement — it is
+    /// rejected outright, even with a valid signature and the ledger far in
+    /// the future (the case the old "zero = no expiry" sentinel let through).
     #[test]
-    fn resolve_market_zero_expires_at_disables_expiry_check() {
+    fn resolve_market_zero_expires_at_rejected_far_in_future() {
         let (env, admin, client, contract_id) = create_test_contract();
 
         let question = String::from_str(&env, "Zero expires_at test");
@@ -1141,16 +1179,17 @@ mod test {
             &None,
         );
 
-        // Advance ledger far into the future — expires_at=0 means no check.
         env.ledger().set_timestamp(u64::MAX / 2);
 
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        // expires_at=0 → no expiry enforcement, must succeed.
-        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &0u64);
+        assert_eq!(
+            client.try_resolve_market(&resolver, &market_id_str, &outcome, &signature, &0u64),
+            Err(Ok(crate::error::ContractError::OracleMessageExpired))
+        );
 
         let market = get_market_from_storage(&env, &contract_id, market_id);
-        assert_eq!(market.status, crate::types::MarketStatus::Resolved);
+        assert_eq!(market.status, crate::types::MarketStatus::Active);
     }
 
     /// Expiry check fires BEFORE signature verification so the error is always
@@ -1312,7 +1351,7 @@ mod test {
         let (env, admin, client, contract_id) = create_test_contract();
 
         // Enable oracle adapters
-        let result = client.enable_oracle_adapters(&admin);
+        let result = client.try_enable_oracle_adapters(&admin);
         assert!(result.is_ok());
 
         // Verify flag is set
@@ -1322,7 +1361,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #40)")]
+    #[should_panic(expected = "Error(Contract, #41)")] // NotAdmin
     fn test_enable_oracle_adapters_non_admin_fails() {
         let (env, _admin, client, _contract_id) = create_test_contract();
 
@@ -1335,9 +1374,9 @@ mod test {
         let (env, admin, client, contract_id) = create_test_contract();
 
         // Enable adapters multiple times
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
+        assert!(client.try_enable_oracle_adapters(&admin).is_ok());
+        assert!(client.try_enable_oracle_adapters(&admin).is_ok());
+        assert!(client.try_enable_oracle_adapters(&admin).is_ok());
 
         // Flag should still be set
         env.as_contract(&contract_id, || {
@@ -1353,7 +1392,7 @@ mod test {
         env.events().all();
 
         // Enable adapters
-        client.enable_oracle_adapters(&admin).unwrap();
+        client.enable_oracle_adapters(&admin);
 
         // Verify event was emitted
         let events = env.events().all();
@@ -1602,96 +1641,65 @@ mod test {
         assert_eq!(position.no_shares, 50 * STROOPS_PER_USDC);
     }
 
-    // ========== set_fee_rate_bps / get_fee_rate_bps tests ==========
+    // ========== set_fee_rate / get_fee_rate tests ==========
 
     #[test]
-    fn test_get_fee_rate_bps_default_is_50() {
-        let (env, _admin, client, _contract_id) = create_test_contract();
-        assert_eq!(client.get_fee_rate_bps(), 50u32);
+    fn test_get_fee_rate_default_is_50() {
+        let (_env, _admin, client, _contract_id) = create_test_contract();
+        assert_eq!(client.get_fee_rate(), 50i128);
+    }
+
+    /// Propose `rate` and apply it once the #496 timelock has elapsed.
+    fn apply_fee_rate(env: &Env, client: &MarketContractClient, admin: &Address, rate: i128) {
+        client.set_fee_rate(admin, &rate);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        client.execute_fee_rate_change();
     }
 
     #[test]
-    fn test_set_fee_rate_bps_admin_can_update() {
+    fn test_set_fee_rate_admin_can_update() {
         let (env, admin, client, _contract_id) = create_test_contract();
-        client.set_fee_rate_bps(&admin, &100u32);
-        assert_eq!(client.get_fee_rate_bps(), 100u32);
+        client.set_fee_rate(&admin, &100i128);
+        // Proposal alone does not change the live rate (#496 timelock).
+        assert_eq!(client.get_fee_rate(), 50i128);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        assert_eq!(client.execute_fee_rate_change(), 100i128);
+        assert_eq!(client.get_fee_rate(), 100i128);
     }
 
     #[test]
-    fn test_set_fee_rate_bps_zero_is_valid() {
+    fn test_set_fee_rate_zero_is_valid() {
         let (env, admin, client, _contract_id) = create_test_contract();
-        client.set_fee_rate_bps(&admin, &0u32);
-        assert_eq!(client.get_fee_rate_bps(), 0u32);
+        apply_fee_rate(&env, &client, &admin, 0);
+        assert_eq!(client.get_fee_rate(), 0i128);
     }
 
     #[test]
-    fn test_set_fee_rate_bps_max_boundary_valid() {
+    fn test_set_fee_rate_max_boundary_valid() {
         let (env, admin, client, _contract_id) = create_test_contract();
-        client.set_fee_rate_bps(&admin, &10_000u32);
-        assert_eq!(client.get_fee_rate_bps(), 10_000u32);
+        apply_fee_rate(&env, &client, &admin, 10_000);
+        assert_eq!(client.get_fee_rate(), 10_000i128);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #34)")]
-    fn test_set_fee_rate_bps_exceeds_max_rejected() {
-        let (env, admin, client, _contract_id) = create_test_contract();
-        client.set_fee_rate_bps(&admin, &10_001u32);
+    fn test_set_fee_rate_exceeds_max_rejected() {
+        let (_env, admin, client, _contract_id) = create_test_contract();
+        assert_eq!(
+            client.try_set_fee_rate(&admin, &10_001i128),
+            Err(Ok(crate::error::ContractError::InvalidPrice))
+        );
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #41)")]
-    fn test_set_fee_rate_bps_non_admin_rejected() {
+    fn test_set_fee_rate_non_admin_rejected() {
         let (env, _admin, client, _contract_id) = create_test_contract();
         let non_admin = Address::generate(&env);
-        client.set_fee_rate_bps(&non_admin, &50u32);
-    }
-
-    // ========== token_balance tests ==========
-
-    #[test]
-    fn test_token_balance_returns_contract_balance() {
-        use soroban_sdk::token::StellarAssetClient;
-
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register(MarketContract, ());
-        let client = MarketContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            storage::set_admin(&env, &admin);
-        });
-
-        let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin);
-        let collateral_token = token.address();
-        let sac = StellarAssetClient::new(&env, &collateral_token);
-
-        // Mint directly to the market contract to simulate held collateral.
-        sac.mint(&contract_id, &500i128);
-
-        assert_eq!(client.token_balance(&collateral_token), 500i128);
-    }
-
-    #[test]
-    fn test_token_balance_zero_when_no_funds() {
-        use soroban_sdk::token::StellarAssetClient;
-
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contract_id = env.register(MarketContract, ());
-        let client = MarketContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        env.as_contract(&contract_id, || {
-            storage::set_admin(&env, &admin);
-        });
-
-        let token_admin = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(token_admin);
-        let collateral_token = token.address();
-
-        assert_eq!(client.token_balance(&collateral_token), 0i128);
+        assert_eq!(
+            client.try_set_fee_rate(&non_admin, &50i128),
+            Err(Ok(crate::error::ContractError::NotAdmin))
+        );
     }
 
     // ========== Validation guard tests ==========
@@ -2076,7 +2084,10 @@ mod test {
         let (env, admin, client, contract_id) = create_test_contract();
         let outcome_token_contract = Address::generate(&env);
 
-        client.set_outcome_token_contract(&admin, &outcome_token_contract);
+        client.propose_outcome_token_contract(&admin, &outcome_token_contract);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        client.execute_outcome_token_contract();
 
         env.as_contract(&contract_id, || {
             assert_eq!(
@@ -2091,7 +2102,10 @@ mod test {
         let (env, admin, client, contract_id) = create_test_contract();
         let resolution_contract = Address::generate(&env);
 
-        client.set_resolution_contract(&admin, &resolution_contract);
+        client.propose_resolution_contract(&admin, &resolution_contract);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        client.execute_resolution_contract();
 
         env.as_contract(&contract_id, || {
             assert_eq!(
@@ -2114,11 +2128,11 @@ mod test {
             Err(Ok(ContractError::NotAdmin))
         );
         assert_eq!(
-            client.try_set_outcome_token_contract(&stranger, &address),
+            client.try_propose_outcome_token_contract(&stranger, &address),
             Err(Ok(ContractError::NotAdmin))
         );
         assert_eq!(
-            client.try_set_resolution_contract(&stranger, &address),
+            client.try_propose_resolution_contract(&stranger, &address),
             Err(Ok(ContractError::NotAdmin))
         );
     }
@@ -2139,10 +2153,15 @@ mod test {
             storage::set_version(&env);
         });
 
-        let collateral_token = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+        let collateral_token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
         let question = String::from_str(&env, "Will it rain tomorrow?");
         let end_time = env.ledger().timestamp() + 86400;
-        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        // The first market gets id 1; sign for it up front so the market's
+        // oracle key matches the signature `propose` pre-validates.
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, 1, true);
         let market_id = client.initialize_market(
             &admin,
             &question,
@@ -2151,34 +2170,43 @@ mod test {
             &collateral_token,
             &None,
         );
+        assert_eq!(market_id, 1);
 
         let resolution_addr = env.register(ResolutionContract, ());
         ResolutionContractClient::new(&env, &resolution_addr).initialize(
             &admin,
             &Address::generate(&env),
             &contract_id,
+            &60u64,
         );
 
-        client.set_resolution_contract(&admin, &resolution_addr);
-
-        let (_oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, true);
+        register_resolution_contract(&env, &contract_id, &resolution_addr);
 
         let proposer = Address::generate(&env);
-        let evidence = String::from_str(&env, "evidence://uri");
+        let bond = vatix_resolution_contract::MIN_BOND_AMOUNT;
+        soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token).mint(&proposer, &bond);
+        let evidence = String::from_str(&env, "https://example.com/evidence");
         ResolutionContractClient::new(&env, &resolution_addr).propose(
             &proposer,
             &market_id,
             &true,
             &signature,
-            &(env.ledger().timestamp() + 60),
+            &(env.ledger().timestamp() + 3_600),
             &evidence,
             &60,
+            &bond,
         );
 
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, &market_id.to_string());
         assert_eq!(
-            client.try_resolve_market(&resolver, &market_id_str, &true, &signature, &0u64),
+            client.try_resolve_market(
+                &resolver,
+                &market_id_str,
+                &true,
+                &signature,
+                &(env.ledger().timestamp() + 3_600)
+            ),
             Err(Ok(ContractError::ResolutionNotFinalized))
         );
     }
@@ -2212,7 +2240,7 @@ mod test {
         // mode exclusively. The gate is intentionally independent of the
         // candidate's current status, so proposed and challenged candidates
         // cannot be bypassed through a valid threshold quorum.
-        client.set_resolution_contract(&admin, &Address::generate(&env));
+        register_resolution_contract(&env, &contract_id, &Address::generate(&env));
 
         assert_eq!(
             client.try_resolve_market_threshold(&resolver, &market_id, &true, &signatures),
@@ -2688,6 +2716,7 @@ mod test {
         });
         StellarAssetClient::new(&env, &stored_market.collateral_token)
             .mint(&contract_id, &(100 * STROOPS_PER_USDC));
+        env.ledger().set_timestamp(env.ledger().timestamp() + 3_601); // past cooldown (#413)
         client.withdraw_unused_collateral(&user, &market_id, &withdraw_amount);
 
         let after = env.as_contract(&contract_id, || {
@@ -2695,7 +2724,9 @@ mod test {
                 .unwrap()
                 .unwrap()
         });
-        assert_eq!(after.total_deposited, deposit - withdraw_amount);
+        // The default 50 bps fee is deducted on top of the amount (#377).
+        let fee = crate::validation::calculate_fee(withdraw_amount, 50).unwrap();
+        assert_eq!(after.total_deposited, deposit - withdraw_amount - fee);
         assert_eq!(after.locked_collateral, before.locked_collateral); // unchanged
     }
 
@@ -2705,11 +2736,14 @@ mod test {
         use crate::{error::ContractError, positions::STROOPS_PER_USDC};
 
         let deposit = 100 * STROOPS_PER_USDC;
-        let (_env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
+        let (env, user, client, _contract_id, market_id) = setup_funded_market(deposit);
 
         // Buy 100 YES shares at 60% → lock = 60 USDC; available = 40 USDC.
         let shares = 100 * STROOPS_PER_USDC;
         client.update_position(&user, &market_id, &shares, &0i128, &6_000i128);
+        // Step past the post-deposit withdraw cooldown (#413) so the lock
+        // check, not the cooldown, is what rejects the withdrawal.
+        env.ledger().set_timestamp(env.ledger().timestamp() + 3_601);
 
         // Try to withdraw 50 USDC (> available 40 USDC) → rejected.
         let result =
@@ -2775,7 +2809,13 @@ mod test {
         });
         let market_id_str = String::from_str(&env, "1");
         let resolver = Address::generate(&env);
-        client.resolve_market(&resolver, &market_id_str, &true, &signature, &0u64);
+        client.resolve_market(
+            &resolver,
+            &market_id_str,
+            &true,
+            &signature,
+            &(env.ledger().timestamp() + 3_600),
+        );
 
         // Make sure the contract holds enough tokens to pay out.
         let stored_market = env.as_contract(&contract_id, || {
@@ -2790,9 +2830,9 @@ mod test {
 
         let events = env.events().all();
         // Expect both position_updated_event and position_settled_event.
-        let names: Vec<Symbol> = events
+        let names: std::vec::Vec<Symbol> = events
             .iter()
-            .map(|e| e.1.get::<soroban_sdk::Val>(0).unwrap().into_val(&env))
+            .map(|e| e.1.get(0).unwrap().into_val(&env))
             .collect();
 
         assert!(
@@ -2835,9 +2875,9 @@ mod test {
         client.withdraw_canceled_collateral(&user, &market_id);
 
         let events = env.events().all();
-        let names: Vec<Symbol> = events
+        let names: std::vec::Vec<Symbol> = events
             .iter()
-            .map(|e| e.1.get::<soroban_sdk::Val>(0).unwrap().into_val(&env))
+            .map(|e| e.1.get(0).unwrap().into_val(&env))
             .collect();
 
         assert!(
@@ -2955,11 +2995,20 @@ mod test {
                 .to_bytes(),
         );
 
-        client.update_market_oracle(&admin, &market_id, &new_oracle_pubkey);
+        client.propose_market_oracle(&admin, &market_id, &new_oracle_pubkey);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        client.execute_market_oracle(&market_id);
 
         let market_id_str = String::from_str(&env, "1");
-        let old_result =
-            client.try_resolve_market(&resolver, &market_id_str, &true, &old_signature, &0u64);
+        let expires_at = env.ledger().timestamp() + 3_600;
+        let old_result = client.try_resolve_market(
+            &resolver,
+            &market_id_str,
+            &true,
+            &old_signature,
+            &expires_at,
+        );
         assert_eq!(old_result, Err(Ok(ContractError::InvalidSignature)));
 
         let message = crate::oracle::construct_oracle_message(&env, market_id, true);
@@ -2969,8 +3018,13 @@ mod test {
                 .sign(message.to_array().as_slice())
                 .to_bytes(),
         );
-        let new_result =
-            client.try_resolve_market(&resolver, &market_id_str, &true, &new_signature, &0u64);
+        let new_result = client.try_resolve_market(
+            &resolver,
+            &market_id_str,
+            &true,
+            &new_signature,
+            &expires_at,
+        );
         assert_eq!(new_result, Ok(Ok(())));
 
         let market = env.as_contract(&contract_id, || {
@@ -2991,16 +3045,64 @@ mod test {
         let end_time = env.ledger().timestamp() + 86_400;
         let oracle_pubkey = BytesN::from_array(&env, &[7u8; 32]);
         let collateral_token = Address::generate(&env);
-        let market_id = client.initialize_market( dev
+        let market_id = client.initialize_market(
             &admin,
             &question,
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
         );
 
+        assert_eq!(
+            client.try_cancel_market(&stranger, &market_id),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_set_adapter_enabled(&stranger, &AdapterType::Ed25519, &true),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_propose_market_oracle(
+                &stranger,
+                &market_id,
+                &BytesN::from_array(&env, &[9u8; 32])
+            ),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_propose_threshold_signers(&stranger, &soroban_sdk::Vec::new(&env), &1u32),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_add_fee_waiver(&stranger, &stranger),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_remove_fee_waiver(&stranger, &stranger),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_set_fee_rate(&stranger, &100i128),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_propose_resolution_contract(&stranger, &stranger),
+            Err(Ok(ContractError::NotAdmin))
+        );
+        assert_eq!(
+            client.try_enable_oracle_adapters(&stranger),
+            Err(Ok(ContractError::NotAdmin))
+        );
+    }
+
+    #[test]
+    fn test_upgrade_order_safety_ed25519_rejected_after_adapters_enabled() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let oracle_pubkey = BytesN::from_array(&env, &[7u8; 32]);
+
         // Enable oracle adapters
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
+        assert!(client.try_enable_oracle_adapters(&admin).is_ok());
 
         // Now try to resolve the market with a valid-looking signature
         // It should fail because Ed25519 is disabled
@@ -3078,16 +3180,17 @@ mod test {
         env.events().all(); // clear setup events
 
         client.set_adapter_enabled(&admin, &AdapterType::Reflector, &true);
-        assert!(client.is_adapter_enabled(&AdapterType::Reflector));
+        // Read events before the next invocation replaces the buffer.
         let events_after_enable = env.events().all();
+        assert!(client.is_adapter_enabled(&AdapterType::Reflector));
         assert!(
             events_after_enable.len() > 0,
             "OracleAdapterConfigured event should be emitted when an adapter is enabled"
         );
 
         client.set_adapter_enabled(&admin, &AdapterType::Reflector, &false);
-        assert!(!client.is_adapter_enabled(&AdapterType::Reflector));
         let events_after_disable = env.events().all();
+        assert!(!client.is_adapter_enabled(&AdapterType::Reflector));
         assert!(
             events_after_disable.len() > 0,
             "OracleAdapterConfigured event should be emitted when an adapter is disabled"
@@ -3108,7 +3211,10 @@ mod test {
         let (env, admin, client, _contract_id) = create_test_contract();
         let resolution_contract = Address::generate(&env);
 
-        client.set_resolution_contract(&admin, &resolution_contract);
+        client.propose_resolution_contract(&admin, &resolution_contract);
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+        client.execute_resolution_contract();
 
         assert_eq!(client.get_resolution_contract(), Some(resolution_contract));
     }
@@ -3263,10 +3369,8 @@ mod test {
         client.set_fee_cap(&admin, &500i128);
         client.set_fee_rate(&admin, &500i128);
 
-        let pending = client
-            .get_pending_fee_rate_change()
-            .expect("pending change should exist");
-        assert_eq!(pending.new_rate_bps, 500);
+        let pending = client.get_pending_fee_rate_change();
+        assert_eq!(pending.unwrap().new_rate_bps, 500);
     }
 
     #[test]
@@ -3441,9 +3545,7 @@ mod test {
         );
 
         // Cancel it before the timelock.
-        client
-            .cancel_fee_rate_change(&admin)
-            .expect("admin should be able to cancel a pending change");
+        client.cancel_fee_rate_change(&admin);
 
         assert!(
             client.get_pending_fee_rate_change().is_none(),
@@ -3502,14 +3604,13 @@ mod test {
 
         // Propose, cancel, then propose again with a different rate.
         client.set_fee_rate(&admin, &100i128);
-        client.cancel_fee_rate_change(&admin).expect("cancel should succeed");
+        client.cancel_fee_rate_change(&admin);
 
         client.set_fee_rate(&admin, &200i128);
-        let pending = client
-            .get_pending_fee_rate_change()
-            .expect("pending change must exist after second proposal");
+        let pending = client.get_pending_fee_rate_change();
         assert_eq!(
-            pending.new_rate_bps, 200i128,
+            pending.unwrap().new_rate_bps,
+            200i128,
             "pending change must reflect the second proposal's rate"
         );
 
@@ -3532,7 +3633,7 @@ mod test {
         let (_env, _admin, client, _contract_id) = create_test_contract();
 
         let result = client.try_get_market(&999u32);
-        assert_eq!(result, Err(Ok(ContractError::MarketNotFound)));
+        assert_eq!(result.err(), Some(Ok(ContractError::MarketNotFound)));
     }
 
     /// Snapshot-assert every field of the returned [`Market`] struct.
@@ -3559,36 +3660,6 @@ mod test {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
-        );
-
-        // Before enabling adapters, Ed25519 should work
-        let market_before = get_market_from_storage(&env, &contract_id, market_id);
-        assert_eq!(market_before.status, MarketStatus::Active);
-
-        // Verify that we can resolve via Ed25519 before adapters are enabled
-        let market_id_str = String::from_str(&env, "1");
-        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
-
-        let market_after = get_market_from_storage(&env, &contract_id, market_id);
-        assert_eq!(market_after.status, MarketStatus::Resolved);
-        assert_eq!(market_after.result, Some(outcome));
-    }
-
-    #[test]
-    fn test_upgrade_order_safety_complete_sequence() {
-        let (env, admin, client, contract_id) = create_test_contract();
-
-        // Step 1: Create market with Ed25519 oracle
-        let question = String::from_str(&env, "Test market");
-        let end_time = env.ledger().timestamp() + 86400;
-        let collateral_token = Address::generate(&env);
-
-        let market_id = 1u32;
-        let outcome = true;
-        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
-
-        let _market_id = client.initialize_market(
-
             &None,
         );
 
@@ -3637,16 +3708,16 @@ mod test {
         assert!(!closed_to_deposits);
     }
 
-    /// Verify that `get_market` reflects `closed_to_deposits` after
-    /// `close_market_to_deposits` is called.
     #[test]
-    fn test_get_market_reflects_closed_to_deposits() {
-        let (env, admin, client, _contract_id) = create_test_contract();
+    fn test_upgrade_order_safety_ed25519_resolves_before_adapters_enabled() {
+        let (env, admin, client, contract_id) = create_test_contract();
 
-        let question = String::from_str(&env, "Closed-deposits test market");
-        let end_time = env.ledger().timestamp() + 86_400;
-        let oracle_pubkey = BytesN::from_array(&env, &[3u8; 32]);
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
         let collateral_token = Address::generate(&env);
+
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, 1, outcome);
 
         let market_id = client.initialize_market(
             &admin,
@@ -3654,11 +3725,65 @@ mod test {
             &end_time,
             &oracle_pubkey,
             &collateral_token,
+            &None,
+        );
+
+        // Before enabling adapters, Ed25519 should work
+        let market_before = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_before.status, MarketStatus::Active);
+
+        // Verify that we can resolve via Ed25519 before adapters are enabled
+        let market_id_str = String::from_str(&env, "1");
+        let expires_at = env.ledger().timestamp() + 3_600;
+        assert!(client
+            .try_resolve_market(
+                &Address::generate(&env),
+                &market_id_str,
+                &outcome,
+                &signature,
+                &expires_at
+            )
+            .is_ok());
+
+        let market_after = get_market_from_storage(&env, &contract_id, market_id);
+        assert_eq!(market_after.status, MarketStatus::Resolved);
+        assert_eq!(market_after.result, Some(outcome));
+    }
+
+    #[test]
+    fn test_upgrade_order_safety_complete_sequence() {
+        let (env, admin, client, contract_id) = create_test_contract();
+
+        // Step 1: Create market with Ed25519 oracle
+        let question = String::from_str(&env, "Test market");
+        let end_time = env.ledger().timestamp() + 86400;
+        let collateral_token = Address::generate(&env);
+
+        let market_id = 1u32;
+        let outcome = true;
+        let (oracle_pubkey, signature) = generate_test_keypair_and_sign(&env, market_id, outcome);
+
+        let _market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &None,
         );
 
         // Step 2: Verify Ed25519 works before upgrade
         let market_id_str = String::from_str(&env, "1");
-        assert!(client.resolve_market(&market_id_str, &outcome, &signature).is_ok());
+        let expires_at = env.ledger().timestamp() + 3_600;
+        assert!(client
+            .try_resolve_market(
+                &Address::generate(&env),
+                &market_id_str,
+                &outcome,
+                &signature,
+                &expires_at
+            )
+            .is_ok());
 
         // Step 3: Verify market is resolved
         let market = get_market_from_storage(&env, &contract_id, 1u32);
@@ -3677,22 +3802,61 @@ mod test {
             &end_time,
             &oracle_pubkey2,
             &collateral_token,
+            &None,
         );
 
         // Step 5: Enable oracle adapters (simulating resolution contract upgrade)
-        assert!(client.enable_oracle_adapters(&admin).is_ok());
+        assert!(client.try_enable_oracle_adapters(&admin).is_ok());
 
         // Step 6: Verify that Ed25519 is now rejected for the new market
         let market_id_str = String::from_str(&env, "2");
-        let result = client.resolve_market(&market_id_str, &outcome2, &signature2);
+        let result = client.try_resolve_market(
+            &Address::generate(&env),
+            &market_id_str,
+            &outcome2,
+            &signature2,
+            &expires_at,
+        );
 
         // Should fail because adapters are now enabled
-        assert!(result.is_err());
+        assert_eq!(
+            result,
+            Err(Ok(crate::error::ContractError::UnauthorizedOracle))
+        );
 
         // Verify contract state shows adapters are enabled
         env.as_contract(&contract_id, || {
             assert!(storage::has_oracle_adapters(&env));
         });
+    }
+
+    /// Verify that `get_market` reflects `closed_to_deposits` after
+    /// `close_market_to_deposits` is called.
+    #[test]
+    fn test_get_market_reflects_closed_to_deposits() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Closed-deposits test market");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let oracle_pubkey = BytesN::from_array(&env, &[3u8; 32]);
+        let collateral_token = Address::generate(&env);
+
+        let market_id = client.initialize_market(
+            &admin,
+            &question,
+            &end_time,
+            &oracle_pubkey,
+            &collateral_token,
+            &None,
+        );
+
+        // Initially open to deposits.
+        assert!(!client.get_market(&market_id).closed_to_deposits);
+
+        client.close_market_to_deposits(&admin, &market_id);
+
+        // After closing, the flag must be reflected by get_market.
+        assert!(client.get_market(&market_id).closed_to_deposits);
     }
 
     /// Verify that `get_market` reflects `status` and `resolver` / `resolved_at`
@@ -3722,7 +3886,13 @@ mod test {
 
         let resolver = Address::generate(&env);
         let market_id_str = String::from_str(&env, "1");
-        client.resolve_market(&resolver, &market_id_str, &true, &signature, &0u64);
+        client.resolve_market(
+            &resolver,
+            &market_id_str,
+            &true,
+            &signature,
+            &(env.ledger().timestamp() + 3_600),
+        );
 
         let market = client.get_market(&market_id);
         assert_eq!(market.status, MarketStatus::Resolved);
@@ -3812,18 +3982,14 @@ mod test {
         );
 
         // Step 2: admin enables V1.
-        client
-            .set_oracle_v1_disabled(&admin, &false)
-            .expect("admin should be able to enable V1");
+        client.set_oracle_v1_disabled(&admin, &false);
         assert!(
             !client.is_oracle_v1_disabled(),
             "is_oracle_v1_disabled() must return false after set_oracle_v1_disabled(admin, false)"
         );
 
         // Step 3: admin re-disables V1.
-        client
-            .set_oracle_v1_disabled(&admin, &true)
-            .expect("admin should be able to re-disable V1");
+        client.set_oracle_v1_disabled(&admin, &true);
         assert!(
             client.is_oracle_v1_disabled(),
             "is_oracle_v1_disabled() must return true after set_oracle_v1_disabled(admin, true)"
@@ -3925,9 +4091,7 @@ mod test {
         token_client.mint(&user, &initial_balance);
 
         // Step 2: halt trading — deposit must be rejected with EmergencyModeActive.
-        client
-            .set_emergency_mode(&admin, &EmergencyMode::TradingHalted)
-            .expect("admin should be able to set TradingHalted");
+        client.set_emergency_mode(&admin, &EmergencyMode::TradingHalted);
         assert_eq!(
             client.get_emergency_mode(),
             EmergencyMode::TradingHalted,
@@ -3943,9 +4107,7 @@ mod test {
         );
 
         // Step 3: restore Normal mode — the same deposit must now succeed.
-        client
-            .set_emergency_mode(&admin, &EmergencyMode::Normal)
-            .expect("admin should be able to restore Normal mode");
+        client.set_emergency_mode(&admin, &EmergencyMode::Normal);
         assert_eq!(
             client.get_emergency_mode(),
             EmergencyMode::Normal,
@@ -3957,12 +4119,329 @@ mod test {
         env.as_contract(&contract_id, || {
             let position = storage::get_position(&env, market_id, &user)
                 .expect("version check ok")
-                .expect("position should exist after deposit");
+                .expect("position exists after deposit");
             assert_eq!(
-                position.deposited_collateral, 1_000i128,
-                "deposited_collateral must reflect the successful deposit after Normal restored"
+                position.total_deposited, 1_000i128,
+                "total_deposited must reflect the successful deposit after Normal restored"
             );
         });
+    }
+
+    // ========== Issue #898: oracle report verification path ==========
+    //
+    // Every Ed25519 resolution entrypoint must honour the same gates as
+    // `resolve_market`: the adapter-only lock (`enable_oracle_adapters`),
+    // V2 network binding, the resolution-contract (dispute) mode, emergency
+    // mode, and the V1 kill switch.
+
+    mod oracle_verification_898 {
+        use super::*;
+        use crate::error::ContractError;
+        use crate::types::EmergencyMode;
+        use ed25519_dalek::{Signer, SigningKey};
+
+        const EPOCH: u32 = 1;
+
+        fn signing_key() -> SigningKey {
+            SigningKey::from_bytes(&[42u8; 32])
+        }
+
+        fn pubkey(env: &Env, key: &SigningKey) -> BytesN<32> {
+            BytesN::from_array(env, &key.verifying_key().to_bytes())
+        }
+
+        fn sign_v2(
+            env: &Env,
+            key: &SigningKey,
+            passphrase_hash: &BytesN<32>,
+            market_id: u32,
+            outcome: bool,
+            valid_until: u64,
+        ) -> BytesN<64> {
+            let msg = crate::oracle::construct_oracle_message_v2(
+                env,
+                passphrase_hash,
+                market_id,
+                outcome,
+                valid_until,
+                EPOCH,
+            );
+            BytesN::from_array(env, &key.sign(msg.to_array().as_slice()).to_bytes())
+        }
+
+        fn sign_v1(env: &Env, key: &SigningKey, market_id: u32, outcome: bool) -> BytesN<64> {
+            let msg = crate::oracle::construct_oracle_message(env, market_id, outcome);
+            BytesN::from_array(env, &key.sign(msg.to_array().as_slice()).to_bytes())
+        }
+
+        /// Contract + one market whose oracle key (and sole threshold signer,
+        /// installed through the timelocked propose/execute family) is
+        /// `signing_key()`.
+        fn setup() -> (Env, Address, MarketContractClient<'static>, Address, u32) {
+            let (env, admin, client, contract_id) = create_test_contract();
+            let key = signing_key();
+            let market_id = client.initialize_market(
+                &admin,
+                &String::from_str(&env, "Oracle verification #898"),
+                &(env.ledger().timestamp() + 7 * 86_400),
+                &pubkey(&env, &key),
+                &Address::generate(&env),
+                &None,
+            );
+            client.propose_threshold_signers(
+                &admin,
+                &soroban_sdk::vec![&env, pubkey(&env, &key)],
+                &1u32,
+            );
+            env.ledger()
+                .set_timestamp(env.ledger().timestamp() + crate::FEE_RATE_TIMELOCK_SECONDS);
+            client.execute_threshold_signers();
+            (env, admin, client, contract_id, market_id)
+        }
+
+        fn assert_unresolved(env: &Env, contract_id: &Address, market_id: u32) {
+            let market = get_market_from_storage(env, contract_id, market_id);
+            assert_eq!(market.status, MarketStatus::Active);
+            assert_eq!(market.result, None);
+        }
+
+        fn resolve_v2(
+            env: &Env,
+            client: &MarketContractClient,
+            market_id: u32,
+            passphrase_hash: &BytesN<32>,
+        ) -> Result<(), ContractError> {
+            let valid_until = env.ledger().timestamp() + 600;
+            let sig = sign_v2(
+                env,
+                &signing_key(),
+                passphrase_hash,
+                market_id,
+                true,
+                valid_until,
+            );
+            match client.try_resolve_market_v2(
+                &Address::generate(env),
+                &String::from_str(env, &market_id.to_string()),
+                &true,
+                &valid_until,
+                &EPOCH,
+                &sig,
+                passphrase_hash,
+            ) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e.expect("contract error")),
+            }
+        }
+
+        fn resolve_threshold_v1(
+            env: &Env,
+            client: &MarketContractClient,
+            market_id: u32,
+        ) -> Result<(), ContractError> {
+            let sigs = soroban_sdk::vec![env, sign_v1(env, &signing_key(), market_id, true)];
+            match client.try_resolve_market_threshold(
+                &Address::generate(env),
+                &market_id,
+                &true,
+                &sigs,
+            ) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e.expect("contract error")),
+            }
+        }
+
+        fn resolve_threshold_v2(
+            env: &Env,
+            client: &MarketContractClient,
+            market_id: u32,
+            passphrase_hash: &BytesN<32>,
+        ) -> Result<(), ContractError> {
+            let valid_until = env.ledger().timestamp() + 600;
+            let sigs = soroban_sdk::vec![
+                env,
+                sign_v2(
+                    env,
+                    &signing_key(),
+                    passphrase_hash,
+                    market_id,
+                    true,
+                    valid_until
+                )
+            ];
+            match client.try_resolve_market_threshold_v2(
+                &Address::generate(env),
+                &market_id,
+                &true,
+                &valid_until,
+                &EPOCH,
+                &sigs,
+                passphrase_hash,
+            ) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e.expect("contract error")),
+            }
+        }
+
+        // ── positive controls: each path works before any gate trips ──
+
+        #[test]
+        fn v2_resolves_with_current_network_hash() {
+            let (env, _admin, client, contract_id, market_id) = setup();
+            let network = env.ledger().network_id();
+            assert_eq!(resolve_v2(&env, &client, market_id, &network), Ok(()));
+            let market = get_market_from_storage(&env, &contract_id, market_id);
+            assert_eq!(market.status, MarketStatus::Resolved);
+        }
+
+        #[test]
+        fn threshold_v1_and_v2_resolve_when_ungated() {
+            let (env, admin, client, _contract_id, market_id) = setup();
+            assert_eq!(resolve_threshold_v1(&env, &client, market_id), Ok(()));
+
+            let second = client.initialize_market(
+                &admin,
+                &String::from_str(&env, "second"),
+                &(env.ledger().timestamp() + 86_400),
+                &pubkey(&env, &signing_key()),
+                &Address::generate(&env),
+                &None,
+            );
+            let network = env.ledger().network_id();
+            assert_eq!(
+                resolve_threshold_v2(&env, &client, second, &network),
+                Ok(())
+            );
+        }
+
+        // ── adapter-only lock covers every Ed25519 path ──
+
+        #[test]
+        fn adapter_lock_rejects_v2_and_both_threshold_paths() {
+            let (env, admin, client, contract_id, market_id) = setup();
+            client.enable_oracle_adapters(&admin);
+            let network = env.ledger().network_id();
+
+            assert_eq!(
+                resolve_v2(&env, &client, market_id, &network),
+                Err(ContractError::UnauthorizedOracle)
+            );
+            assert_eq!(
+                resolve_threshold_v1(&env, &client, market_id),
+                Err(ContractError::UnauthorizedOracle)
+            );
+            assert_eq!(
+                resolve_threshold_v2(&env, &client, market_id, &network),
+                Err(ContractError::UnauthorizedOracle)
+            );
+            assert_unresolved(&env, &contract_id, market_id);
+        }
+
+        #[test]
+        fn adapter_lock_rejects_v2_view_verification() {
+            let (env, admin, client, _contract_id, market_id) = setup();
+            client.enable_oracle_adapters(&admin);
+            let network = env.ledger().network_id();
+            let valid_until = env.ledger().timestamp() + 600;
+            let sig = sign_v2(&env, &signing_key(), &network, market_id, true, valid_until);
+            assert_eq!(
+                client.try_verify_signature_v2(
+                    &network,
+                    &market_id,
+                    &true,
+                    &valid_until,
+                    &EPOCH,
+                    &sig
+                ),
+                Err(Ok(ContractError::UnauthorizedOracle))
+            );
+        }
+
+        // ── V2 network binding (testnet → mainnet replay) ──
+
+        #[test]
+        fn v2_rejects_report_signed_for_another_network() {
+            let (env, _admin, client, contract_id, market_id) = setup();
+            // A correctly-signed report, but bound to a different network.
+            let other_network = BytesN::from_array(&env, &[0x99u8; 32]);
+            assert_ne!(other_network, env.ledger().network_id());
+
+            assert_eq!(
+                resolve_v2(&env, &client, market_id, &other_network),
+                Err(ContractError::InvalidSignature)
+            );
+            assert_eq!(
+                resolve_threshold_v2(&env, &client, market_id, &other_network),
+                Err(ContractError::InvalidSignature)
+            );
+            assert_unresolved(&env, &contract_id, market_id);
+        }
+
+        // ── dispute mode: a quorum must not bypass the resolution contract ──
+
+        #[test]
+        fn threshold_v2_rejected_while_resolution_contract_registered() {
+            let (env, _admin, client, contract_id, market_id) = setup();
+            register_resolution_contract(&env, &contract_id, &Address::generate(&env));
+            let network = env.ledger().network_id();
+
+            assert_eq!(
+                resolve_threshold_v2(&env, &client, market_id, &network),
+                Err(ContractError::ResolutionNotFinalized)
+            );
+            assert_eq!(
+                resolve_threshold_v1(&env, &client, market_id),
+                Err(ContractError::ResolutionNotFinalized)
+            );
+            assert_unresolved(&env, &contract_id, market_id);
+        }
+
+        // ── emergency mode ──
+
+        #[test]
+        fn threshold_paths_blocked_in_settle_only_and_global_freeze() {
+            for mode in [EmergencyMode::SettleOnly, EmergencyMode::GlobalFreeze] {
+                let (env, admin, client, contract_id, market_id) = setup();
+                client.set_emergency_mode(&admin, &mode);
+                let network = env.ledger().network_id();
+                assert_eq!(
+                    resolve_threshold_v1(&env, &client, market_id),
+                    Err(ContractError::EmergencyModeActive)
+                );
+                assert_eq!(
+                    resolve_threshold_v2(&env, &client, market_id, &network),
+                    Err(ContractError::EmergencyModeActive)
+                );
+                assert_unresolved(&env, &contract_id, market_id);
+            }
+        }
+
+        #[test]
+        fn threshold_paths_allowed_in_trading_halted() {
+            let (env, admin, client, _contract_id, market_id) = setup();
+            client.set_emergency_mode(&admin, &EmergencyMode::TradingHalted);
+            assert_eq!(resolve_threshold_v1(&env, &client, market_id), Ok(()));
+        }
+
+        // ── V1 kill switch (#701) also gates V1-layout threshold signatures ──
+
+        #[test]
+        fn threshold_v1_rejected_when_oracle_v1_disabled() {
+            let (env, admin, client, contract_id, market_id) = setup();
+            client.set_oracle_v1_disabled(&admin, &true);
+            assert_eq!(
+                resolve_threshold_v1(&env, &client, market_id),
+                Err(ContractError::UnauthorizedOracle)
+            );
+            assert_unresolved(&env, &contract_id, market_id);
+
+            // V2 threshold signatures are not V1 and remain usable.
+            let network = env.ledger().network_id();
+            assert_eq!(
+                resolve_threshold_v2(&env, &client, market_id, &network),
+                Ok(())
+            );
+        }
     }
 }
 
@@ -3971,6 +4450,7 @@ fn test_decode_v3_market_blob_fails() {
     use crate::types::{AdapterType, Market, MarketStatus};
     use soroban_sdk::{
         contracttype,
+        testutils::Address as _,
         xdr::{FromXdr, ToXdr},
         Address, BytesN, Env, String,
     };

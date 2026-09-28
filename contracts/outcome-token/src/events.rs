@@ -1,5 +1,5 @@
 use crate::types::TokenKind;
-use soroban_sdk::{contractevent, Address, Env};
+use soroban_sdk::{contractevent, Address, Env, String};
 
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -160,6 +160,23 @@ pub fn emit_contract_unpaused(env: &Env, admin: &Address) {
     ContractUnpaused {
         admin: admin.clone(),
         unpaused_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
+/// Emitted when the admin changes the SAC metadata (#867). Not emitted for an
+/// idempotent `set_metadata` call that leaves `name`/`symbol` unchanged.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MetadataUpdated {
+    pub name: String,
+    pub symbol: String,
+}
+
+pub fn emit_metadata_updated(env: &Env, name: &String, symbol: &String) {
+    MetadataUpdated {
+        name: name.clone(),
+        symbol: symbol.clone(),
     }
     .publish(env);
 }

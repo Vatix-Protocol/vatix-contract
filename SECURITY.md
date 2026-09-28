@@ -47,7 +47,10 @@ In-scope components:
   repo or logs) that these scripts must meet
 - Documentation that describes on-chain invariants (`AUTH_TABLE.md`,
   `docs/adr-001-oracle-adapter.md`, `docs/reentrancy-cei-audit.md`) where an
-  inaccuracy could lead to a mistaken security assumption
+  inaccuracy could lead to a mistaken security assumption. `AUTH_TABLE.md` is
+  CI-enforced by `scripts/check-auth-table.sh` (#892); the oracle resolution
+  gates are documented in
+  [`docs/SECURITY.md`](docs/SECURITY.md#oracle-report-verification-path-898) (#898)
 
 ## Invariants
 

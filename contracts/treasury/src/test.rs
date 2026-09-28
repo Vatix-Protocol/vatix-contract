@@ -1258,12 +1258,16 @@ fn total_collected_invariant_after_collect_and_withdraw() {
     s.client.collect_fee(&s.market, &s.token, &1u32, &100_000i128);
     assert_eq!(s.client.total_collected(), 100_000);
 
+    // `total_collected` is the monotone lifetime counter (#772): admin
+    // withdrawals reduce the live `token_balance`, never the counter.
     let recipient = Address::generate(&s.env);
     s.client.withdraw_fees(&s.admin, &s.token, &recipient, &40_000i128);
-    assert_eq!(s.client.total_collected(), 60_000);
+    assert_eq!(s.client.total_collected(), 100_000);
+    assert_eq!(s.client.token_balance(&s.token), 60_000);
 
     s.client.withdraw_fees(&s.admin, &s.token, &recipient, &60_000i128);
-    assert_eq!(s.client.total_collected(), 0);
+    assert_eq!(s.client.total_collected(), 100_000);
+    assert_eq!(s.client.token_balance(&s.token), 0);
 }
 
 

@@ -242,6 +242,8 @@ money-path state. They must meet the bar below before merge. See
 
 - [ ] Behavior matches the cited docs for the issue.
 - [ ] Authz, idempotency, and fail-closed behavior covered by tests.
+- [ ] [AUTH_TABLE.md](AUTH_TABLE.md) updated for any added, removed, renamed,
+      or re-gated entrypoint; `bash scripts/check-auth-table.sh` passes (#892).
 - [ ] Docs/runbooks updated; mainnet safety respected.
 - [ ] Observability is actionable; metrics on money paths.
 - [ ] Rollback/flag strategy documented in the PR description.

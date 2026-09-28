@@ -1173,6 +1173,8 @@ impl MarketContract {
         position.total_deposited = 0;
         position.locked_collateral = 0;
         storage::set_position(&env, market_id, &user, &position)?;
+        // The refund leaves the user's protocol-wide collateral too (#897).
+        storage::debit_collateral_balance(&env, &user, refund);
 
         // 5. Now transfer the collateral from the contract back to the user
         //    (external Interactions call, ordered after all state writes above).
@@ -1624,8 +1626,18 @@ impl MarketContract {
             return Err(ContractError::FeeCapExceeded);
         }
 
-        storage::set_fee_rate_bps(&env, fee_rate_bps);
-        events::emit_fee_rate_changed(&env, fee_rate_bps);
+        // #895: the new rate only applies to withdrawals after the #496
+        // timelock via `execute_fee_rate_change`; an immediate write here let
+        // the admin reprice in-flight withdrawals with no notice.
+        let effective_at = env.ledger().timestamp() + FEE_RATE_TIMELOCK_SECONDS;
+        storage::set_pending_fee_rate_change(
+            &env,
+            &crate::types::PendingFeeRateChange {
+                new_rate_bps: fee_rate_bps,
+                effective_at,
+            },
+        );
+        events::emit_fee_rate_change_proposed(&env, fee_rate_bps, effective_at);
         Ok(())
     }
 
@@ -2032,7 +2044,11 @@ impl MarketContract {
     /// # Errors
     /// - [`ContractError::MarketNotFound`] — market does not exist.
     /// - [`ContractError::MarketAlreadyResolved`] — already resolved.
-    /// - [`ContractError::UnauthorizedOracle`] — no signers/quorum configured.
+    /// - [`ContractError::UnauthorizedOracle`] — no signers/quorum configured,
+    ///   legacy V1 signatures are disabled (#701 — threshold signatures use
+    ///   the V1 message layout), or oracle adapters are enabled (#898).
+    /// - [`ContractError::EmergencyModeActive`] — resolution is blocked in
+    ///   `SettleOnly` / `GlobalFreeze`, matching [`Self::resolve_market`].
     /// - [`ContractError::InvalidSignature`] — fewer than quorum valid sigs.
     /// If a resolution contract is registered, this returns
     /// [`ContractError::ResolutionNotFinalized`]. Challenge-based and
@@ -2045,7 +2061,21 @@ impl MarketContract {
         signatures: soroban_sdk::Vec<BytesN<64>>,
     ) -> Result<(), ContractError> {
         validation::require_not_paused(&env)?;
+        // #898: same emergency-mode gate as `resolve_market`.
+        validation::require_emergency_mode_allows(
+            &env,
+            &[
+                crate::types::EmergencyMode::Normal,
+                crate::types::EmergencyMode::TradingHalted,
+            ],
+        )?;
         resolver.require_auth();
+        // #898: threshold signatures are over the legacy V1 preimage (no
+        // network, expiry or epoch binding), so the #701 V1 kill switch must
+        // gate this path exactly as it gates `resolve_market`.
+        if storage::is_oracle_v1_disabled(&env) {
+            return Err(ContractError::UnauthorizedOracle);
+        }
 
         let mut market =
             storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
@@ -2094,6 +2124,21 @@ impl MarketContract {
     }
 
     /// Resolve a market using V2 threshold signatures (#665).
+    ///
+    /// Subject to the same gates as [`Self::resolve_market_threshold`] (#898):
+    /// emergency mode, the resolution-contract exclusivity check (a quorum
+    /// must never bypass an open or challenged dispute), the adapter-only
+    /// lock, and V2 network binding.
+    ///
+    /// # Errors
+    /// - [`ContractError::ResolutionNotFinalized`] — a resolution contract is
+    ///   registered, so challenge-window resolution is the only mode.
+    /// - [`ContractError::EmergencyModeActive`] — `SettleOnly` / `GlobalFreeze`.
+    /// - [`ContractError::OracleMessageExpired`] — `valid_until` has passed.
+    /// - [`ContractError::UnauthorizedOracle`] — oracle adapters are enabled,
+    ///   or no signers/quorum configured.
+    /// - [`ContractError::InvalidSignature`] — wrong network or fewer than
+    ///   quorum valid signatures.
     pub fn resolve_market_threshold_v2(
         env: Env,
         resolver: Address,
@@ -2105,6 +2150,13 @@ impl MarketContract {
         passphrase_hash: BytesN<32>,
     ) -> Result<(), ContractError> {
         validation::require_not_paused(&env)?;
+        validation::require_emergency_mode_allows(
+            &env,
+            &[
+                crate::types::EmergencyMode::Normal,
+                crate::types::EmergencyMode::TradingHalted,
+            ],
+        )?;
         resolver.require_auth();
 
         let mut market =
@@ -2112,6 +2164,11 @@ impl MarketContract {
         if market.status == MarketStatus::Resolved {
             return Err(ContractError::MarketAlreadyResolved);
         }
+
+        // #898: previously missing here — without it a V2 quorum could resolve
+        // a market while the registered resolution contract still had an
+        // open or challenged candidate, bypassing the dispute window.
+        require_threshold_resolution_mode(&env)?;
 
         if env.ledger().timestamp() > valid_until {
             return Err(ContractError::OracleMessageExpired);
@@ -2286,8 +2343,13 @@ impl MarketContract {
     /// stored `Position` — `Position` is the source of truth (see
     /// `reconciliation` module docs). No-op if the ledgers already agree.
     ///
+    /// `correlation_id` is the caller-supplied idempotency key (#859): a
+    /// replayed repair with an already-consumed id is rejected.
+    ///
     /// # Errors
     /// - [`ContractError::NotAdmin`] — `admin` is not the stored admin.
+    /// - [`ContractError::ReconciliationAlreadyApplied`] — `correlation_id`
+    ///   was already consumed by an earlier repair.
     ///
     /// # Events
     /// Emits `PositionTokensReconciled` with the signed mint/burn deltas
@@ -2297,6 +2359,7 @@ impl MarketContract {
         admin: Address,
         market_id: u32,
         user: Address,
+        correlation_id: BytesN<32>,
     ) -> Result<reconciliation::PositionTokenParity, ContractError> {
         validation::require_initialized(&env)?;
         validation::require_not_paused(&env)?;
@@ -2305,7 +2368,7 @@ impl MarketContract {
         if admin != stored_admin {
             return Err(ContractError::NotAdmin);
         }
-        reconciliation::reconcile_position_tokens(&env, &admin, market_id, &user)
+        reconciliation::reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id)
     }
 
     /// Register the resolution contract that gates `resolve_market`.
@@ -2758,9 +2821,11 @@ impl MarketContract {
     /// Emits `OracleAdaptersEnabled` event to signal the mode change.
     ///
     /// # Side Effects
-    /// Once called, all future calls to `resolve_market()` will reject Ed25519
-    /// signatures with `UnauthorizedOracle` error. Markets must then be resolved
-    /// through oracle adapter contracts only.
+    /// Once called, every Ed25519 resolution path rejects with
+    /// `UnauthorizedOracle`: `resolve_market`, `resolve_market_v2`,
+    /// `resolve_market_threshold`, `resolve_market_threshold_v2`, and the
+    /// `verify_signature` / `verify_signature_v2` views (#898). Markets must
+    /// then be resolved through oracle adapter contracts only.
     pub fn enable_oracle_adapters(
         env: Env,
         authorized_caller: Address,

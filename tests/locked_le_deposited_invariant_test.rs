@@ -27,7 +27,11 @@ mod helpers;
 
 use helpers::MarketParams;
 
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token::StellarAssetClient,
+    Address, Env,
+};
 use vatix_market_contract::{error::ContractError, storage, MarketContract, MarketContractClient};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
@@ -169,13 +173,18 @@ fn invariant_holds_after_every_step_in_a_trade_sequence() {
     client.update_position(&user, &market_id, &0i128, &(30 * STROOPS_PER_USDC), &6_000i128);
     assert_invariant(&env, &contract_id, market_id, &user);
 
-    // Step 3: withdraw whatever remains available.
+    // Step 3: withdraw whatever remains available. The withdraw fee (default
+    // 50 bps) is charged on top of the amount (#377), so the largest valid
+    // withdrawal is `available * 10_000 / 10_050`; the post-deposit cooldown
+    // (#413) must also have elapsed.
     let position = env.as_contract(&contract_id, || {
         storage::get_position(&env, market_id, &user).unwrap().unwrap()
     });
     let available = position.total_deposited - position.locked_collateral;
-    if available > 0 {
-        client.withdraw_unused_collateral(&user, &market_id, &available);
+    let withdrawable = available * 10_000 / (10_000 + client.get_fee_rate());
+    env.ledger().set_timestamp(env.ledger().timestamp() + 3_601);
+    if withdrawable > 0 {
+        client.withdraw_unused_collateral(&user, &market_id, &withdrawable);
         assert_invariant(&env, &contract_id, market_id, &user);
     }
 

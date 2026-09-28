@@ -30,6 +30,8 @@
 //! Vector files live in `test-vectors/` at the repo root; a missing file is a
 //! hard failure, so keep them in sync with the contract math.
 
+extern crate std;
+
 use crate::error::ContractError;
 use crate::validation::calculate_fee;
 use serde::Deserialize;
@@ -276,3 +278,46 @@ fn oracle_message_regression_corpus() {
     // 2. Verify keccak256 message hash match
     let msg_hash = construct_oracle_message_v2(
         &env,
+        &passphrase_hash,
+        vector.market_id,
+        outcome_bool,
+        vector.valid_until,
+        vector.epoch,
+    );
+    assert_eq!(
+        bytes_to_hex(&msg_hash.to_array()),
+        vector.keccak_hex,
+        "oracle-message keccak_hex mismatch"
+    );
+
+    // 3. Verify signature verification succeeds against oracle pubkey
+    let pubkey_bytes = hex_to_bytes(&vector.pubkey_hex);
+    let mut pubkey_arr = [0u8; 32];
+    pubkey_arr.copy_from_slice(&pubkey_bytes);
+    let oracle_pubkey = BytesN::from_array(&env, &pubkey_arr);
+
+    let sig_bytes = hex_to_bytes(&vector.signature_hex);
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = BytesN::from_array(&env, &sig_arr);
+
+    // The verifier reads the adapter-only lock from contract storage (#898).
+    let contract_id = env.register(crate::MarketContract, ());
+    let verify_res = env.as_contract(&contract_id, || {
+        verify_oracle_signature_v2(
+            &env,
+            &passphrase_hash,
+            vector.market_id,
+            outcome_bool,
+            vector.valid_until,
+            vector.epoch,
+            &signature,
+            &oracle_pubkey,
+        )
+    });
+    assert_eq!(
+        verify_res,
+        Ok(()),
+        "oracle-message vector signature verification failed"
+    );
+}

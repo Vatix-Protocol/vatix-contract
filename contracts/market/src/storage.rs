@@ -147,6 +147,8 @@ pub enum StorageKey {
     EmergencyMode,
     /// Reflector/Pyth adapter config for a market (keyed by market_id).
     MarketAdapterConfig(u32),
+    /// Consumed reconciliation idempotency key (#859) -> `(market_id, user)`.
+    ReconciliationRecord(BytesN<32>),
 }
 
 pub fn get_pending_threshold_signers(
@@ -330,6 +332,22 @@ pub fn set_collateral_balance(env: &Env, user: &Address, balance: i128) {
     env.storage()
         .persistent()
         .set(&StorageKey::CollateralBalance(user.clone()), &balance);
+}
+
+/// Debit `amount` of collateral that has left the contract from `user`'s
+/// protocol-wide balance (#897).
+///
+/// Every withdrawal path must call this: `deposit_collateral` credits the
+/// balance, and `update_position` checks new locks against it, so a
+/// withdrawal that skipped the debit would leave "phantom" collateral that
+/// could back new trades after the tokens were already paid out. Floored at
+/// zero so a position funded before this balance was tracked can still be
+/// withdrawn instead of failing on a negative balance.
+pub fn debit_collateral_balance(env: &Env, user: &Address, amount: i128) {
+    let remaining = get_collateral_balance(env, user)
+        .saturating_sub(amount)
+        .max(0);
+    set_collateral_balance(env, user, remaining);
 }
 
 /// Return the aggregate `locked_collateral` across every market for `user`.
@@ -843,45 +861,7 @@ pub fn enable_oracle_adapters(env: &Env) {
         .set(&StorageKey::OracleAdapters, &true);
 }
 
-// --- Fee Rate Storage ---
-
-/// Return the current fee rate in basis points. Defaults to 0 if never set.
-pub fn get_fee_rate_bps(env: &Env) -> u32 {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::FeeRateBps)
-        .unwrap_or(0)
-}
-
-/// Persist the current fee rate in basis points.
-pub fn set_fee_rate_bps(env: &Env, rate: u32) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::FeeRateBps, &rate);
-}
-
-/// Return the pending fee-rate change, or `None` if no change is queued.
-pub fn get_pending_fee_rate(env: &Env) -> Option<PendingFeeRate> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::PendingFeeRate)
-}
-
-/// Persist a pending fee-rate change.
-pub fn set_pending_fee_rate(env: &Env, p: &PendingFeeRate) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::PendingFeeRate, p);
-}
-
-/// Remove the pending fee-rate change from storage.
-pub fn clear_pending_fee_rate(env: &Env) {
-    env.storage()
-        .persistent()
-        .remove(&StorageKey::PendingFeeRate);
-}
-
-// --- Fee Waiver Storage ---
+// --- Fee Waiver Cap ---
 
 /// Maximum number of addresses that may hold a fee waiver.
 ///
@@ -890,20 +870,28 @@ pub fn clear_pending_fee_rate(env: &Env) {
 /// per-transaction ledger-entry read budget.
 pub const MAX_FEE_WAIVERS: u32 = 100;
 
-/// Return the current fee-waiver list. Returns an empty Vec if no list has
-/// ever been written (first-access lazy initialisation).
-pub fn get_fee_waivers(env: &Env) -> Vec<Address> {
+// --- Reconciliation Idempotency (#859) ---
+
+/// Return the `(market_id, user)` a reconciliation with `correlation_id`
+/// was applied to, or `None` if the id has never been consumed.
+pub fn get_reconciliation_record(env: &Env, correlation_id: &BytesN<32>) -> Option<(u32, Address)> {
     env.storage()
         .persistent()
-        .get(&StorageKey::FeeWaivers)
-        .unwrap_or_else(|| Vec::new(env))
+        .get(&StorageKey::ReconciliationRecord(correlation_id.clone()))
 }
 
-/// Persist the fee-waiver list.
-pub fn set_fee_waivers(env: &Env, waivers: &Vec<Address>) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::FeeWaivers, waivers);
+/// Consume `correlation_id` for a reconciliation of `(market_id, user)` so
+/// a replay of the same request is rejected (see `reconciliation.rs`).
+pub fn set_reconciliation_record(
+    env: &Env,
+    correlation_id: &BytesN<32>,
+    market_id: u32,
+    user: &Address,
+) {
+    env.storage().persistent().set(
+        &StorageKey::ReconciliationRecord(correlation_id.clone()),
+        &(market_id, user.clone()),
+    );
 }
 
 #[cfg(test)]
@@ -1171,7 +1159,10 @@ mod test {
         let user = Address::generate(&env);
         env.as_contract(&contract_id, || {
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
-            assert_eq!(get_market(&env, 1), Err(ContractError::UpgradeRequired));
+            assert_eq!(
+                get_market(&env, 1).err(),
+                Some(ContractError::UpgradeRequired)
+            );
             assert_eq!(
                 get_position(&env, 1, &user),
                 Err(ContractError::UpgradeRequired)

@@ -22,7 +22,17 @@ const FEE_BPS: i128 = 50;
 const BPS_DENOM: i128 = 10_000;
 
 fn fee_for(amount: i128) -> i128 {
-    amount * FEE_BPS / BPS_DENOM
+    fee_at(amount, FEE_BPS)
+}
+
+fn fee_at(amount: i128, bps: i128) -> i128 {
+    amount * bps / BPS_DENOM
+}
+
+/// Move the ledger past the #496 fee-rate timelock.
+fn advance_past_fee_timelock(env: &Env) {
+    env.ledger()
+        .with_mut(|l| l.timestamp += vatix_market_contract::FEE_RATE_TIMELOCK_SECONDS + 1);
 }
 
 /// Deploy market + treasury, wire them together, return their addresses and helpers.
@@ -253,12 +263,17 @@ fn admin_can_set_fee_rate() {
     // Initially set to 50 bps by setup
     assert_eq!(market.get_fee_rate(), FEE_BPS);
 
-    // Admin can change it
+    // Fee changes are timelocked (#496): proposing does not change the live rate.
     market.set_fee_rate(&admin, &100); // 1%
+    assert_eq!(market.get_fee_rate(), FEE_BPS);
+    advance_past_fee_timelock(&env);
+    market.execute_fee_rate_change();
     assert_eq!(market.get_fee_rate(), 100);
 
     // Admin can disable fees
     market.set_fee_rate(&admin, &0);
+    advance_past_fee_timelock(&env);
+    market.execute_fee_rate_change();
     assert_eq!(market.get_fee_rate(), 0);
 
     // Verify withdrawal with zero fee returns full amount
@@ -483,3 +498,278 @@ fn withdraw_invalid_amount_rejected() {
     );
 }
 
+// ── Issue #895: withdraw fee → treasury integration ──────────────────────────
+//
+// Covers WIRE_COLLECT_FEE_CALLBACK_SPEC.md end to end: fee-rate changes go
+// through the timelock and only reprice withdrawals once executed; a failing
+// `collect_fee` callback reverts the entire withdrawal (no partial payout, no
+// orphaned fee transfer); waived users never reach the treasury; and the
+// treasury's per-token and cumulative accounting matches every fee charged.
+
+/// Deposit `deposit` for a fresh user and step past the withdraw cooldown.
+fn funded_user(
+    env: &Env,
+    market: &MarketContractClient,
+    market_id: u32,
+    token: &Address,
+    deposit: i128,
+) -> Address {
+    let user = Address::generate(env);
+    StellarAssetClient::new(env, token).mint(&user, &deposit);
+    market.deposit_collateral(&user, &market_id, &deposit);
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    user
+}
+
+/// Snapshot of every balance a withdraw can touch.
+fn balances(
+    env: &Env,
+    token: &Address,
+    market: &Address,
+    treasury: &Address,
+    user: &Address,
+) -> [i128; 3] {
+    let t = TokenClient::new(env, token);
+    [t.balance(user), t.balance(market), t.balance(treasury)]
+}
+
+#[test]
+fn fee_rate_change_reprices_withdrawals_only_after_timelock() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+    let user = funded_user(&env, &market, market_id, &token, 1_000 * STROOPS_PER_USDC);
+    let w = 100 * STROOPS_PER_USDC;
+
+    // Rate 1: 50 bps.
+    market.withdraw_unused_collateral(&user, &market_id, &w);
+    let mut expected = fee_at(w, FEE_BPS);
+    assert_eq!(treasury.total_collected(), expected);
+
+    // Proposed but not executed: still 50 bps.
+    market.set_fee_rate(&admin, &200);
+    market.withdraw_unused_collateral(&user, &market_id, &w);
+    expected += fee_at(w, FEE_BPS);
+    assert_eq!(
+        treasury.total_collected(),
+        expected,
+        "pending rate must not apply yet"
+    );
+
+    // Executed: subsequent withdrawals use 200 bps.
+    advance_past_fee_timelock(&env);
+    market.execute_fee_rate_change();
+    market.withdraw_unused_collateral(&user, &market_id, &w);
+    expected += fee_at(w, 200);
+    assert_eq!(treasury.total_collected(), expected);
+    assert_eq!(treasury.token_balance(&token), expected);
+    assert_eq!(
+        TokenClient::new(&env, &token).balance(&treasury_addr),
+        expected
+    );
+
+    // Position accounting: every withdrawal deducted amount + fee (#377).
+    let position = market.get_position(&market_id, &user).unwrap();
+    assert_eq!(
+        position.total_deposited,
+        1_000 * STROOPS_PER_USDC - 3 * w - expected
+    );
+}
+
+#[test]
+fn canceled_fee_rate_change_never_applies() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+    let user = funded_user(&env, &market, market_id, &token, 500 * STROOPS_PER_USDC);
+
+    market.set_fee_rate(&admin, &1_000);
+    market.cancel_fee_rate_change(&admin);
+    advance_past_fee_timelock(&env);
+    assert!(
+        market.try_execute_fee_rate_change().is_err(),
+        "nothing left to execute"
+    );
+
+    let w = 100 * STROOPS_PER_USDC;
+    market.withdraw_unused_collateral(&user, &market_id, &w);
+    assert_eq!(treasury.total_collected(), fee_at(w, FEE_BPS));
+}
+
+#[test]
+fn collect_fee_rejection_reverts_entire_withdrawal() {
+    // Treasury wired to the market, but the treasury does not recognise this
+    // market as an authorized caller → `collect_fee` fails with CallerNotMarket.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let market_addr = env.register(MarketContract, ());
+    env.as_contract(&market_addr, || {
+        storage::set_version(&env);
+        storage::set_admin(&env, &admin);
+    });
+    let treasury_addr = env.register(TreasuryContract, ());
+    TreasuryContractClient::new(&env, &treasury_addr).initialize(&admin, &Address::generate(&env));
+    let market = MarketContractClient::new(&env, &market_addr);
+    market.set_treasury_contract(&admin, &treasury_addr);
+
+    let token = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let market_id = open_market(&env, &market, &admin, &token);
+    let user = funded_user(&env, &market, market_id, &token, 100 * STROOPS_PER_USDC);
+
+    let before = balances(&env, &token, &market_addr, &treasury_addr, &user);
+    let position_before = market.get_position(&market_id, &user).unwrap();
+
+    let result = market.try_withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
+    assert!(
+        result.is_err(),
+        "a failed collect_fee callback must fail the withdraw"
+    );
+
+    // Fail closed: no payout, no fee transfer, no position change.
+    assert_eq!(
+        balances(&env, &token, &market_addr, &treasury_addr, &user),
+        before
+    );
+    assert_eq!(
+        market.get_position(&market_id, &user).unwrap(),
+        position_before
+    );
+    assert_eq!(
+        TreasuryContractClient::new(&env, &treasury_addr).total_collected(),
+        0
+    );
+}
+
+#[test]
+fn paused_treasury_blocks_fee_withdrawals_until_unpaused() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+    let user = funded_user(&env, &market, market_id, &token, 100 * STROOPS_PER_USDC);
+    let w = 10 * STROOPS_PER_USDC;
+
+    treasury.pause(&admin);
+    let before = balances(&env, &token, &market_addr, &treasury_addr, &user);
+    let position_before = market.get_position(&market_id, &user).unwrap();
+    assert!(market
+        .try_withdraw_unused_collateral(&user, &market_id, &w)
+        .is_err());
+    assert_eq!(
+        balances(&env, &token, &market_addr, &treasury_addr, &user),
+        before
+    );
+    assert_eq!(
+        market.get_position(&market_id, &user).unwrap(),
+        position_before
+    );
+
+    treasury.unpause(&admin);
+    market.withdraw_unused_collateral(&user, &market_id, &w);
+    assert_eq!(treasury.total_collected(), fee_for(w));
+}
+
+#[test]
+fn waived_user_withdraw_skips_treasury() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+
+    let waived = funded_user(&env, &market, market_id, &token, 100 * STROOPS_PER_USDC);
+    let payer = funded_user(&env, &market, market_id, &token, 100 * STROOPS_PER_USDC);
+    market.add_fee_waiver(&admin, &waived);
+
+    // A waived user can take its whole deposit; no fee, no callback.
+    market.withdraw_unused_collateral(&waived, &market_id, &(100 * STROOPS_PER_USDC));
+    assert_eq!(
+        TokenClient::new(&env, &token).balance(&waived),
+        100 * STROOPS_PER_USDC
+    );
+    assert_eq!(treasury.total_collected(), 0);
+    assert_eq!(
+        market
+            .get_position(&market_id, &waived)
+            .unwrap()
+            .total_deposited,
+        0
+    );
+
+    // A non-waived user in the same market still pays.
+    let w = 50 * STROOPS_PER_USDC;
+    market.withdraw_unused_collateral(&payer, &market_id, &w);
+    assert_eq!(treasury.total_collected(), fee_for(w));
+
+    // Removing the waiver restores the fee.
+    market.remove_fee_waiver(&admin, &waived);
+    StellarAssetClient::new(&env, &token).mint(&waived, &(10 * STROOPS_PER_USDC));
+    market.deposit_collateral(&waived, &market_id, &(10 * STROOPS_PER_USDC));
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    market.withdraw_unused_collateral(&waived, &market_id, &(5 * STROOPS_PER_USDC));
+    assert_eq!(
+        treasury.total_collected(),
+        fee_for(w) + fee_for(5 * STROOPS_PER_USDC)
+    );
+}
+
+#[test]
+fn fee_rejected_withdraw_does_not_reach_treasury() {
+    // amount + fee must fit the available balance; the exact-deposit request
+    // fails (fee on top) and nothing is transferred anywhere.
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+    let deposit = 100 * STROOPS_PER_USDC;
+    let user = funded_user(&env, &market, market_id, &token, deposit);
+
+    let before = balances(&env, &token, &market_addr, &treasury_addr, &user);
+    let err = market
+        .try_withdraw_unused_collateral(&user, &market_id, &deposit)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        err,
+        vatix_market_contract::error::ContractError::InsufficientCollateral
+    );
+    assert_eq!(
+        balances(&env, &token, &market_addr, &treasury_addr, &user),
+        before
+    );
+
+    // The largest amount whose fee fits succeeds and leaves only fee dust.
+    let max = deposit * BPS_DENOM / (BPS_DENOM + FEE_BPS);
+    market.withdraw_unused_collateral(&user, &market_id, &max);
+    let left = market
+        .get_position(&market_id, &user)
+        .unwrap()
+        .total_deposited;
+    assert_eq!(left, deposit - max - fee_for(max));
+    assert!(left >= 0);
+}
+
+#[test]
+fn fees_from_two_users_accumulate_per_token() {
+    let (env, market_addr, treasury_addr, admin, token) = setup_with_treasury();
+    let market = MarketContractClient::new(&env, &market_addr);
+    let treasury = TreasuryContractClient::new(&env, &treasury_addr);
+    let market_id = open_market(&env, &market, &admin, &token);
+
+    let a = funded_user(&env, &market, market_id, &token, 300 * STROOPS_PER_USDC);
+    let b = funded_user(&env, &market, market_id, &token, 300 * STROOPS_PER_USDC);
+    market.withdraw_unused_collateral(&a, &market_id, &(120 * STROOPS_PER_USDC));
+    market.withdraw_unused_collateral(&b, &market_id, &(70 * STROOPS_PER_USDC));
+
+    let total = fee_for(120 * STROOPS_PER_USDC) + fee_for(70 * STROOPS_PER_USDC);
+    assert_eq!(treasury.total_collected(), total);
+    assert_eq!(treasury.get_cumulative_fees(&token), total);
+    assert_eq!(treasury.token_balance(&token), total);
+    assert_eq!(
+        treasury.list_fee_tokens(),
+        soroban_sdk::vec![&env, token.clone()]
+    );
+}
