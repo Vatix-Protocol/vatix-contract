@@ -8,6 +8,7 @@ default-members = [
   "contracts/market",
   "contracts/outcome-token",
   "contracts/resolution",
+  "contracts/treasury",
 ]
 
 [workspace.dependencies]
