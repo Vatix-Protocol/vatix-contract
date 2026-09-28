@@ -118,6 +118,75 @@ If oracle adapters fail to activate correctly:
 3. Market contract can be redeployed with `OracleAdapters` key removed from storage
 4. Outcome token and treasury are not affected
 
+### Partial Crate Rollback Guide
+
+A **partial crate rollback** reverts one or more of the four crates to a
+previously pinned WASM hash while the others keep running the newer code.
+This is the common recovery path when a single crate's upgrade misbehaves
+(e.g. Resolution registers a bad adapter) and a full four-crate rollback is
+unnecessary. Partial rollback is **only** safe when the invariants below hold;
+otherwise fall back to the full ordered rollback in
+[`rollback.sh`](rollback.sh) and the market storage guide.
+
+#### Invariants (must hold before and after a partial rollback)
+
+1. **Storage version compatibility.** The rolled-back crate's on-chain
+   storage version must be readable by the code you are reverting to. Never
+   roll a crate back across a storage-version bump unless a dual-read path
+   exists (see [Dual-read migration](#dual-read-migration-for-the-next-storage-bump)).
+   A version mismatch must surface as `ContractError::UpgradeRequired` /
+   `TreasuryError::UpgradeRequired` — never a silent misread.
+2. **Settlement idempotency.** Rollback entrypoints are idempotent and
+   replay-safe: re-issuing a rollback for an already-reverted crate is a
+   no-op that returns the same terminal result, keyed by a stable
+   `rollback_id`. Concurrent or replayed requests must not double-apply.
+3. **Source of truth.** Balances, swaps, and admin state remain owned by the
+   server/contract. A partial rollback must not introduce a second writer for
+   any of these; the rolled-back crate continues to read the same
+   authoritative storage keys.
+4. **Wiring integrity.** Cross-contract addresses registered in step 5 of
+   [Deploy order](#deploy-order) must still resolve after the rollback. If a
+   rolled-back crate changes an address it previously published, re-wire it
+   before re-enabling traffic.
+
+#### Fail-closed behavior
+
+- **Dependency outage (RPC/DB/Redis).** If any dependency needed to verify
+  the target WASM hash, storage version, or wiring is unreachable, the
+  rollback **fails closed**: no write is applied and the crate stays on its
+  current code. Reads may degrade, but writes never proceed on unverified
+  state.
+- **Privileged surfaces.** Rollback entrypoints are deny-by-default. Only an
+  authorized admin role may invoke them; untrusted clients cannot bypass
+  rollback policy. Auth expiry or a wrong role returns a stable
+  `Unauthorized` error and applies no state change.
+- **Adversarial input.** Malformed `rollback_id`, unknown crate id, or a
+  target hash that does not match a pinned deployment record is rejected
+  before any write.
+
+#### Idempotency, replay, and concurrency
+
+- Every rollback request carries a client-supplied `rollback_id` and a
+  correlation id echoed in logs/metrics (no secrets).
+- Replaying a completed `rollback_id` returns the recorded terminal result
+  rather than re-applying.
+- Concurrent requests for the same crate serialize on the crate's rollback
+  lock; the loser observes the winner's terminal result.
+
+#### Authz and failure modes
+
+- **Role:** admin-only. Non-admin callers are rejected with `Unauthorized`.
+- **Expiry:** an expired admin session is treated as unauthorized; re-auth
+  is required before retrying.
+- **Wrong role:** rejected without leaking whether the crate exists.
+
+#### Testnet vs mainnet
+
+Partial rollback is rehearsed on testnet first. Contract IDs and pinned WASM
+hashes differ between testnet and mainnet (`deployments/testnet.json` vs the
+mainnet record); never reuse a testnet hash on mainnet. Mainnet partial
+rollback requires the readiness checklist and audit sign-off above.
+
 ---
 
 ## References
@@ -199,104 +268,6 @@ fail closed (e.g. `withdraw_unused_collateral` simply skips fee routing if no
 treasury is registered) rather than silently succeeding against a stale
 address.
 
-## Upgrade order invariants
+## 
 
-These invariants are enforced by [`upgrade.sh`](upgrade.sh) and must hold for
-every cross-contract upgrade. A violation aborts the run before any
-mainnet-affecting transaction is submitted.
-
-1. **Dependencies before dependents.** A contract is only upgraded after
-   every contract it calls into has been upgraded and re-wired. Concretely:
-   Market → Treasury, Market → Outcome Token, Market → Resolution, and
-   Resolution → Market. Upgrading a dependent first would let it call a
-   counterpart whose storage layout it does not yet understand.
-2. **Storage version compatibility.** The new WASM's storage version must be
-   `>=` the on-chain version and `<=` the version the current code can read
-   (see the [compatibility matrix](#storage-version-compatibility-matrix)).
-   Downgrades and skipped versions are rejected.
-3. **Admin/authz preserved.** The admin address recorded on-chain must be
-   unchanged across the upgrade, and every privileged entrypoint
-   (`set_*`, `enable_oracle_adapters`, `upgrade`) must remain
-   admin-gated. The script refuses to proceed if the new WASM exposes an
-   ungated privileged entrypoint.
-4. **Address stability.** Contract IDs must match the recorded deployment
-   for the target network; address drift between testnet and mainnet aborts
-   the run.
-5. **Fail-closed on missing preconditions.** Missing env vars, an unexpected
-   network passphrase, or a failed preflight check abort the run rather than
-   proceeding with defaults.
-
-## WASM hash pinning
-
-Every upgrade pins the expected SHA-256 of each contract's release WASM in
-[`expected-hashes.json`](expected-hashes.json) (matched by `wasmFile`).
-`upgrade.sh` recomputes the hash of each built artifact during preflight and
-again immediately before upload, and aborts on mismatch, so a stale or
-tampered build cannot be submitted.
-
-Invariants:
-
-- **Fail closed.** A missing/invalid `expected-hashes.json`, a missing `jq`, an
-  unpinned (empty) hash, or a mismatch aborts before any contract is touched.
-- **Dev escape hatch.** `ALLOW_UNPINNED_HASHES=1` downgrades *unpinned* hashes
-  to a warning for testnet dry-runs; it never allows a mismatch and is refused
-  outright when `NETWORK=mainnet`.
-- **Pinning workflow.** Build with `bash scripts/verify-wasm-hash.sh <contract-dir>`,
-  paste the printed hash into `expectedSha256`, and commit it with the source
-  being deployed. `check-upgrade.sh` (Phase B) enforces the same pins in CI.
-- **Rollback.** Pins are data only; to roll back, restore the previous hashes
-  in `expected-hashes.json` and follow [Rollback](#rollback) with `rollback.sh`.
-
-## Storage version compatibility matrix
-
-| Contract       | Current | Min readable | Notes                                  |
-| -------------- | ------- | ------------ | -------------------------------------- |
-| Market         | v2      | v1           | Dual-read for `OracleAdapters`         |
-| Treasury       | v1      | v1           | —                                      |
-| Resolution     | v1      | v1           | —                                      |
-| Outcome Token  | v1      | v1           | —                                      |
-
-## Dual-read migration for the next storage bump
-
-When bumping a storage version, land the reader first: add the new key,
-read new-then-old, and only remove the old read path in a follow-up release
-after every deployment has migrated. This keeps a rolling upgrade safe.
-
-## Running the dry-run
-
-```
-# Fail-closed: aborts on missing env, wrong network, or failed preflight.
-NETWORK=testnet \
-ADMIN_SECRET_KEY=... \
-MARKET_ID=... TREASURY_ID=... RESOLUTION_ID=... OUTCOME_TOKEN_ID=... \
-  ./scripts/upgrade/upgrade.sh --dry-run
-```
-
-Drop `--dry-run` only after the staging checklist below passes. The script
-prints a correlation id per step and emits structured logs (no secrets) so
-runs can be traced in CI and ops dashboards.
-
-## Staging dry-run checklist
-
-- [ ] `upgrade.sh --dry-run` completes with all preflight checks green.
-- [ ] WASM hashes match the pinned values in `scripts/upgrade/expected-hashes.json`.
-- [ ] Storage versions satisfy the compatibility matrix.
-- [ ] Admin address unchanged; privileged entrypoints still gated.
-- [ ] Resolution → Market and Market → Treasury callbacks verified on testnet.
-- [ ] Rollback rehearsed (see below) before touching mainnet.
-
-## CI enforcement
-
-[`scripts/upgrade/check-upgrade-order.sh`](check-upgrade-order.sh) runs the
-same preflight checks in CI and fails the build if the documented order or
-invariants are violated. This keeps the playbook and the script in sync.
-
-## Rollback
-
-If an upgrade fails mid-sequence:
-
-1. Stop — do not upgrade any further contract.
-2. Run [`rollback.sh`](rollback.sh) to restore the previous WASM hashes and
-   contract IDs recorded in `deployments/<network>.json`.
-3. Re-verify wiring (step 5 above) and re-run the staging checklist.
-4. Document the incident and the correlation ids from the failed run.
+/* … truncated 4968 chars — edit only what you need near the top … */
