@@ -606,6 +606,13 @@ impl ResolutionContract {
         storage::set_candidate(&env, &candidate);
         storage::append_challenger(&env, candidate_id, &challenger, bond_amount);
 
+        // Interaction: lock the challenger's bond in this contract (#899).
+        // Without this transfer the recorded bond is unbacked, and slashing
+        // it in `finalize`/`arbitrate_uphold_proposer` would pay the reward
+        // out of other parties' locked bonds.
+        let this = env.current_contract_address();
+        TokenClient::new(&env, &collateral_token).transfer(&challenger, &this, &bond_amount);
+
         events::emit_candidate_challenged(
             &env,
             candidate_id,

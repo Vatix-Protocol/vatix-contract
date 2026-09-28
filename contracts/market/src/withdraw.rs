@@ -461,6 +461,61 @@ mod tests {
         assert_eq!(updated.total_deposited, 56); // 100 - 44
     }
 
+    /// #902: indexer reconciliation — a successful fee-bearing withdrawal emits
+    /// `fee_calculated` then `collateral_withdrawn`, and `collateral_withdrawn`
+    /// carries the requested `amount` plus a `new_total` equal to the stored
+    /// `total_deposited`. An indexer can therefore reconcile the position as
+    /// `prev_total - amount - fee_amount == new_total` from events alone.
+    #[test]
+    fn test_withdraw_events_reconcile_for_indexer() {
+        use soroban_sdk::token::StellarAssetClient;
+        use soroban_sdk::{Map, Symbol, TryIntoVal};
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, market_id, &token);
+        let position = Position {
+            market_id, user: user.clone(),
+            yes_shares: 0, no_shares: 0,
+            locked_collateral: 0, total_deposited: 100, is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+            storage::set_fee_rate_bps(&env, 1_000); // 10%
+        });
+        env.mock_all_auths();
+        StellarAssetClient::new(&env, &token).mint(&contract_id, &200);
+        env.events().all(); // clear setup events
+        env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 40)
+        })
+        .unwrap();
+
+        let field = |name: &str| -> Option<Map<Symbol, Val>> {
+            env.events().all().iter().find_map(|e| {
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                (e.0 == contract_id && t0 == Symbol::new(&env, name))
+                    .then(|| e.2.try_into_val(&env).unwrap())
+            })
+        };
+        let fee = field("fee_calculated").expect("fee_calculated emitted");
+        let wd = field("collateral_withdrawn").expect("collateral_withdrawn emitted");
+        let fee_amount: i128 = fee.get(Symbol::new(&env, "fee_amount")).unwrap().into_val(&env);
+        let amount: i128 = wd.get(Symbol::new(&env, "amount")).unwrap().into_val(&env);
+        let new_total: i128 = wd.get(Symbol::new(&env, "new_total")).unwrap().into_val(&env);
+        assert_eq!((fee_amount, amount, new_total), (4, 40, 56));
+        assert_eq!(100 - amount - fee_amount, new_total);
+        let stored = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(stored.total_deposited, new_total);
+    }
+
     /// #377: when amount + fee > available, reject with InsufficientCollateral.
     #[test]
     fn test_withdraw_fee_causes_insufficient_collateral() {

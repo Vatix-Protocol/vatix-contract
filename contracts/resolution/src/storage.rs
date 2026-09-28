@@ -16,6 +16,8 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 ///   from the pre-versioning schema — this just adds the guard itself.
 pub const STORAGE_VERSION: u32 = 1;
 
+/// Persistent storage keys. Documented with types, writers, and invariants
+/// in `docs/resolution-storage.md` — update it when changing this enum.
 #[contracttype]
 pub enum StorageKey {
     /// Written by `initialize`; used to detect stale or uninitialized deployments.

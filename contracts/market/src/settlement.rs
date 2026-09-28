@@ -7,6 +7,14 @@ use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient}
 
 /// Calculate payout for a position based on market outcome
 ///
+/// # Invariant: exact collateral share (#930)
+///
+/// Each winning share redeems for exactly one stroop of collateral: the
+/// payout equals the winning-side share count with no rounding, fee, or
+/// price scaling, and losing shares contribute nothing. Because every
+/// YES/NO pair is backed by one unit of collateral, this keeps total
+/// winning payouts equal to the collateral backing the winning side.
+///
 /// # Arguments
 /// * `position` - User's position
 /// * `outcome` - Market outcome (true = YES won, false = NO won)
@@ -523,6 +531,19 @@ mod tests {
         let pos = create_test_position(&env, 50, 50, false);
         assert_eq!(calculate_payout(&pos, true), 50);
         assert_eq!(calculate_payout(&pos, false), 50);
+    }
+
+    #[test]
+    fn test_calculate_payout_is_exact_collateral_share() {
+        let env = Env::default();
+        // Odd, non-round amounts: no rounding or price scaling is applied.
+        let pos = create_test_position(&env, 1_234_567_891, 7, false);
+        assert_eq!(calculate_payout(&pos, true), 1_234_567_891);
+        assert_eq!(calculate_payout(&pos, false), 7);
+        // Very large balances redeem 1:1 without saturation.
+        let big = i128::MAX / 2;
+        let pos = create_test_position(&env, big, 1, false);
+        assert_eq!(calculate_payout(&pos, true), big);
     }
 
     #[test]

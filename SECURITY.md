@@ -61,6 +61,40 @@ Key security invariants for upgrades:
 - Upgrades are fail-closed: missing env, wrong network, or failed preflight
   aborts the run.
 
+## Pause Trading (Issue #900)
+
+**Decision:** trading pause is implemented as a per-contract, admin-only
+kill-switch. There is no separate "trading-only" pause; the existing pause
+flag is the single emergency stop for each money path.
+
+| Contract | Entrypoints | Blocked while paused | Error |
+| -------- | ----------- | -------------------- | ----- |
+| `contracts/market` | `pause` / `unpause` / `is_paused` | `deposit_collateral`, `withdraw_unused_collateral`, `update_position`, `initialize_market`, `cancel_market`, `resolve_market`, `resolve_market_threshold` | `ContractPaused` |
+| `contracts/resolution` | `pause` / `unpause` / `is_paused` | `propose`, `challenge`, `appeal`, `finalize` | `ContractPaused` |
+| `contracts/treasury` | `pause` / `unpause` / `is_paused` | `collect_fee`, `withdraw_fees`, `distribute_fees` | `ContractPaused` |
+| `contracts/outcome-token` | `pause` / `unpause` / `is_paused` | token mutation paths (tokens are non-transferable) | `ContractPaused` |
+
+Invariants:
+
+- **Deny-by-default:** only the stored admin may pause or unpause; any other
+  caller fails with `NotAdmin`/`Unauthorized` before the flag is written.
+- **Fail closed:** paused state blocks writes; read-only views stay available
+  so users and operators can inspect balances during an incident.
+- **Idempotent:** pausing an already-paused contract (or unpausing an active
+  one) is a harmless re-write of the same flag.
+- **Observable:** every toggle emits an event (`emergency_pause_toggled` on the
+  market, `contract_paused`/`contract_unpaused` on outcome-token, treasury
+  paused/unpaused events on the treasury) for alerting.
+- **Rollback:** `unpause` restores normal operation with no state migration.
+
+For a coordinated protocol-wide stop, pause each contract (market first) and
+keep the mirrored `EmergencyMode` in sync (Issue #662).
+
+## Error Codes and Storage Layouts
+
+- Stable per-contract error codes: [`docs/error-codes.md`](docs/error-codes.md).
+- Resolution storage keys and invariants: [`docs/resolution-storage.md`](docs/resolution-storage.md).
+
 ## Staging Dry-Run Checklist (Automated)
 
 The staging dry-run is automated by `scripts/upgrade/staging_dry_run.sh`, which executes the steps described in

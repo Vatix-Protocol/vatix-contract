@@ -106,6 +106,8 @@ pub mod storage;
 mod test;
 #[cfg(test)]
 mod tests_vectors;
+#[cfg(test)]
+mod tests_event_fixtures;
 pub mod types;
 #[cfg(test)]
 mod withdraw_fuzz;
@@ -404,6 +406,15 @@ impl MarketContract {
         // making the market permanently unresolvable.
         if oracle_pubkey == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(ContractError::InvalidSignature);
+        }
+
+        // Collateral allowlist (ADR-002, #901): one collateral token per
+        // deployment, pinned by market 1. `CollateralBalance(user)` is
+        // token-agnostic, so mixing tokens would let one asset back another.
+        if let Some(first) = storage::get_market(&env, 1)? {
+            if first.collateral_token != collateral_token {
+                return Err(ContractError::CollateralTokenNotAllowed);
+            }
         }
 
         // 3. Generate market ID

@@ -163,3 +163,34 @@ events additionally carry a `version: u32 (topic)` field
   topic that most other Market events do — this reflects when each event was
   added relative to the Issue #500 schema-versioning change, not an error in
   this table.
+
+### Withdraw events (#902)
+
+Emission order for a successful `withdraw_unused_collateral` call:
+
+1. `fee_calculated` — only when a non-zero fee applies (fee rate > 0 and the
+   user is not on the fee waiver list).
+2. Treasury path: `fee_collected` (treasury contract) **or**
+   `fee_retained_no_treasury` (market) when no treasury is registered.
+3. `collateral_withdrawn` — always, exactly once.
+4. `large_withdraw` — additionally, when `amount >= LARGE_WITHDRAW_THRESHOLD`.
+
+Indexer invariants:
+
+- `collateral_withdrawn.amount` is what the user received; the fee is charged
+  on top. Reconcile a position as
+  `prev_new_total - amount - fee_amount == new_total`, where `fee_amount`
+  comes from the `fee_calculated` event in the same transaction (0 if absent).
+- `collateral_withdrawn.new_total` equals the stored
+  `Position::total_deposited` after the call and is authoritative — prefer it
+  over re-summing deltas when recovering from missed events.
+- Soroban discards contract events from failed invocations, so a rejected
+  withdrawal (including the zero-collateral path that calls
+  `emit_withdraw_edge_case`) leaves no `withdraw_edge_case` in the ledger's
+  event stream; it is only observable in simulation/diagnostic output.
+  Indexers must not rely on it for accounting.
+- Replays are safe to de-duplicate by `(tx hash, event index)`; each
+  successful call emits exactly one `collateral_withdrawn`.
+
+Covered by `test_withdraw_events_reconcile_for_indexer` in
+`contracts/market/src/withdraw.rs`.

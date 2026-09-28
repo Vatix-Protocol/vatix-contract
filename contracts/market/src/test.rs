@@ -429,6 +429,35 @@ mod test {
         assert_eq!(market.collateral_token, usdc_token);
     }
 
+    /// #901: the first market pins the deployment's collateral token; a
+    /// different token is rejected without consuming a market id, and the
+    /// pinned token is still accepted.
+    #[test]
+    fn test_initialize_market_rejects_second_collateral_token() {
+        let (env, admin, client, _contract_id) = create_test_contract();
+
+        let question = String::from_str(&env, "Pinned collateral");
+        let end_time = env.ledger().timestamp() + 86400;
+        let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let usdc_token = Address::generate(&env);
+        let other_token = Address::generate(&env);
+
+        let first = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &usdc_token, &None,
+        );
+        assert_eq!(first, 1);
+
+        let rejected = client.try_initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &other_token, &None,
+        );
+        assert_eq!(rejected, Err(Ok(ContractError::CollateralTokenNotAllowed)));
+
+        let second = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &usdc_token, &None,
+        );
+        assert_eq!(second, 2);
+    }
+
     #[test]
     fn test_initialize_market_with_valid_metadata_uri() {
         let (env, admin, client, contract_id) = create_test_contract();
