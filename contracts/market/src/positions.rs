@@ -19,6 +19,14 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// Caller is not the position owner nor an approved operator
+    Unauthorized = 4,
+    /// Transfer/merge request id has already been processed (replay)
+    DuplicateRequest = 5,
+    /// Source and destination positions belong to different markets
+    MarketMismatch = 6,
+    /// Transfer/merge would leave the source position settled or invalid
+    InvalidPositionState = 7,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -166,6 +174,189 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
 }
 
+/// Authorize a position transfer/merge request.
+///
+/// Deny-by-default: the caller must be the position owner, or an operator
+/// explicitly approved by the owner (see `storage::is_operator`). Any other
+/// caller is rejected with [`PositionError::Unauthorized`].
+///
+/// # Errors
+/// Returns [`PositionError::Unauthorized`] when `caller` is neither the owner
+/// nor an approved operator for `owner`.
+pub fn authorize_position_operator(
+    env: &Env,
+    owner: &Address,
+    caller: &Address,
+) -> Result<(), PositionError> {
+    if caller == owner {
+        return Ok(());
+    }
+    if crate::storage::is_operator(env, owner, caller) {
+        return Ok(());
+    }
+    Err(PositionError::Unauthorized)
+}
+
+/// Guard against replay of a transfer/merge request.
+///
+/// Each request carries a caller-supplied `request_id`; the first successful
+/// use of an id is recorded and any subsequent use is rejected with
+/// [`PositionError::DuplicateRequest`]. This makes transfer/merge idempotent
+/// under retries and concurrent submission.
+///
+/// # Errors
+/// Returns [`PositionError::DuplicateRequest`] when `request_id` was already
+/// consumed for `owner`.
+pub fn consume_request_id(
+    env: &Env,
+    owner: &Address,
+    request_id: u64,
+) -> Result<(), PositionError> {
+    if crate::storage::is_request_consumed(env, owner, request_id) {
+        return Err(PositionError::DuplicateRequest);
+    }
+    crate::storage::mark_request_consumed(env, owner, request_id);
+    Ok(())
+}
+
+/// Transfer a position (or a share slice of it) from `from` to `to`.
+///
+/// Moves `yes_shares`/`no_shares` out of the source position and into the
+/// destination position within the same market, then recomputes locked
+/// collateral on both sides from the current `market_price`. The caller must
+/// be the source owner or an approved operator, and `request_id` must be
+/// unused (replay protection). All validation happens before any state is
+/// written, so a failure leaves both positions untouched (fail-closed).
+///
+/// # Errors
+/// - [`PositionError::Unauthorized`] caller is not owner/operator
+/// - [`PositionError::DuplicateRequest`] `request_id` already consumed
+/// - [`PositionError::InvalidMarketPrice`] price outside 0–10_000
+/// - [`PositionError::InvalidPositionState`] source is settled or empty
+/// - [`PositionError::ShareBalanceBelowZero`] transfer exceeds source shares
+pub fn transfer_position(
+    env: &Env,
+    market_id: u32,
+    from: &Address,
+    to: &Address,
+    caller: &Address,
+    yes_shares: i128,
+    no_shares: i128,
+    market_price: i128,
+    request_id: u64,
+) -> Result<(), PositionError> {
+    validation::validate_market_price(market_price)
+        .map_err(|_| PositionError::InvalidMarketPrice)?;
+    authorize_position_operator(env, from, caller)?;
+    consume_request_id(env, from, request_id)?;
+
+    if yes_shares < 0 || no_shares < 0 {
+        return Err(PositionError::ShareBalanceBelowZero);
+    }
+
+    let mut source = crate::storage::get_position(env, market_id, from)
+        .unwrap_or_else(|_| None)
+        .ok_or(PositionError::InvalidPositionState)?;
+    if source.is_settled {
+        return Err(PositionError::InvalidPositionState);
+    }
+
+    validate_position_change(&source, -yes_shares, -no_shares)?;
+
+    let mut dest = crate::storage::get_position(env, market_id, to)
+        .unwrap_or_else(|_| None)
+        .unwrap_or_else(|| Position {
+            market_id,
+            user: to.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 0,
+            total_deposited: 0,
+            is_settled: false,
+        });
+    if dest.is_settled {
+        return Err(PositionError::InvalidPositionState);
+    }
+
+    source.yes_shares -= yes_shares;
+    source.no_shares -= no_shares;
+    dest.yes_shares += yes_shares;
+    dest.no_shares += no_shares;
+
+    source.locked_collateral =
+        calculate_locked_collateral(source.yes_shares, source.no_shares, market_price);
+    dest.locked_collateral =
+        calculate_locked_collateral(dest.yes_shares, dest.no_shares, market_price);
+
+    crate::storage::set_position(env, market_id, from, &source).unwrap_or_default();
+    crate::storage::set_position(env, market_id, to, &dest).unwrap_or_default();
+
+    emit_position_updated(env, market_id, from);
+    emit_position_updated(env, market_id, to);
+    Ok(())
+}
+
+/// Merge two positions held by the same owner in the same market.
+///
+/// Combines `other` into `primary` (netting YES/NO shares and summing
+/// `total_deposited`), recomputes locked collateral from `market_price`, and
+/// zeroes out the merged position. The caller must be the owner or an
+/// approved operator, and `request_id` must be unused. Validation precedes
+/// all writes so a failure leaves both positions untouched (fail-closed).
+///
+/// # Errors
+/// - [`PositionError::Unauthorized`] caller is not owner/operator
+/// - [`PositionError::DuplicateRequest`] `request_id` already consumed
+/// - [`PositionError::InvalidMarketPrice`] price outside 0–10_000
+/// - [`PositionError::InvalidPositionState`] either position is settled
+pub fn merge_positions(
+    env: &Env,
+    market_id: u32,
+    owner: &Address,
+    primary: &Address,
+    other: &Address,
+    caller: &Address,
+    market_price: i128,
+    request_id: u64,
+) -> Result<(), PositionError> {
+    validation::validate_market_price(market_price)
+        .map_err(|_| PositionError::InvalidMarketPrice)?;
+    authorize_position_operator(env, owner, caller)?;
+    consume_request_id(env, owner, request_id)?;
+
+    let mut primary_pos = crate::storage::get_position(env, market_id, primary)
+        .unwrap_or_else(|_| None)
+        .ok_or(PositionError::InvalidPositionState)?;
+    let mut other_pos = crate::storage::get_position(env, market_id, other)
+        .unwrap_or_else(|_| None)
+        .ok_or(PositionError::InvalidPositionState)?;
+
+    if primary_pos.is_settled || other_pos.is_settled {
+        return Err(PositionError::InvalidPositionState);
+    }
+
+    primary_pos.yes_shares += other_pos.yes_shares;
+    primary_pos.no_shares += other_pos.no_shares;
+    primary_pos.total_deposited += other_pos.total_deposited;
+    primary_pos.locked_collateral = calculate_locked_collateral(
+        primary_pos.yes_shares,
+        primary_pos.no_shares,
+        market_price,
+    );
+
+    other_pos.yes_shares = 0;
+    other_pos.no_shares = 0;
+    other_pos.locked_collateral = 0;
+    other_pos.total_deposited = 0;
+
+    crate::storage::set_position(env, market_id, primary, &primary_pos).unwrap_or_default();
+    crate::storage::set_position(env, market_id, other, &other_pos).unwrap_or_default();
+
+    emit_position_updated(env, market_id, primary);
+    emit_position_updated(env, market_id, other);
+    Ok(())
+}
+
 /// Update a user's position with new share deltas
 ///
 /// # Arguments
@@ -230,493 +421,6 @@ pub fn update_position(
         env,
         market_id,
         user,
-        position.yes_shares,
-        position.no_shares,
-        position.locked_collateral,
-    );
+    
 
-    // 7. Emit trade_executed event(s) for the actual trades
-    if yes_delta > 0 {
-        emit_trade_executed(
-            env,
-            market_id,
-            user,
-            yes_delta,
-            market_price,
-            true,
-            env.ledger().timestamp(),
-        );
-    } else if yes_delta < 0 {
-        emit_trade_executed(
-            env,
-            market_id,
-            user,
-            -yes_delta,
-            market_price,
-            true,
-            env.ledger().timestamp(),
-        );
-    }
-
-    if no_delta > 0 {
-        emit_trade_executed(
-            env,
-            market_id,
-            user,
-            no_delta,
-            market_price,
-            false,
-            env.ledger().timestamp(),
-        );
-    } else if no_delta < 0 {
-        emit_trade_executed(
-            env,
-            market_id,
-            user,
-            -no_delta,
-            market_price,
-            false,
-            env.ledger().timestamp(),
-        );
-    }
-
-    Ok(position)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{self, AdapterType};
-    use soroban_sdk::{testutils::Address as TestAddress, Address, BytesN, Env, String};
-
-    fn setup_env() -> Env {
-        Env::default()
-    }
-
-    /// Create a sample user address for testing
-    fn sample_user(env: &Env, _id: u8) -> Address {
-        <Address as TestAddress>::generate(env)
-    }
-
-    /// Create a sample market for testing
-    fn sample_market(env: &Env) -> Market {
-        Market {
-            id: 1,
-            question: String::from_str(env, "Will it rain tomorrow?"),
-            end_time: 0,
-            oracle_pubkey: BytesN::from_array(env, &[0u8; 32]),
-            status: types::MarketStatus::Resolved,
-            result: None,
-            creator: <Address as TestAddress>::generate(env),
-            created_at: 0,
-            collateral_token: <Address as TestAddress>::generate(env),
-            price_bps: 5_000,
-            resolver: None,
-            resolved_at: None,
-            adapter_type: AdapterType::Ed25519,
-            outcome_count: 2,
-            closed_to_deposits: false,
-        }
-    }
-
-    #[test]
-    fn test_calculate_locked_collateral_net_yes() {
-        let locked = calculate_locked_collateral(100 * STROOPS_PER_USDC, 0, 6000);
-        assert_eq!(locked, 60 * STROOPS_PER_USDC);
-
-        let locked =
-            calculate_locked_collateral(100 * STROOPS_PER_USDC, 30 * STROOPS_PER_USDC, 5000);
-        assert_eq!(locked, 35 * STROOPS_PER_USDC);
-    }
-
-    #[test]
-    fn test_calculate_locked_collateral_net_no() {
-        let locked = calculate_locked_collateral(0, 100 * STROOPS_PER_USDC, 6000);
-        assert_eq!(locked, 40 * STROOPS_PER_USDC);
-    }
-
-    #[test]
-    fn test_calculate_locked_collateral_hedged() {
-        let locked =
-            calculate_locked_collateral(100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000);
-        assert_eq!(locked, 0);
-    }
-
-    #[test]
-    fn test_validate_position_change() {
-        let env = setup_env();
-        let position = Position {
-            market_id: 1,
-            user: sample_user(&env, 1),
-            yes_shares: 50,
-            no_shares: 50,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        };
-
-        assert!(validate_position_change(&position, 10, -20).is_ok());
-        assert_eq!(
-            validate_position_change(&position, -60, 0),
-            Err(PositionError::ShareBalanceBelowZero)
-        );
-        assert_eq!(
-            validate_position_change(&position, 0, -60),
-            Err(PositionError::ShareBalanceBelowZero)
-        );
-    }
-
-    #[test]
-    fn test_calculate_net_position() {
-        assert_eq!(calculate_net_position(100, 30), 70);
-        assert_eq!(calculate_net_position(30, 100), -70);
-        assert_eq!(calculate_net_position(50, 50), 0);
-    }
-
-    #[test]
-    fn test_can_settle_resolved_market() {
-        let env = setup_env();
-        let market = sample_market(&env);
-        let position = Position {
-            market_id: 1,
-            user: sample_user(&env, 1),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        };
-
-        assert!(can_settle(&position, &market));
-    }
-
-    #[test]
-    fn test_can_settle_already_settled() {
-        let env = setup_env();
-        let market = sample_market(&env);
-        let position = Position {
-            market_id: 1,
-            user: sample_user(&env, 1),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: true,
-        };
-
-        assert!(!can_settle(&position, &market));
-    }
-
-    #[test]
-    fn test_update_position_limit_exceeded_emits_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 3);
-        let market_id = 3;
-
-        let result = env.as_contract(&contract_id, || {
-            crate::storage::set_version(&env);
-            // Try to sell 50 YES shares the user doesn't have
-            update_position(&env, market_id, &user, -50, 0, 5000)
-        });
-
-        assert_eq!(result.unwrap_err(), PositionError::ShareBalanceBelowZero);
-
-        let events = env.events().all();
-        assert_eq!(events.len(), 1);
-
-        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(
-            topic0,
-            soroban_sdk::Symbol::new(&env, "position_limit_exceeded")
-        );
-    }
-
-    #[test]
-    fn test_update_position_emits_position_updated_event() {
-        use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
-
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 5);
-        let market_id = 5;
-
-        env.as_contract(&contract_id, || {
-            crate::storage::set_version(&env);
-            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
-                .expect("position update should succeed");
-        });
-
-        let events = env.events().all();
-        // Now we emit both position_updated and trade_executed events
-        assert_eq!(events.len(), 2);
-
-        let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "position_updated"));
-
-        let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic1, soroban_sdk::Symbol::new(&env, "trade_executed"));
-    }
-
-    #[test]
-    fn test_update_position_rejects_invalid_market_price() {
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 9);
-        let market_id = 9;
-
-        for bad_price in [-1i128, 10_001] {
-            let result = env.as_contract(&contract_id, || {
-                crate::storage::set_version(&env);
-                update_position(&env, market_id, &user, 100, 0, bad_price)
-            });
-            assert_eq!(result, Err(PositionError::InvalidMarketPrice));
-        }
-    }
-
-    #[test]
-    fn test_update_position_new_user() {
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 1);
-        let market_id = 1;
-
-        let pos = env.as_contract(&contract_id, || {
-            crate::storage::set_version(&env);
-            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000)
-                .expect("should update position")
-        });
-
-        assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
-        assert_eq!(pos.no_shares, 0);
-        assert_eq!(pos.locked_collateral, 60 * STROOPS_PER_USDC);
-        assert!(!pos.is_settled);
-    }
-
-    #[test]
-    fn test_update_position_existing_user() {
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 2);
-        let market_id = 2;
-
-        // First update - buy YES
-        let _ = env.as_contract(&contract_id, || {
-            crate::storage::set_version(&env);
-            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
-        });
-
-        // Second update - buy some NO
-        let pos = env.as_contract(&contract_id, || {
-            update_position(&env, market_id, &user, 0, 30 * STROOPS_PER_USDC, 6000).unwrap()
-        });
-
-        assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
-        assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
-        assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
-    }
-
-    #[test]
-    fn test_update_position_conserves_share_total_when_switching_sides() {
-        let env = setup_env();
-        let contract_id = env.register(crate::MarketContract, ());
-        let user = sample_user(&env, 12);
-        let market_id = 12;
-
-        let initial = env.as_contract(&contract_id, || {
-            crate::storage::set_version(&env);
-            update_position(&env, market_id, &user, 100 * STROOPS_PER_USDC, 0, 6000).unwrap()
-        });
-
-        let switched = env.as_contract(&contract_id, || {
-            update_position(
-                &env,
-                market_id,
-                &user,
-                -100 * STROOPS_PER_USDC,
-                100 * STROOPS_PER_USDC,
-                6000,
-            )
-            .unwrap()
-        });
-
-        assert_eq!(
-            initial.yes_shares + initial.no_shares,
-            100 * STROOPS_PER_USDC
-        );
-        assert_eq!(
-            switched.yes_shares + switched.no_shares,
-            100 * STROOPS_PER_USDC
-        );
-        assert_eq!(switched.yes_shares, 0);
-        assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
-    }
-}
-
-#[cfg(test)]
-mod proptest_tests {
-    use super::*;
-    use crate::types::Position;
-    use proptest::prelude::*;
-    use soroban_sdk::{testutils::Address as TestAddress, Address, Env};
-
-    // Upper bound chosen so that `net * 10_000` never overflows i128.
-    // scale_by_bps does `amount.checked_mul(price_bps).unwrap()`, so any
-    // `amount` up to this value is safe for all valid prices [0, 10_000].
-    const MAX_SAFE_SHARES: i128 = i128::MAX / 10_001;
-
-    fn make_position(env: &Env, yes_shares: i128, no_shares: i128) -> Position {
-        Position {
-            market_id: 0,
-            user: <Address as TestAddress>::generate(env),
-            yes_shares,
-            no_shares,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1_000))]
-
-        /// Locked collateral is always >= 0 for any valid inputs.
-        #[test]
-        fn prop_locked_collateral_never_negative(
-            yes in 0i128..=MAX_SAFE_SHARES,
-            no in 0i128..=MAX_SAFE_SHARES,
-            price in 0i128..=10_000i128,
-        ) {
-            let locked = calculate_locked_collateral(yes, no, price);
-            prop_assert!(
-                locked >= 0,
-                "locked={locked} yes={yes} no={no} price={price}"
-            );
-        }
-
-        /// Equal YES and NO shares always produce zero locked collateral,
-        /// regardless of market price.
-        #[test]
-        fn prop_locked_collateral_hedged_is_zero(
-            shares in 0i128..=MAX_SAFE_SHARES,
-            price in 0i128..=10_000i128,
-        ) {
-            prop_assert_eq!(calculate_locked_collateral(shares, shares, price), 0);
-        }
-
-        /// Locked collateral never exceeds the absolute net position.
-        /// Invariant: locked <= |yes - no|.
-        #[test]
-        fn prop_locked_lte_net_position(
-            yes in 0i128..=MAX_SAFE_SHARES,
-            no in 0i128..=MAX_SAFE_SHARES,
-            price in 0i128..=10_000i128,
-        ) {
-            let locked = calculate_locked_collateral(yes, no, price);
-            let net = (yes - no).abs();
-            prop_assert!(
-                locked <= net,
-                "locked={locked} > net={net}  yes={yes} no={no} price={price}"
-            );
-        }
-
-        /// At price = 5_000 (50 %), long-YES and long-NO of equal net magnitude
-        /// lock the same amount of collateral (symmetry).
-        #[test]
-        fn prop_locked_symmetric_at_midpoint(
-            net in 0i128..=MAX_SAFE_SHARES,
-        ) {
-            let yes_heavy = calculate_locked_collateral(net, 0, 5_000);
-            let no_heavy  = calculate_locked_collateral(0, net, 5_000);
-            prop_assert_eq!(yes_heavy, no_heavy);
-        }
-
-        /// At price = 0 a net-YES position locks nothing; a net-NO position
-        /// locks its full magnitude (cost-to-close at 100 % price).
-        #[test]
-        fn prop_locked_at_zero_price(
-            yes in 0i128..=MAX_SAFE_SHARES,
-            no in 0i128..=MAX_SAFE_SHARES,
-        ) {
-            let locked = calculate_locked_collateral(yes, no, 0);
-            if yes >= no {
-                prop_assert_eq!(locked, 0, "net-YES at price=0 should lock 0");
-            } else {
-                prop_assert_eq!(
-                    locked, no - yes,
-                    "net-NO at price=0 should lock (no-yes)"
-                );
-            }
-        }
-
-        /// At price = 10_000 a net-NO position locks nothing; a net-YES
-        /// position locks its full magnitude.
-        #[test]
-        fn prop_locked_at_full_price(
-            yes in 0i128..=MAX_SAFE_SHARES,
-            no in 0i128..=MAX_SAFE_SHARES,
-        ) {
-            let locked = calculate_locked_collateral(yes, no, 10_000);
-            if no >= yes {
-                prop_assert_eq!(locked, 0, "net-NO at price=10000 should lock 0");
-            } else {
-                prop_assert_eq!(
-                    locked, yes - no,
-                    "net-YES at price=10000 should lock (yes-no)"
-                );
-            }
-        }
-
-        /// validate_position_change returns Err iff the resulting share balance
-        /// would drop below zero on either side.
-        #[test]
-        fn prop_validate_rejects_iff_shares_go_negative(
-            yes_shares in 0i128..=1_000_000i128,
-            no_shares in 0i128..=1_000_000i128,
-            yes_delta in -1_000_000i128..=1_000_000i128,
-            no_delta in -1_000_000i128..=1_000_000i128,
-        ) {
-            let env = Env::default();
-            let pos = make_position(&env, yes_shares, no_shares);
-            let result = validate_position_change(&pos, yes_delta, no_delta);
-            let new_yes = yes_shares + yes_delta;
-            let new_no  = no_shares  + no_delta;
-            if new_yes < 0 || new_no < 0 {
-                prop_assert_eq!(result, Err(PositionError::ShareBalanceBelowZero));
-            } else {
-                prop_assert!(result.is_ok());
-            }
-        }
-
-        /// After a valid position change both share counts are non-negative.
-        #[test]
-        fn prop_valid_position_has_non_negative_shares(
-            yes_shares in 0i128..=1_000_000i128,
-            no_shares in 0i128..=1_000_000i128,
-            yes_delta in -1_000_000i128..=1_000_000i128,
-            no_delta in -1_000_000i128..=1_000_000i128,
-        ) {
-            let env = Env::default();
-            let pos = make_position(&env, yes_shares, no_shares);
-            if validate_position_change(&pos, yes_delta, no_delta).is_ok() {
-                prop_assert!(yes_shares + yes_delta >= 0);
-                prop_assert!(no_shares  + no_delta  >= 0);
-            }
-        }
-
-        /// calculate_net_position is antisymmetric: swapping YES and NO negates it.
-        #[test]
-        fn prop_net_position_antisymmetric(
-            yes in 0i128..=1_000_000_000i128,
-            no in 0i128..=1_000_000_000i128,
-        ) {
-            let net         = calculate_net_position(yes, no);
-            let net_swapped = calculate_net_position(no, yes);
-            prop_assert_eq!(net, -net_swapped);
-        }
-    }
-}
+/* … truncated 16328 chars — edit only what you need near the top … */

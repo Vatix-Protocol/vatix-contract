@@ -130,11 +130,113 @@ fn metadata_rejects_empty_symbol() {
     let env = Env::default();
     let (client, admin, _market) = setup(&env);
 
-    client.set_metadata(
+    let result = client.try_set_metadata(
+        &admin,
         &String::from_str(&env, "Vatix Outcome YES"),
         &String::from_str(&env, ""),
-        &7,
     );
+    assert_eq!(result, Err(Ok(ContractError::EmptyMetadata)));
+}
+
+#[test]
+fn metadata_accepts_name_at_cap() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    // Exactly at the maximum allowed name length must be accepted.
+    let name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize));
+    let symbol = String::from_str(&env, "vYES");
+
+    client.set_metadata(&admin, &name, &symbol);
+
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+}
+
+#[test]
+fn metadata_accepts_symbol_at_cap() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    // Exactly at the maximum allowed symbol length must be accepted.
+    let name = String::from_str(&env, "Vatix Outcome YES");
+    let symbol = String::from_str(&env, &"S".repeat(crate::MAX_SYMBOL_LEN as usize));
+
+    client.set_metadata(&admin, &name, &symbol);
+
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+}
+
+#[test]
+fn metadata_rejects_name_over_cap() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    // One byte over the cap must fail closed with a stable error code.
+    let name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize + 1));
+    let result = client.try_set_metadata(
+        &admin,
+        &name,
+        &String::from_str(&env, "vYES"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::MetadataTooLong)));
+}
+
+#[test]
+fn metadata_rejects_symbol_over_cap() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    // One byte over the cap must fail closed with a stable error code.
+    let symbol = String::from_str(&env, &"S".repeat(crate::MAX_SYMBOL_LEN as usize + 1));
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "Vatix Outcome YES"),
+        &symbol,
+    );
+    assert_eq!(result, Err(Ok(ContractError::MetadataTooLong)));
+}
+
+#[test]
+fn metadata_over_cap_does_not_mutate_state() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    let original_name = client.name();
+    let original_symbol = client.symbol();
+
+    let name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize + 1));
+    let result = client.try_set_metadata(
+        &admin,
+        &name,
+        &String::from_str(&env, "vYES"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::MetadataTooLong)));
+
+    // Fail-closed: rejected updates must not partially apply.
+    assert_eq!(client.name(), original_name);
+    assert_eq!(client.symbol(), original_symbol);
+}
+
+#[test]
+fn non_admin_cannot_bypass_length_caps() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+
+    // Drop the blanket auth mock so the missing admin auth is enforced.
+    env.mock_auths(&[]);
+
+    let attacker = Address::generate(&env);
+    let name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize + 1));
+    let result = client.try_set_metadata(
+        &attacker,
+        &name,
+        &String::from_str(&env, "vYES"),
+    );
+    // Authz is checked before length validation: untrusted callers are
+    // rejected outright and cannot probe or bypass the caps.
+    assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
 #[test]

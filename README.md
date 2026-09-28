@@ -601,3 +601,12 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-952 -->
 - #952: Close market emits indexer events
+
+<!-- handsoff-issue-953 -->
+- #953: Resolution challenge bond lock/unlock
+
+<!-- handsoff-issue-954 -->
+- #954: Market creation emits MarketCreated fields complete
+
+<!-- handsoff-issue-955 -->
+- #955: Settle emits events once only

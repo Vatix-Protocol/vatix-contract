@@ -58,4 +58,20 @@ pub enum ContractError {
     /// `require_auth` and match the persisted admin exactly; any other caller
     /// is denied by default (Issue #868).
     NotAdmin = 16,
+    /// `symbol` exceeded the outcome-token maximum length cap.
+    ///
+    /// Outcome symbols are rendered in compact trading UIs (order books,
+    /// position rows, tickers) where an oversized ticker overflows the layout
+    /// and can be used to grief indexers.  The cap is enforced on every
+    /// entrypoint that sets or updates outcome metadata so untrusted clients
+    /// cannot bypass it (Issue #958).
+    SymbolTooLong = 17,
+    /// `name` exceeded the outcome-token maximum length cap.
+    ///
+    /// Outcome names are rendered in full-width surfaces (market headers,
+    /// settlement receipts) and are bounded for the same reasons as
+    /// `symbol`: unbounded metadata grows storage and breaks downstream
+    /// renderers.  Enforced on every entrypoint that sets or updates outcome
+    /// metadata (Issue #958).
+    NameTooLong = 18,
 }
