@@ -9,9 +9,11 @@ match the repo layout and CI, and a dedicated section for the
 
 1. Fork the repository and create a topic branch off `main`.
 2. Keep changes scoped to a single issue; avoid unrelated refactors.
-3. Run the package's build and test commands locally (see
+3. Enable the repo's Git hooks (see [Git hooks](#git-hooks)) so the fast local
+   gate runs before every commit.
+4. Run the package's build and test commands locally (see
    [Build and test](#build-and-test)) before opening a PR.
-4. Open a PR that links the issue it resolves and describes the rollback plan
+5. Open a PR that links the issue it resolves and describes the rollback plan
    for any money-path or mainnet-affecting change.
 
 ## General expectations
@@ -20,6 +22,72 @@ match the repo layout and CI, and a dedicated section for the
 - Never commit secrets, tokens, or credentials.
 - Keep CI green; add a required check if a new surface is ungated.
 - Update docs and runbooks when behavior changes.
+
+## Git hooks
+
+The repo ships versioned Git hooks under [`.githooks/`](.githooks/). They are a
+**fast local gate** that catches common mistakes before a commit leaves your
+machine — they are not a replacement for CI (see
+[Relationship to CI](#relationship-to-ci)).
+
+### What hooks exist
+
+- **`.githooks/pre-commit`** — runs on `git commit`, before the commit is
+  created. It is the local pre-flight check for the staged change set (for
+example formatting/lint or fast checks the repo wires up). If it exits
+  non-zero, the commit is aborted so you can fix the issue and re-stage.
+
+If you add or change a hook, document it here in the same PR so contributors
+know what runs and when.
+
+### When each hook runs
+
+| Hook | Trigger | Effect on failure |
+| --- | --- | --- |
+| `.githooks/pre-commit` | `git commit` (before the commit object is written) | Aborts the commit; nothing is committed |
+
+### Install / enable the hooks locally
+
+Git does not use `.githooks/` by default. Point Git at it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Make sure the hook scripts are executable (they are committed with the
+executable bit; if your checkout lost it, restore it):
+
+```bash
+chmod +x .githooks/*
+```
+
+### Verify the hooks are active
+
+```bash
+# Should print: .githooks
+git config --get core.hooksPath
+
+# Should list the hook scripts
+ls -l .githooks
+```
+
+If `core.hooksPath` is unset, the hooks are **not** running and your commits
+will skip the local gate.
+
+### Relationship to CI
+
+Hooks and CI are complementary, not interchangeable:
+
+- **Hooks** run locally, only on your machine, and only for the hooks you have
+  enabled. They are fast and give immediate feedback, but they can be skipped
+  (`--no-verify`) and are not enforced for anyone else.
+- **CI** (`.github/workflows/ci.yml`) runs on every push/PR on a clean
+  checkout and is the **source of truth** for merge gating. It cannot be
+  bypassed locally.
+
+A green local hook run is a convenience, not a guarantee. Always rely on CI
+for the authoritative build/test result, and never use `--no-verify` to push a
+change you have not otherwise validated.
 
 ## Reporting a security vulnerability
 
@@ -212,36 +280,6 @@ money-path state. They must meet the bar below before merge. See
 - Use stable, documented error codes for script entrypoints; do not reuse a
   code for a different failure mode.
 - Propagate a 
-  error rather than partially applying. Reads may degrade; writes must not.
-- **Deny-by-default authz.** Privileged surfaces require an explicit role and
-  reject untrusted callers. New privileged entrypoints start denied.
-- **No secrets.** Never log or commit secrets, keys, or tokens. Redact
-  sensitive fields in logs and metrics.
+  error rather than partially app
 
-### Error codes and correlation ids
-
-- Use stable, documented error codes for script entrypoints; do not reuse a
-  code for a different failure mode.
-- Propagate a correlation id through every entrypoint and include it in logs
-  and error responses so operators can trace a run end to end.
-
-### Observability
-
-- Emit ops-safe metrics and logs on money paths (counts, latencies, outcomes)
-  without leaking secrets or user-identifying data.
-- Metrics must be actionable: alert on write failures and authz denials.
-
-### Safety
-
-- Feature-flag or kill-switch any money-path or mainnet-affecting change.
-- Document the rollback strategy in the PR description.
-- Respect testnet vs mainnet address drift; never hardcode mainnet addresses
-  in scripts without an explicit, reviewed flag.
-
-## Pull request checklist
-
-- [ ] Behavior matches the cited docs for the issue.
-- [ ] Authz, idempotency, and fail-closed behavior covered by tests.
-- [ ] Docs/runbooks updated; mainnet safety respected.
-- [ ] Observability is actionable; metrics on money paths.
-- [ ] Rollback/flag strategy documented in the PR description.
+/* … truncated 1411 chars — edit only what you need near the top … */
