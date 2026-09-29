@@ -203,99 +203,70 @@ pub enum ContractError {
     /// rejection from a validation failure.
     Unauthorized = 40,
 
-    /// Caller is not the current admin.
+    /// The caller's authorization has expired and must be re-established.
     ///
-    /// Reserved for admin-only entrypoints (fee configuration, waiver list
-    /// management, pause/kill-switch toggles). Distinct from `Unauthorized`
-    /// so operators can alert specifically on admin-surface probing.
-    NotAdmin = 41,
+    /// Used when a time-bounded grant (e.g. a guardian or operator role with
+    /// an expiry) is presented after its deadline. Fail closed: the caller
+    /// must re-authenticate rather than silently falling back to a weaker
+    /// role.
+    AuthorizationExpired = 41,
 
-    /// Caller is not the current guardian.
+    /// The caller holds a role that is not permitted for this entrypoint.
     ///
-    /// Reserved for guardian-only entrypoints (emergency pause). Distinct
-    /// from `NotAdmin` so operators can alert on guardian-surface probing.
-    NotGuardian = 42,
-
-    /// The privileged surface is currently disabled by a kill-switch/flag.
-    ///
-    /// Money-path or mainnet-affecting entrypoints can be gated behind an
-    /// admin-controlled flag. When the flag is off, calls fail closed with
-    /// this stable code instead of silently no-op'ing.
-    OperationDisabled = 43,
-
-    /// The request was rejected as a replay of an already-processed operation.
-    ///
-    /// Money-path writes (settlement, fee withdrawal) carry a caller-supplied
-    /// idempotency key. Re-submitting a key that has already been consumed
-    /// fails closed with this stable code so clients can safely retry without
-    /// double-spending or double-settling.
-    DuplicateRequest = 44,
-
-    /// A required dependency (RPC/DB/Redis/oracle feed) is unavailable.
-    ///
-    /// Writes fail closed with this stable code rather than proceeding on
-    /// stale or missing data. Reads may degrade, but money-path writes never
-    /// commit when a dependency is down.
-    DependencyUnavailable = 45,
+    /// Distinct from [`ContractError::Unauthorized`]: the caller is a known
+    /// principal but the wrong role for the requested action. Deny-by-default
+    /// for any new privileged surface.
+    WrongRole = 42,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g., insufficient
+    /// The underlying token contract rejected the transfer (e.g. insufficient
     /// balance or allowance).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid.
-    ///
-    /// The provided token contract address is not a valid token.
+    /// Token address is invalid or unsupported.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during calculation.
-    ///
-    /// The operation would exceed the maximum representable value.
+    /// Arithmetic overflow occurred during a calculation.
     ArithmeticOverflow = 60,
 
-    /// Arithmetic underflow occurred during calculation.
-    ///
-    /// The operation would go below the minimum representable value.
+    /// Arithmetic underflow occurred during a calculation.
     ArithmeticUnderflow = 61,
 
-    /// Division by zero attempted.
-    ///
-    /// The divisor in a division operation was zero.
+    /// Division by zero was attempted.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
-    /// Treasury has insufficient balance for the requested withdrawal.
-    ///
-    /// The accumulated fees are less than the requested withdrawal amount.
+    /// Treasury balance is insufficient for the requested operation.
     InsufficientTreasuryBalance = 70,
 
-    /// Treasury withdrawal would violate the reserve requirement.
-    ///
-    /// A minimum reserve must remain in the treasury at all times.
-    TreasuryReserveViolation = 71,
+    /// Treasury operation is not permitted in the current state.
+    InvalidTreasuryOperation = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
-    /// Reconciliation check failed — accounting invariant violated.
-    ///
-    /// The sum of tracked balances does not match the expected total.
-    ReconciliationFailed = 80,
+    /// On-chain balances do not reconcile with the expected ledger state.
+    ReconciliationMismatch = 80,
 
-    /// A balance snapshot is missing for the requested reconciliation.
+    /// A replayed or duplicate request was detected on a money path.
     ///
-    /// Reconciliation requires a prior snapshot to compare against.
-    MissingSnapshot = 81,
+    /// Money-path entrypoints (deposit/withdraw/settlement) are idempotent:
+    /// a request carrying a nonce/idempotency key that has already been
+    /// consumed fails closed with this stable code instead of double-applying
+    /// the effect. Concurrent or replayed submissions therefore cannot move
+    /// funds twice.
+    DuplicateRequest = 81,
+
+    /// A required external dependency (RPC/DB/Redis-style backend) is
+    /// unavailable, so the write is rejected rather than partially applied.
+    ///
+    /// Fail-closed: money-path writes never proceed on a degraded dependency.
+    /// Callers may retry once the dependency recovers; no state is mutated.
+    DependencyUnavailable = 82,
 
     // ========== Conservation Errors (90-99) ==========
-    /// Conservation invariant violated — value was created or destroyed.
-    ///
-    /// The total value in the system must be conserved across operations.
+    /// The conservation invariant was violated (total collateral does not
+    /// equal the sum of locked positions plus treasury).
     ConservationViolation = 90,
-
-    /// A conservation check could not be completed due to missing data.
-    ///
-    /// The check requires complete accounting data to verify conservation.
-    IncompleteConservationData = 91,
 }

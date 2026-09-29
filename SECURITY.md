@@ -87,6 +87,56 @@ in [`SETTLEMENT_IDEMPOTENCY.md`](SETTLEMENT_IDEMPOTENCY.md).
   per-contract pause kill-switch (see *Pause Trading* below) with a documented
   rollback. No state migration is required to roll back a pause.
 
+## Hardening Follow-up 8: Residual Authz / Observability / Docs Gaps (Issue #970)
+
+This section closes the residual gaps left after follow-up 1 (#963). It is the
+normative summary for the invariants below; the per-entrypoint authz detail
+lives in [`AUTH_TABLE.md`](AUTH_TABLE.md), the settlement replay rules live in
+[`SETTLEMENT_IDEMPOTENCY.md`](SETTLEMENT_IDEMPOTENCY.md), and the project
+overview lives in [`README.md`](README.md).
+
+### Deny-by-default for new privileged surfaces
+
+- The server/contract remains the **source of truth** for balances, swaps, and
+  admin actions. Clients are never trusted for state.
+- Every new privileged surface is **denied by default**: it must authorize
+  explicitly and be registered in [`AUTH_TABLE.md`](AUTH_TABLE.md)
+  (CI-enforced by `scripts/check-auth-table.sh`, #892) before it can be called.
+- A caller that is not the stored admin (or an explicitly granted role) fails
+  with `NotAdmin`/`Unauthorized` and no state is mutated. Wrong role or expired
+  auth aborts the call; there is no implicit fallback to a less-privileged path.
+
+### Idempotency and replay handling
+
+- Settlement and other money-path writes are idempotent: concurrent or
+  replayed requests are serialized and applied **at most once**. The exact keys
+  and replay rules are documented in
+  [`SETTLEMENT_IDEMPOTENCY.md`](SETTLEMENT_IDEMPOTENCY.md).
+- Replayed oracle reports count once toward quorum; a replayed settlement is a
+  no-op, not a second transfer.
+
+### Fail-closed on dependency outage
+
+- Writes fail closed when a dependency (RPC/DB/Redis) is unavailable. A write
+  that cannot verify its preconditions is rejected rather than partially
+  applied.
+- Reads may degrade, but a degraded read never authorizes a write, and there is
+  no silent fallback to a last-known value on money paths.
+
+### Observability without secret leakage
+
+- Money paths emit actionable metrics and events (e.g. pause toggles, fee
+  collection, settlement outcomes) so operators can alert and pause.
+- Logs and metrics redact secrets: environment values, keys, and RPC URLs are
+  never emitted. Correlation ids trace a request without exposing credentials.
+- No secrets in the repository or in logs.
+
+### Rollback / kill-switch
+
+- Any money-path or mainnet-affecting change lands behind a feature flag or the
+  per-contract pause kill-switch (see *Pause Trading* below) with a documented
+  rollback. No state migration is required to roll back a pause.
+
 ## Oracle Collusion Assumptions (Issue #946)
 
 The oracle adapter's trust model and collusion assumptions are documented in
@@ -165,53 +215,4 @@ flag is the single emergency stop for each money path.
 Invariants:
 
 - **Deny-by-default:** only the stored admin may pause or unpause; any other
-  caller fails with `NotAdmin`/`Unauthorized` before the flag is written.
-- **Fail closed:** paused state blocks writes; read-only views stay available
-  so users and operators can inspect balances during an incident.
-- **Idempotent:** pausing an already-paused contract (or unpausing an active
-  one) is a harmless re-write of the same flag.
-- **Observable:** every toggle emits an event (`emergency_pause_toggled` on the
-  market, `contract_paused`/`contract_unpaused` on outcome-token, treasury
-  paused/unpaused events on the treasury) for alerting.
-- **Rollback:** `unpause` restores normal operation with no state migration.
-
-For a coordinated protocol-wide stop, pause each contract (market first) and
-keep the mirrored `EmergencyMode` in sync (Issue #662).
-
-## Error Codes and Storage Layouts
-
-- Stable per-contract error codes: [`docs/error-codes.md`](docs/error-codes.md).
-- Resolution storage keys and invariants: [`docs/resolution-storage.md`](docs/resolution-storage.md).
-
-## Staging Dry-Run Checklist (Automated)
-
-The staging dry-run is automated by `scripts/upgrade/staging_dry_run.sh`, which executes the steps described in
-[`scripts/upgrade/STAGING_DRY_RUN_CHECKLIST.md`](scripts/upgrade/STAGING_DRY_RUN_CHECKLIST.md).
-
-Security-relevant guarantees of the automated dry-run:
-
-- **Fail-closed:** the script exits non-zero if any check fails or is missing. A dry-run that cannot verify a step is treated as a failure.
-- **Deny-by-default authz:** the caller's admin/role and the target network are verified before any state-affecting step. Wrong role or expired auth aborts the run.
-- **Mainnet guard:** the script refuses to run against mainnet unless the explicit readiness flag (`VATIX_MAINNET_READY=1`) is set. Testnet is the default target.
-- **Idempotency:** concurrent or replayed invocations are serialized via a run lock and a run id, so a dry-run cannot be applied twice.
-- **Dependency outage:** RPC/DB outages fail closed on writes; the script does not proceed with partial state.
-- **No secret leakage:** environment values, keys, and RPC URLs are redacted from stdout and logs.
-- **Address drift:** testnet vs mainnet addresses are validated against the expected network before use.
-
-See the checklist for the full list of steps and the runbook for rollback instructions.
-
-## Freighter Wallet Integration
-
-The browser wallet integration is documented in
-[`docs/freighter-integration-guide.md`](docs/freighter-integration-guide.md).
-Freighter is an **untrusted client**: it holds signing keys and proposes
-signatures, but it is never authoritative for protocol state.
-
-- The contract remains the **source of truth** for balances, swaps, and admin.
-  Wallet-reported balances, network, and account are treated as untrusted
-  hints and re-verified server/contract-side before any state change.
-- The wallet must be on the expected network passphrase; a mismatch is
-  rejected fail-closed rather than silently signing on the wrong network.
-- Signing requests are authorized per action; a wallet connection alone grants
-  no privileges.
-- No secrets (keys, seeds, RPC URLs) are logged by the web integration.
+  caller fails with `NotAdmin`/`Unauthorized` b
