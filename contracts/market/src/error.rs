@@ -203,99 +203,99 @@ pub enum ContractError {
     /// rejection from a validation failure.
     Unauthorized = 40,
 
-    /// Caller is not the current admin.
+    /// Caller is authenticated but lacks the required role for this operation.
     ///
-    /// Reserved for admin-only entrypoints (fee configuration, waiver list
-    /// management, pause/kill-switch toggles). Distinct from `Unauthorized`
-    /// so operators can alert specifically on admin-surface probing.
-    NotAdmin = 41,
+    /// Distinct from [`ContractError::Unauthorized`]: the caller proved
+    /// control of their address (`require_auth` passed) but is not the admin,
+    /// guardian, or oracle that the entrypoint demands. Kept separate so
+    /// monitoring can alert on role-escalation attempts without conflating
+    /// them with unauthenticated probes.
+    InsufficientRole = 41,
 
-    /// Caller is not the current guardian.
+    /// The admin/guardian role has been renounced or is otherwise unset.
     ///
-    /// Reserved for guardian-only entrypoints (emergency pause). Distinct
-    /// from `NotAdmin` so operators can alert on guardian-surface probing.
-    NotGuardian = 42,
+    /// Privileged entrypoints fail closed with this code when no admin is
+    /// configured, rather than silently allowing the call through.
+    AdminNotSet = 42,
 
-    /// The privileged surface is currently disabled by a kill-switch/flag.
+    /// The requested privileged operation is disabled by a kill-switch.
     ///
-    /// Money-path or mainnet-affecting entrypoints can be gated behind an
-    /// admin-controlled flag. When the flag is off, calls fail closed with
-    /// this stable code instead of silently no-op'ing.
+    /// Money-path or mainnet-affecting entrypoints can be paused by the
+    /// admin. Callers receive this stable code so clients can surface a
+    /// "temporarily disabled" state instead of a generic failure.
     OperationDisabled = 43,
 
-    /// The request was rejected as a replay of an already-processed operation.
+    // ========== Idempotency Errors (44-49) ==========
+    /// The request was already processed (replay detected).
     ///
-    /// Money-path writes (settlement, fee withdrawal) carry a caller-supplied
-    /// idempotency key. Re-submitting a key that has already been consumed
-    /// fails closed with this stable code so clients can safely retry without
-    /// double-spending or double-settling.
+    /// Concurrent or replayed requests carrying the same idempotency key
+    /// fail closed with this code. Callers should treat it as success of the
+    /// original request rather than retrying blindly.
     DuplicateRequest = 44,
 
-    /// A required dependency (RPC/DB/Redis/oracle feed) is unavailable.
+    /// The supplied idempotency key is malformed or missing.
     ///
-    /// Writes fail closed with this stable code rather than proceeding on
-    /// stale or missing data. Reads may degrade, but money-path writes never
-    /// commit when a dependency is down.
-    DependencyUnavailable = 45,
+    /// Entrypoints that require an idempotency key reject empty/oversized
+    /// keys with this code so callers cannot bypass replay protection.
+    InvalidIdempotencyKey = 45,
+
+    // ========== Dependency / Fail-Closed Errors (46-49) ==========
+    /// A required external dependency (RPC/DB/Redis/oracle) is unavailable.
+    ///
+    /// Writes fail closed with this code when a dependency outage is
+    /// detected, so no partial state is committed on the money path.
+    DependencyUnavailable = 46,
+
+    /// The operation was rejected because the contract is in a fail-closed
+    /// state (e.g. reconciliation mismatch or paused writes).
+    ///
+    /// Distinct from [`ContractError::OperationDisabled`]: this signals an
+    /// automatic safety trip rather than an admin-initiated pause.
+    FailClosed = 47,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g., insufficient
+    /// The underlying token contract rejected the transfer (e.g. insufficient
     /// balance or allowance).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid.
+    /// Token address is invalid or unsupported.
     ///
-    /// The provided token contract address is not a valid token.
+    /// The token must be a supported SEP-41 asset configured for this market.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during calculation.
+    /// Arithmetic overflow occurred during a calculation.
     ///
-    /// The operation would exceed the maximum representable value.
+    /// All money-path arithmetic uses checked operations; overflow fails
+    /// closed with this code rather than wrapping.
     ArithmeticOverflow = 60,
 
-    /// Arithmetic underflow occurred during calculation.
-    ///
-    /// The operation would go below the minimum representable value.
+    /// Arithmetic underflow occurred during a calculation.
     ArithmeticUnderflow = 61,
 
-    /// Division by zero attempted.
-    ///
-    /// The divisor in a division operation was zero.
+    /// Division by zero was attempted.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
-    /// Treasury has insufficient balance for the requested withdrawal.
-    ///
-    /// The accumulated fees are less than the requested withdrawal amount.
-    InsufficientTreasuryBalance = 70,
+    /// Treasury balance is insufficient for the requested payout.
+    InsufficientTreasury = 70,
 
-    /// Treasury withdrawal would violate the reserve requirement.
-    ///
-    /// A minimum reserve must remain in the treasury at all times.
-    TreasuryReserveViolation = 71,
+    /// Treasury withdrawal exceeds the configured cap.
+    TreasuryCapExceeded = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
-    /// Reconciliation check failed — accounting invariant violated.
-    ///
-    /// The sum of tracked balances does not match the expected total.
-    ReconciliationFailed = 80,
+    /// On-chain balances do not reconcile with the expected ledger state.
+    ReconciliationMismatch = 80,
 
-    /// A balance snapshot is missing for the requested reconciliation.
-    ///
-    /// Reconciliation requires a prior snapshot to compare against.
-    MissingSnapshot = 81,
+    /// A reconciliation run is already in progress.
+    ReconciliationInProgress = 81,
 
     // ========== Conservation Errors (90-99) ==========
-    /// Conservation invariant violated — value was created or destroyed.
-    ///
-    /// The total value in the system must be conserved across operations.
+    /// The conservation invariant (sum of shares == total collateral) was violated.
     ConservationViolation = 90,
 
     /// A conservation check could not be completed due to missing data.
-    ///
-    /// The check requires complete accounting data to verify conservation.
-    IncompleteConservationData = 91,
+    ConservationCheckIncomplete = 91,
 }
