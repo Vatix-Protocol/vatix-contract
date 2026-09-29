@@ -20,6 +20,15 @@ Security fixes are provided for the following versions:
 
 This policy covers the Vatix-Protocol monorepo, including `vatix-contract` (Soroban contracts), the market/settlement paths, and the operational tooling under `scripts/`.
 
+## Hardening follow-up archives
+
+The follow-up issue archives document the repo’s residual authz, observability, and documentation hardening work for contributors and operators:
+
+- [COMPLETE_ISSUE_966.md](COMPLETE_ISSUE_966.md)
+- [COMPLETE_ISSUE_967.md](COMPLETE_ISSUE_967.md)
+- [COMPLETE_ISSUE_968.md](COMPLETE_ISSUE_968.md)
+- [COMPLETE_ISSUE_969.md](COMPLETE_ISSUE_969.md)
+
 ## Security Principles
 
 - The server/contract is the source of truth for balances, swaps, and admin actions. Clients are never trusted for state.
