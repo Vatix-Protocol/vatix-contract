@@ -203,55 +203,20 @@ pub enum ContractError {
     /// rejection from a validation failure.
     Unauthorized = 40,
 
-    /// Caller is authenticated but lacks the required role for this operation.
+    /// The caller's authorization has expired and must be re-established.
     ///
-    /// Distinct from [`ContractError::Unauthorized`]: the caller proved
-    /// control of their address (`require_auth` passed) but is not the admin,
-    /// guardian, or oracle that the entrypoint demands. Kept separate so
-    /// monitoring can alert on role-escalation attempts without conflating
-    /// them with unauthenticated probes.
-    InsufficientRole = 41,
+    /// Used when a time-bounded grant (e.g. a guardian or operator role with
+    /// an expiry) is presented after its deadline. Fail closed: the caller
+    /// must re-authenticate rather than silently falling back to a weaker
+    /// role.
+    AuthorizationExpired = 41,
 
-    /// The admin/guardian role has been renounced or is otherwise unset.
+    /// The caller holds a role that is not permitted for this entrypoint.
     ///
-    /// Privileged entrypoints fail closed with this code when no admin is
-    /// configured, rather than silently allowing the call through.
-    AdminNotSet = 42,
-
-    /// The requested privileged operation is disabled by a kill-switch.
-    ///
-    /// Money-path or mainnet-affecting entrypoints can be paused by the
-    /// admin. Callers receive this stable code so clients can surface a
-    /// "temporarily disabled" state instead of a generic failure.
-    OperationDisabled = 43,
-
-    // ========== Idempotency Errors (44-49) ==========
-    /// The request was already processed (replay detected).
-    ///
-    /// Concurrent or replayed requests carrying the same idempotency key
-    /// fail closed with this code. Callers should treat it as success of the
-    /// original request rather than retrying blindly.
-    DuplicateRequest = 44,
-
-    /// The supplied idempotency key is malformed or missing.
-    ///
-    /// Entrypoints that require an idempotency key reject empty/oversized
-    /// keys with this code so callers cannot bypass replay protection.
-    InvalidIdempotencyKey = 45,
-
-    // ========== Dependency / Fail-Closed Errors (46-49) ==========
-    /// A required external dependency (RPC/DB/Redis/oracle) is unavailable.
-    ///
-    /// Writes fail closed with this code when a dependency outage is
-    /// detected, so no partial state is committed on the money path.
-    DependencyUnavailable = 46,
-
-    /// The operation was rejected because the contract is in a fail-closed
-    /// state (e.g. reconciliation mismatch or paused writes).
-    ///
-    /// Distinct from [`ContractError::OperationDisabled`]: this signals an
-    /// automatic safety trip rather than an admin-initiated pause.
-    FailClosed = 47,
+    /// Distinct from [`ContractError::Unauthorized`]: the caller is a known
+    /// principal but the wrong role for the requested action. Deny-by-default
+    /// for any new privileged surface.
+    WrongRole = 42,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
@@ -261,15 +226,10 @@ pub enum ContractError {
     TokenTransferFailed = 50,
 
     /// Token address is invalid or unsupported.
-    ///
-    /// The token must be a supported SEP-41 asset configured for this market.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
     /// Arithmetic overflow occurred during a calculation.
-    ///
-    /// All money-path arithmetic uses checked operations; overflow fails
-    /// closed with this code rather than wrapping.
     ArithmeticOverflow = 60,
 
     /// Arithmetic underflow occurred during a calculation.
@@ -279,23 +239,34 @@ pub enum ContractError {
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
-    /// Treasury balance is insufficient for the requested payout.
-    InsufficientTreasury = 70,
+    /// Treasury balance is insufficient for the requested operation.
+    InsufficientTreasuryBalance = 70,
 
-    /// Treasury withdrawal exceeds the configured cap.
-    TreasuryCapExceeded = 71,
+    /// Treasury operation is not permitted in the current state.
+    InvalidTreasuryOperation = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
     /// On-chain balances do not reconcile with the expected ledger state.
     ReconciliationMismatch = 80,
 
-    /// A reconciliation run is already in progress.
-    ReconciliationInProgress = 81,
+    /// A replayed or duplicate request was detected on a money path.
+    ///
+    /// Money-path entrypoints (deposit/withdraw/settlement) are idempotent:
+    /// a request carrying a nonce/idempotency key that has already been
+    /// consumed fails closed with this stable code instead of double-applying
+    /// the effect. Concurrent or replayed submissions therefore cannot move
+    /// funds twice.
+    DuplicateRequest = 81,
+
+    /// A required external dependency (RPC/DB/Redis-style backend) is
+    /// unavailable, so the write is rejected rather than partially applied.
+    ///
+    /// Fail-closed: money-path writes never proceed on a degraded dependency.
+    /// Callers may retry once the dependency recovers; no state is mutated.
+    DependencyUnavailable = 82,
 
     // ========== Conservation Errors (90-99) ==========
-    /// The conservation invariant (sum of shares == total collateral) was violated.
+    /// The conservation invariant was violated (total collateral does not
+    /// equal the sum of locked positions plus treasury).
     ConservationViolation = 90,
-
-    /// A conservation check could not be completed due to missing data.
-    ConservationCheckIncomplete = 91,
 }
