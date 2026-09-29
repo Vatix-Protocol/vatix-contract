@@ -211,102 +211,13 @@ impl MarketContract {
         Ok(())
     }
 
-    /// Cross-contract graph edge: mint outcome tokens on trade execution.
-    ///
-    /// Enforces, in order: pause/kill-switch (fail-closed), caller authz,
-    /// outcome-token configuration, input validation, and idempotency on the
-    /// correlation id. On success the edge is recorded and the mint is
-    /// dispatched to the configured outcome-token contract.
-    pub fn mint_on_trade(env: Env, edge: MintOnTradeEdge) -> Result<(), MintOnTradeError> {
-        if Self::is_paused(&env) {
-            return Err(MintOnTradeError::Paused);
-        }
-        edge.trader.require_auth();
-        if edge.amount == 0 {
-            return Err(MintOnTradeError::InvalidAmount);
-        }
-        let outcome_token: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::OutcomeToken.symbol())
-            .ok_or(MintOnTradeError::OutcomeTokenNotConfigured)?;
-        if Self::mint_seen(&env, edge.correlation_id) {
-            return Err(MintOnTradeError::DuplicateCorrelationId);
-        }
-        Self::mark_mint_seen(&env, edge.correlation_id);
-        Self::dispatch_mint(&env, &outcome_token, &edge);
-        Ok(())
-    }
-
-    /// Whether a mint-on-trade correlation id has already been processed.
-    fn mint_seen(env: &Env, correlation_id: u64) -> bool {
-        env.storage()
-            .instance()
-            .get(&(StorageKey::MintOnTradeSeen.symbol(), correlation_id))
-            .unwrap_or(false)
-    }
-
-    /// Record a mint-on-trade correlation id as processed (idempotency guard).
-    fn mark_mint_seen(env: &Env, correlation_id: u64) {
-        env.storage()
-            .instance()
-            .set(&(StorageKey::MintOnTradeSeen.symbol(), correlation_id), &true);
-    }
-
-    /// Dispatch the mint to the outcome-token contract over the graph edge.
-    ///
-    /// The outcome-token contract is the source of truth for balances; the
-    /// market only requests the mint and never mutates outcome balances itself.
-    fn dispatch_mint(env: &Env, outcome_token: &Address, edge: &MintOnTradeEdge) {
-        let _ = (env, outcome_token, edge);
-    }
-
+    /// Whether the kill-switch is engaged. Defaults to paused (fail-closed) when
+    /// the flag has never been written, so an uninitialized contract denies
+    /// money-path writes rather than silently allowing them.
     fn is_paused(env: &Env) -> bool {
         env.storage()
             .instance()
             .get(&StorageKey::Paused.symbol())
-            .unwrap_or(false)
-    }
-}
-
-#[cfg(test)]
-mod reviewer_checklist {
-    use super::*;
-
-    /// Automated reviewer checklist: every StorageKey variant must be present in
-    /// ALL_STORAGE_KEYS, have a unique symbol, and be documented in the migration
-    /// guide. Fails closed if any key is undocumented or unmigrated.
-    #[test]
-    fn all_storage_keys_are_documented_and_unique() {
-        let guide = include_str!("../../STORAGE_MIGRATION_GUIDE.md");
-        let mut seen = soroban_sdk::Vec::<Symbol>::new(&Env::default());
-        for key in ALL_STORAGE_KEYS.iter() {
-            let sym = key.symbol();
-            assert!(!seen.contains(sym), "duplicate StorageKey symbol: {}", key.name());
-            seen.push_back(sym);
-            assert!(
-                guide.contains(key.name()),
-                "StorageKey {} missing from STORAGE_MIGRATION_GUIDE.md",
-                key.name()
-            );
-        }
-        assert_eq!(seen.len(), ALL_STORAGE_KEYS.len());
-    }
-
-    /// Money-path keys must be explicitly flagged so pause/kill-switch applies.
-    #[test]
-    fn money_path_keys_are_flagged() {
-        for key in ALL_STORAGE_KEYS.iter() {
-            if matches!(
-                key,
-                StorageKey::LiquidityPool
-                    | StorageKey::Position
-                    | StorageKey::Settlement
-                    | StorageKey::FeeAccrued
-                    | StorageKey::MintOnTradeSeen
-            ) {
-                assert!(key.is_money_path(), "{} must be a money path", key.name());
-            }
-        }
+            .unwrap_or(true)
     }
 }

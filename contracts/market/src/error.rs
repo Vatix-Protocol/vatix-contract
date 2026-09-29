@@ -200,79 +200,102 @@ pub enum ContractError {
     /// the caller to be the current admin (or guardian where applicable).
     /// Untrusted callers fail closed with this stable code rather than a
     /// generic panic, so off-chain observers can distinguish an authz
-    /// rejection from other failures.
+    /// rejection from a validation failure.
     Unauthorized = 40,
 
-    /// The caller is authenticated but does not hold the required role.
+    /// Caller is not the current admin.
     ///
-    /// Distinct from [`ContractError::Unauthorized`]: the caller is a known
-    /// principal (e.g. the admin) but the requested action requires a
-    /// different role (e.g. guardian). Fail closed — never fall back to a
-    /// weaker role.
-    WrongRole = 41,
+    /// Reserved for admin-only entrypoints (fee configuration, waiver list
+    /// management, pause/kill-switch toggles). Distinct from `Unauthorized`
+    /// so operators can alert specifically on admin-surface probing.
+    NotAdmin = 41,
 
-    /// The caller's authorization has expired or been revoked.
+    /// Caller is not the current guardian.
     ///
-    /// Privileged roles are time-bounded; a stale/expired grant must be
-    /// re-established before the action can proceed. Fail closed.
-    AuthExpired = 42,
+    /// Reserved for guardian-only entrypoints (emergency pause). Distinct
+    /// from `NotAdmin` so operators can alert on guardian-surface probing.
+    NotGuardian = 42,
 
-    /// A privileged action was replayed or submitted concurrently.
+    /// The privileged surface is currently disabled by a kill-switch/flag.
     ///
-    /// Admin/guardian entrypoints are idempotent: a repeated call carrying an
-    /// already-consumed correlation/idempotency id is rejected with this
-    /// stable code instead of being applied twice.
-    ReplayedAction = 43,
+    /// Money-path or mainnet-affecting entrypoints can be gated behind an
+    /// admin-controlled flag. When the flag is off, calls fail closed with
+    /// this stable code instead of silently no-op'ing.
+    OperationDisabled = 43,
+
+    /// The request was rejected as a replay of an already-processed operation.
+    ///
+    /// Money-path writes (settlement, fee withdrawal) carry a caller-supplied
+    /// idempotency key. Re-submitting a key that has already been consumed
+    /// fails closed with this stable code so clients can safely retry without
+    /// double-spending or double-settling.
+    DuplicateRequest = 44,
+
+    /// A required dependency (RPC/DB/Redis/oracle feed) is unavailable.
+    ///
+    /// Writes fail closed with this stable code rather than proceeding on
+    /// stale or missing data. Reads may degrade, but money-path writes never
+    /// commit when a dependency is down.
+    DependencyUnavailable = 45,
 
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
-    /// The underlying token contract rejected the transfer (e.g. insufficient
-    /// balance or a frozen account).
+    /// The underlying token contract rejected the transfer (e.g., insufficient
+    /// balance or allowance).
     TokenTransferFailed = 50,
 
-    /// Token address is invalid or unsupported.
+    /// Token address is invalid.
     ///
-    /// The token must be a supported SEP-41 asset with a valid contract address.
+    /// The provided token contract address is not a valid token.
     InvalidToken = 51,
 
     // ========== Arithmetic Errors (60-69) ==========
-    /// Arithmetic overflow occurred during a calculation.
+    /// Arithmetic overflow occurred during calculation.
     ///
     /// The operation would exceed the maximum representable value.
     ArithmeticOverflow = 60,
 
-    /// Arithmetic underflow occurred during a calculation.
+    /// Arithmetic underflow occurred during calculation.
     ///
     /// The operation would go below the minimum representable value.
     ArithmeticUnderflow = 61,
 
     /// Division by zero attempted.
     ///
-    /// The divisor must be non-zero for all division operations.
+    /// The divisor in a division operation was zero.
     DivisionByZero = 62,
 
     // ========== Treasury Errors (70-79) ==========
-    /// Treasury operation failed.
+    /// Treasury has insufficient balance for the requested withdrawal.
     ///
-    /// A treasury withdrawal or accounting operation could not be completed.
-    TreasuryOperationFailed = 70,
+    /// The accumulated fees are less than the requested withdrawal amount.
+    InsufficientTreasuryBalance = 70,
 
-    /// Insufficient treasury balance for the requested operation.
+    /// Treasury withdrawal would violate the reserve requirement.
     ///
-    /// The treasury does not hold enough funds to cover the withdrawal.
-    InsufficientTreasuryBalance = 71,
+    /// A minimum reserve must remain in the treasury at all times.
+    TreasuryReserveViolation = 71,
 
     // ========== Reconciliation Errors (80-89) ==========
-    /// Reconciliation check failed.
+    /// Reconciliation check failed — accounting invariant violated.
     ///
-    /// The on-chain accounting does not match the expected invariants.
+    /// The sum of tracked balances does not match the expected total.
     ReconciliationFailed = 80,
 
-    // ========== Conservation Errors (90-99) ==========
-    /// Collateral conservation invariant violated.
+    /// A balance snapshot is missing for the requested reconciliation.
     ///
-    /// Total collateral in must equal total collateral out plus locked
-    /// collateral. A violation indicates a critical accounting bug.
+    /// Reconciliation requires a prior snapshot to compare against.
+    MissingSnapshot = 81,
+
+    // ========== Conservation Errors (90-99) ==========
+    /// Conservation invariant violated — value was created or destroyed.
+    ///
+    /// The total value in the system must be conserved across operations.
     ConservationViolation = 90,
+
+    /// A conservation check could not be completed due to missing data.
+    ///
+    /// The check requires complete accounting data to verify conservation.
+    IncompleteConservationData = 91,
 }
