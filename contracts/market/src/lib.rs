@@ -12,6 +12,11 @@
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
+// `types` is self-contained (only depends on `soroban_sdk`) and carries its
+// own `#[cfg(test)]` binding-stability/wasm-budget tests (#1012, #1013); wire
+// it in so `cargo test -p vatix-market-contract` actually exercises them.
+pub mod types;
+
 /// Stable, collision-free storage key encodings for all persisted market state.
 ///
 /// Each variant maps to a unique `Symbol` prefix. New variants MUST be added to
@@ -219,5 +224,72 @@ impl MarketContract {
             .instance()
             .get(&StorageKey::Paused.symbol())
             .unwrap_or(true)
+    }
+}
+
+/// Reviewer checklist test (#1010): every `StorageKey` variant must have a
+/// unique `symbol()`, a non-empty `name()`, and `is_money_path()` must match
+/// the documented set exactly. Fails closed on a variant added to the enum
+/// but not to `ALL_STORAGE_KEYS`, or one that silently collides with another.
+#[cfg(test)]
+mod storage_key_tests {
+    use super::*;
+
+    #[test]
+    fn all_storage_keys_covers_every_variant() {
+        assert_eq!(
+            ALL_STORAGE_KEYS.len(),
+            11,
+            "ALL_STORAGE_KEYS must list every StorageKey variant"
+        );
+    }
+
+    #[test]
+    fn every_symbol_is_unique() {
+        for i in 0..ALL_STORAGE_KEYS.len() {
+            for j in (i + 1)..ALL_STORAGE_KEYS.len() {
+                let (a, b) = (ALL_STORAGE_KEYS[i], ALL_STORAGE_KEYS[j]);
+                assert_ne!(
+                    a.symbol(),
+                    b.symbol(),
+                    "StorageKey::{} and StorageKey::{} share a symbol()",
+                    a.name(),
+                    b.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_name_is_non_empty_and_unique() {
+        for i in 0..ALL_STORAGE_KEYS.len() {
+            let name_i = ALL_STORAGE_KEYS[i].name();
+            assert!(!name_i.is_empty(), "StorageKey::name() must not be empty");
+            for j in (i + 1)..ALL_STORAGE_KEYS.len() {
+                let name_j = ALL_STORAGE_KEYS[j].name();
+                assert_ne!(name_i, name_j, "duplicate StorageKey name: {}", name_i);
+            }
+        }
+    }
+
+    #[test]
+    fn is_money_path_matches_documented_set() {
+        let expected_money_path = [
+            StorageKey::LiquidityPool,
+            StorageKey::Position,
+            StorageKey::Settlement,
+            StorageKey::FeeAccrued,
+            StorageKey::MintOnTradeSeen,
+        ];
+        for key in ALL_STORAGE_KEYS {
+            let expected = expected_money_path.contains(&key);
+            assert_eq!(
+                key.is_money_path(),
+                expected,
+                "StorageKey::{}.is_money_path() should be {}",
+                key.name(),
+                expected
+            );
+        }
     }
 }

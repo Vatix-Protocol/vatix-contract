@@ -143,4 +143,23 @@ mod tests {
     fn topic_is_stable() {
         assert_eq!(FEE_COLLECTED_TOPIC, "fee_collected");
     }
+
+    /// `correlation_id_for` reserves 0 as the "unset" sentinel (#1011); it must
+    /// never return it across a range of `(position_id, ledger_seq)` inputs,
+    /// including the edge cases that are most likely to hash to 0.
+    #[test]
+    fn correlation_id_for_is_never_zero_across_many_inputs() {
+        let position_ids: [PositionId; 5] = [0, 1, 42, 1_000_000, u64::MAX];
+        let ledger_seqs: [u32; 5] = [0, 1, 1_000_000, u32::MAX / 2, u32::MAX];
+        for position_id in position_ids {
+            for ledger_seq in ledger_seqs {
+                let id = FeeCollectedFixture::correlation_id_for(position_id, ledger_seq);
+                assert_ne!(
+                    id, 0,
+                    "correlation_id_for({}, {}) returned the unset sentinel",
+                    position_id, ledger_seq
+                );
+            }
+        }
+    }
 }

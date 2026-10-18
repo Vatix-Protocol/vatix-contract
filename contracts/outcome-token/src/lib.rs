@@ -31,13 +31,19 @@ pub enum OutcomeTokenError {
     EmptyName = 4,
     /// Name exceeds [`MAX_NAME_LEN`].
     NameTooLong = 5,
+    /// `initialize` was called on a contract that already has an admin set.
+    ///
+    /// Without this guard a second `initialize` call would silently
+    /// overwrite the admin and metadata, which is a privilege-escalation
+    /// path for anyone who can reach the entrypoint after deployment.
+    AlreadyInitialized = 6,
     /// Metadata was read before `initialize` was ever called.
     ///
     /// Distinct from [`Unauthorized`](Self::Unauthorized), which is reserved
     /// for the admin check in `set_metadata`: a client or indexer needs to
     /// tell "never initialized" apart from "not allowed to write" without
     /// parsing strings.
-    NotInitialized = 6,
+    NotInitialized = 7,
 }
 
 /// Persisted metadata for an outcome token.
@@ -70,6 +76,9 @@ impl OutcomeTokenContract {
         symbol: String,
         name: String,
     ) -> Result<(), OutcomeTokenError> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(OutcomeTokenError::AlreadyInitialized);
+        }
         admin.require_auth();
         validate_metadata(&symbol, &name)?;
 
@@ -277,5 +286,22 @@ mod test {
         let attacker = Address::generate(&env);
         let res = client.try_set_metadata(&attacker, &symbol(&env, 4), &name(&env, 4));
         assert_eq!(res, Err(Ok(OutcomeTokenError::Unauthorized)));
+    }
+
+    #[test]
+    fn rejects_second_initialize() {
+        let (env, client, admin) = setup();
+        let sym = symbol(&env, 4);
+        let nm = name(&env, 4);
+        client.initialize(&admin, &sym, &nm);
+
+        // A second call, even from a different admin with different
+        // metadata, must be rejected and must not mutate existing state.
+        let other_admin = Address::generate(&env);
+        let res = client.try_initialize(&other_admin, &symbol(&env, 6), &name(&env, 6));
+        assert_eq!(res, Err(Ok(OutcomeTokenError::AlreadyInitialized)));
+
+        assert_eq!(client.symbol(), sym);
+        assert_eq!(client.name(), nm);
     }
 }

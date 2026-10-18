@@ -280,4 +280,101 @@ mod wasm_budget_tests {
     fn market_wasm32_budget_is_soroban_64kib_limit() {
         assert_eq!(MARKET_WASM32_SIZE_BUDGET, 65_536);
     }
+
+    /// `scripts/check-market-wasm-size.sh` defaults `BUDGET` to a literal that
+    /// must track `MARKET_WASM32_SIZE_BUDGET` (#1013). Both values are in
+    /// bytes, so no unit normalization is needed. Fails closed (with both
+    /// values named) if either side is bumped without the other.
+    #[test]
+    fn ci_size_check_script_budget_matches_constant() {
+        let script = include_str!("../../../scripts/check-market-wasm-size.sh");
+        let needle = std::format!(
+            "MARKET_WASM32_SIZE_BUDGET:-{}",
+            MARKET_WASM32_SIZE_BUDGET
+        );
+        assert!(
+            script.contains(needle.as_str()),
+            "scripts/check-market-wasm-size.sh default budget does not match \
+             MARKET_WASM32_SIZE_BUDGET = {} (expected to find `{}`)",
+            MARKET_WASM32_SIZE_BUDGET,
+            needle
+        );
+    }
+}
+
+#[cfg(test)]
+mod binding_stability_tests {
+    //! Pins the exact variant-name encoding documented at the top of this
+    //! file (#1012): enum variants are encoded as `Vec[Symbol(<name>)]`, so a
+    //! rename, reorder, or removal is a breaking change for every binding
+    //! consumer. These tests fail closed on any such change.
+    use super::{AdapterType, EmergencyMode, MarketStatus};
+    use soroban_sdk::{Env, IntoVal, Symbol, TryFromVal, Val, Vec as SorobanVec};
+
+    /// Decode a unit `#[contracttype]` enum variant's `Val` back into its
+    /// variant-name `Symbol`.
+    fn variant_name(env: &Env, val: Val) -> Symbol {
+        let encoded: SorobanVec<Val> =
+            SorobanVec::try_from_val(env, &val).expect("enum variant encodes as Vec[Symbol]");
+        assert_eq!(encoded.len(), 1, "unit enum variant must encode a single element");
+        Symbol::try_from_val(env, &encoded.get(0).unwrap()).expect("element is a Symbol")
+    }
+
+    #[test]
+    fn market_status_variants_are_binding_stable() {
+        let env = Env::default();
+        let cases: [(MarketStatus, &str); 3] = [
+            (MarketStatus::Active, "Active"),
+            (MarketStatus::Resolved, "Resolved"),
+            (MarketStatus::Canceled, "Canceled"),
+        ];
+        for (variant, expected_name) in cases {
+            let val: Val = variant.into_val(&env);
+            assert_eq!(
+                variant_name(&env, val),
+                Symbol::new(&env, expected_name),
+                "MarketStatus variant name drifted from {}",
+                expected_name
+            );
+        }
+    }
+
+    #[test]
+    fn emergency_mode_variants_are_binding_stable() {
+        let env = Env::default();
+        let cases: [(EmergencyMode, &str); 4] = [
+            (EmergencyMode::Normal, "Normal"),
+            (EmergencyMode::TradingHalted, "TradingHalted"),
+            (EmergencyMode::SettleOnly, "SettleOnly"),
+            (EmergencyMode::GlobalFreeze, "GlobalFreeze"),
+        ];
+        for (variant, expected_name) in cases {
+            let val: Val = variant.into_val(&env);
+            assert_eq!(
+                variant_name(&env, val),
+                Symbol::new(&env, expected_name),
+                "EmergencyMode variant name drifted from {}",
+                expected_name
+            );
+        }
+    }
+
+    #[test]
+    fn adapter_type_variants_are_binding_stable() {
+        let env = Env::default();
+        let cases: [(AdapterType, &str); 3] = [
+            (AdapterType::Ed25519, "Ed25519"),
+            (AdapterType::Reflector, "Reflector"),
+            (AdapterType::Pyth, "Pyth"),
+        ];
+        for (variant, expected_name) in cases {
+            let val: Val = variant.into_val(&env);
+            assert_eq!(
+                variant_name(&env, val),
+                Symbol::new(&env, expected_name),
+                "AdapterType variant name drifted from {}",
+                expected_name
+            );
+        }
+    }
 }

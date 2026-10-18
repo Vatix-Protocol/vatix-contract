@@ -404,7 +404,7 @@ impl TreasuryContract {
             storage::get_pending_market_contract(&env).ok_or(TreasuryError::Unauthorized)?;
 
         if env.ledger().timestamp() < pending.effective_at {
-            return Err(TreasuryError::Unauthorized);
+            return Err(TreasuryError::TimelockNotElapsed);
         }
 
         // Append rather than replace (#720): this entrypoint and
