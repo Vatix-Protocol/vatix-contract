@@ -344,7 +344,11 @@ impl<'a> OracleAdapter for AnyAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
+    use soroban_sdk::{
+        contract, contractimpl,
+        testutils::{Address as _, Ledger as _},
+        Env,
+    };
 
     // ---- Mock Pyth receiver contract ----
 
@@ -369,6 +373,28 @@ mod tests {
                 .set(&soroban_sdk::symbol_short!("price"), &price);
         }
 
+        /// Like [`set_price`] but also controls the `publish_time` returned
+        /// by `get_price`, so tests can exercise the `MAX_PRICE_AGE_SECONDS`
+        /// staleness boundary (#1015).
+        pub fn set_price_with_publish_time(env: Env, price: i64, publish_time: u64) {
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("price"), &price);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("pubt"), &publish_time);
+        }
+
+        /// Number of times `update_price_feeds` has been invoked. Used to
+        /// assert an empty proof never triggers the cross-contract call
+        /// (#1014).
+        pub fn update_count(env: Env) -> u32 {
+            env.storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("updcnt"))
+                .unwrap_or(0u32)
+        }
+
         /// Records that `update_price_feeds` ran, so tests can assert the
         /// VAA-submission step actually happened before `get_price` reads
         /// the verified price back (#717) — not just that the caller-facing
@@ -378,6 +404,14 @@ mod tests {
             env.storage()
                 .instance()
                 .set(&soroban_sdk::symbol_short!("upd"), &true);
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("updcnt"))
+                .unwrap_or(0u32);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("updcnt"), &(count + 1));
         }
 
         /// Panics if called before `update_price_feeds` — the real Pyth
@@ -400,11 +434,16 @@ mod tests {
                 .instance()
                 .get(&soroban_sdk::symbol_short!("price"))
                 .unwrap_or(0);
+            let publish_time: u64 = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("pubt"))
+                .unwrap_or(1_000_000);
             PythPrice {
                 price,
                 conf: 0,
                 exp: -8,
-                publish_time: 1_000_000,
+                publish_time,
             }
         }
     }
@@ -482,7 +521,7 @@ mod tests {
         let contract_id = setup_mock_pyth(&env);
 
         let adapter = PythAdapter {
-            contract_id,
+            contract_id: contract_id.clone(),
             price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
             resolution_price: 500,
         };
@@ -490,6 +529,89 @@ mod tests {
         assert_eq!(
             adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
             Err(ContractError::InvalidSignature)
+        );
+
+        // #1014: the empty-proof check must reject *before* any
+        // cross-contract call — `update_price_feeds` must never run.
+        let mock_client = MockPythClient::new(&env, &contract_id);
+        assert_eq!(
+            mock_client.update_count(),
+            0,
+            "update_price_feeds must not be called when proof is empty"
+        );
+    }
+
+    #[test]
+    fn pyth_happy_path_calls_update_price_feeds_before_get_price() {
+        // #1014: the happy path must submit the VAA (`update_price_feeds`)
+        // before reading the verified price (`get_price`). `get_price`
+        // itself panics if called first (see MockPyth::get_price), so a
+        // successful, non-panicking call already proves the ordering; this
+        // test additionally asserts the update actually ran exactly once.
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+        mock_client.set_price(&1_000);
+
+        let adapter = PythAdapter {
+            contract_id: contract_id.clone(),
+            price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
+            resolution_price: 1_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &vaa_bytes(&env)),
+            Ok(())
+        );
+        assert_eq!(
+            mock_client.update_count(),
+            1,
+            "update_price_feeds must run exactly once on the happy path"
+        );
+    }
+
+    // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
+
+    #[test]
+    fn pyth_accepts_price_exactly_at_max_age() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+
+        let now = 10_000_000u64;
+        env.ledger().set_timestamp(now);
+        // Age == MAX_PRICE_AGE_SECONDS exactly → must still be accepted.
+        mock_client.set_price_with_publish_time(&1_000, &(now - MAX_PRICE_AGE_SECONDS));
+
+        let adapter = PythAdapter {
+            contract_id,
+            price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
+            resolution_price: 1_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &vaa_bytes(&env)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn pyth_rejects_price_one_second_past_max_age() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+
+        let now = 10_000_000u64;
+        env.ledger().set_timestamp(now);
+        // Age == MAX_PRICE_AGE_SECONDS + 1 → must be rejected as stale.
+        mock_client.set_price_with_publish_time(&1_000, &(now - MAX_PRICE_AGE_SECONDS - 1));
+
+        let adapter = PythAdapter {
+            contract_id,
+            price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
+            resolution_price: 1_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &vaa_bytes(&env)),
+            Err(ContractError::StalePrice)
         );
     }
 
@@ -516,7 +638,11 @@ mod tests {
 #[cfg(test)]
 mod reflector_tests {
     use super::*;
-    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
+    use soroban_sdk::{
+        contract, contractimpl,
+        testutils::{Address as _, Ledger as _},
+        Env,
+    };
 
     // ---- Mock Reflector contract (#379) ----
 
@@ -544,6 +670,21 @@ mod reflector_tests {
                 .set(&soroban_sdk::symbol_short!("has"), &false);
         }
 
+        /// Like [`set_price`] but also controls the observation `timestamp`
+        /// returned by `lastprice`, so tests can exercise the
+        /// `MAX_PRICE_AGE_SECONDS` staleness boundary (#1015).
+        pub fn set_price_with_timestamp(env: Env, price: i128, timestamp: u64) {
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("price"), &price);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("has"), &true);
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("ts"), &timestamp);
+        }
+
         pub fn lastprice(env: Env, _asset: Asset) -> Option<ReflectorPriceData> {
             let has: bool = env
                 .storage()
@@ -558,10 +699,12 @@ mod reflector_tests {
                 .instance()
                 .get(&soroban_sdk::symbol_short!("price"))
                 .unwrap_or(0);
-            Some(ReflectorPriceData {
-                price,
-                timestamp: 1_000_000,
-            })
+            let timestamp: u64 = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("ts"))
+                .unwrap_or(1_000_000);
+            Some(ReflectorPriceData { price, timestamp })
         }
     }
 
@@ -645,6 +788,52 @@ mod reflector_tests {
         assert_eq!(
             adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
             Err(ContractError::OraclePriceUnavailable)
+        );
+    }
+
+    // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
+
+    #[test]
+    fn reflector_accepts_price_exactly_at_max_age() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        let mock_client = MockReflectorClient::new(&env, &contract_id);
+
+        let now = 10_000_000u64;
+        env.ledger().set_timestamp(now);
+        // Age == MAX_PRICE_AGE_SECONDS exactly → must still be accepted.
+        mock_client.set_price_with_timestamp(&1_000_000, &(now - MAX_PRICE_AGE_SECONDS));
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn reflector_rejects_price_one_second_past_max_age() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        let mock_client = MockReflectorClient::new(&env, &contract_id);
+
+        let now = 10_000_000u64;
+        env.ledger().set_timestamp(now);
+        // Age == MAX_PRICE_AGE_SECONDS + 1 → must be rejected as stale.
+        mock_client.set_price_with_timestamp(&1_000_000, &(now - MAX_PRICE_AGE_SECONDS - 1));
+
+        let adapter = ReflectorAdapter {
+            contract_id,
+            asset: dummy_asset(&env),
+            resolution_price: 1_000_000,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
+            Err(ContractError::StalePrice)
         );
     }
 

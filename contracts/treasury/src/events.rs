@@ -376,3 +376,74 @@ pub fn emit_emergency_mode_changed(
     }
     .publish(env);
 }
+
+// ── Tests (#1017) ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    //! Asserts the topic symbol, topic count, and data-map field names emitted
+    //! by `emit_fee_collected` / `emit_fees_withdrawn`, following the pattern in
+    //! `contracts/market/src/tests_event_fixtures.rs`. A rename of a field or a
+    //! change to which fields are `#[topic]` must fail these tests.
+
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Events as _};
+    use soroban_sdk::{Map, Symbol, TryFromVal, Val};
+
+    #[test]
+    fn fee_collected_topics_and_data_shape() {
+        let env = Env::default();
+        let contract_id = env.register(crate::TreasuryContract, ());
+        let token = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            emit_fee_collected(&env, 1, &token, 7, 7, 7);
+        });
+
+        let all = env.events().all();
+        let (_, topics, data) = all.last().expect("fee_collected published");
+
+        let name = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        assert_eq!(name, Symbol::new(&env, "fee_collected"), "name topic");
+        assert_eq!(topics.len(), 3, "topic count: name + market_id + token");
+
+        let map = Map::<Symbol, Val>::try_from_val(&env, &data).expect("data is a map");
+        assert_eq!(map.len(), 3, "data field count");
+        for key in ["fee_amount", "new_token_balance", "new_cumulative_fees"] {
+            assert!(
+                map.contains_key(Symbol::new(&env, key)),
+                "missing data field '{}'",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn fees_withdrawn_topics_and_data_shape() {
+        let env = Env::default();
+        let contract_id = env.register(crate::TreasuryContract, ());
+        let token = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            emit_fees_withdrawn(&env, &token, &to, 5, 2);
+        });
+
+        let all = env.events().all();
+        let (_, topics, data) = all.last().expect("fees_withdrawn published");
+
+        let name = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        assert_eq!(name, Symbol::new(&env, "fees_withdrawn"), "name topic");
+        assert_eq!(topics.len(), 3, "topic count: name + token + to");
+
+        let map = Map::<Symbol, Val>::try_from_val(&env, &data).expect("data is a map");
+        assert_eq!(map.len(), 2, "data field count");
+        for key in ["amount", "remaining_token_balance"] {
+            assert!(
+                map.contains_key(Symbol::new(&env, key)),
+                "missing data field '{}'",
+                key
+            );
+        }
+    }
+}
