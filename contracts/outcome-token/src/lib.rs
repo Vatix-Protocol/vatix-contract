@@ -31,6 +31,13 @@ pub enum OutcomeTokenError {
     EmptyName = 4,
     /// Name exceeds [`MAX_NAME_LEN`].
     NameTooLong = 5,
+    /// Metadata was read before `initialize` was ever called.
+    ///
+    /// Distinct from [`Unauthorized`](Self::Unauthorized), which is reserved
+    /// for the admin check in `set_metadata`: a client or indexer needs to
+    /// tell "never initialized" apart from "not allowed to write" without
+    /// parsing strings.
+    NotInitialized = 6,
 }
 
 /// Persisted metadata for an outcome token.
@@ -106,7 +113,7 @@ impl OutcomeTokenContract {
         env.storage()
             .instance()
             .get(&DataKey::Metadata)
-            .ok_or(OutcomeTokenError::Unauthorized)
+            .ok_or(OutcomeTokenError::NotInitialized)
     }
 
     /// Read the current outcome symbol.
@@ -239,6 +246,33 @@ mod test {
     fn set_metadata_rejects_non_admin() {
         let (env, client, admin) = setup();
         client.initialize(&admin, &symbol(&env, 4), &name(&env, 4));
+
+        let attacker = Address::generate(&env);
+        let res = client.try_set_metadata(&attacker, &symbol(&env, 4), &name(&env, 4));
+        assert_eq!(res, Err(Ok(OutcomeTokenError::Unauthorized)));
+    }
+
+    #[test]
+    fn reads_before_initialize_return_not_initialized() {
+        let (env, client, _admin) = setup();
+
+        assert_eq!(
+            client.try_metadata(),
+            Err(Ok(OutcomeTokenError::NotInitialized))
+        );
+        assert_eq!(
+            client.try_symbol(),
+            Err(Ok(OutcomeTokenError::NotInitialized))
+        );
+        assert_eq!(
+            client.try_name(),
+            Err(Ok(OutcomeTokenError::NotInitialized))
+        );
+    }
+
+    #[test]
+    fn set_metadata_from_non_admin_still_unauthorized_when_uninitialized() {
+        let (env, client, _admin) = setup();
 
         let attacker = Address::generate(&env);
         let res = client.try_set_metadata(&attacker, &symbol(&env, 4), &name(&env, 4));
