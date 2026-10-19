@@ -17,6 +17,8 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 
+import { ContractErrorCode } from "./contracts";
+
 // Network configuration from environment
 const NETWORK_PASSPHRASE =
   process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ??
@@ -42,35 +44,6 @@ export const RESOLUTION_CONTRACT_ID =
 
 // Initialize RPC server
 const server = new rpc.Server(SOROBAN_RPC_URL);
-
-/**
- * Stable, typed error codes for contract call failures.
- *
- * These codes are part of the public surface consumed by web callers and
- * must stay stable so UI/telemetry can branch on them without parsing
- * free-form messages. They mirror the on-chain error taxonomy and the
- * conventions in `apps/web/lib/errors.ts`.
- */
-export enum ContractErrorCode {
-  /** Contract ID missing / not configured for the active network. */
-  NOT_CONFIGURED = "CONTRACT_NOT_CONFIGURED",
-  /** Caller is not authorized for this privileged entrypoint. */
-  UNAUTHORIZED = "CONTRACT_UNAUTHORIZED",
-  /** Wallet extension unavailable or not running in a browser context. */
-  WALLET_UNAVAILABLE = "CONTRACT_WALLET_UNAVAILABLE",
-  /** User rejected the signing request in their wallet. */
-  SIGNING_REJECTED = "CONTRACT_SIGNING_REJECTED",
-  /** Simulation of the invocation failed (contract-level revert). */
-  SIMULATION_FAILED = "CONTRACT_SIMULATION_FAILED",
-  /** Submission to the RPC node failed. */
-  SUBMISSION_FAILED = "CONTRACT_SUBMISSION_FAILED",
-  /** Transaction was included but reverted on-chain. */
-  TRANSACTION_FAILED = "CONTRACT_TRANSACTION_FAILED",
-  /** Upstream dependency (RPC/Horizon) unavailable — fail closed. */
-  DEPENDENCY_UNAVAILABLE = "CONTRACT_DEPENDENCY_UNAVAILABLE",
-  /** Input failed validation before hitting the network. */
-  INVALID_INPUT = "CONTRACT_INVALID_INPUT",
-}
 
 /**
  * Typed error thrown by all contract client entrypoints. Carries a stable
@@ -263,20 +236,19 @@ export async function invokeContract(
     const accountData = await accountResponse.json();
     const account = new Account(sourceAddress, accountData.sequence);
 
-    // 2. Build the contract invocation operation
+    // 2. Build the contract invocation transaction
     const contract = new Contract(contractId);
     const operation = contract.call(method, ...args);
 
-    // 3. Build transaction
     const transaction = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: NETWORK_PASSPHRASE,
     })
       .addOperation(operation)
-      .setTimeout(180)
+      .setTimeout(30)
       .build();
 
-    // 4. Simulate the transaction
+    // 3. Simulate the transaction
     const simulated = await server.simulateTransaction(transaction);
 
     if (rpc.Api.isSimulationError(simulated)) {
@@ -287,71 +259,23 @@ export async function invokeContract(
       );
     }
 
-    if (!simulated.result) {
-      throw new ContractError(
-        ContractErrorCode.SIMULATION_FAILED,
-        "Simulation returned no result",
-        { correlationId }
-      );
-    }
+    // 4. Prepare the transaction with simulation results
+    const prepared = rpc.assembleTransaction(transaction, simulated).build();
 
-    // 5. Prepare the transaction with simulation results
-    const prepared = rpc.assembleTransaction(
-      transaction,
-      simulated
-    ).build();
-
-    // 6. Sign with Freighter. Imported dynamically (rather than at module
-    // scope) so this module stays safe to import from server-rendered code
-    // paths; the extension is only ever touched once we're in the browser.
-    const { signTransaction } = await import("@stellar/freighter-api");
-    const signedResult = await signTransaction(prepared.toXDR(), {
-      networkPassphrase: NETWORK_PASSPHRASE,
-      address: sourceAddress,
-    });
-
-    if (signedResult.error) {
-      throw new ContractError(
-        ContractErrorCode.SIGNING_REJECTED,
-        `Freighter signing failed: ${signedResult.error}`,
-        { correlationId }
-      );
-    }
-
-    // 7. Submit the signed transaction
-    const signedTx = TransactionBuilder.fromXDR(
-      signedResult.signedTxXdr,
+    // 5. Sign with Freighter
+    const signedXdr = await signWithFreighter(
+      prepared.toXDR(),
       NETWORK_PASSPHRASE
     );
 
-    const sendResponse = await server.sendTransaction(signedTx);
+    // 6. Submit the transaction
+    const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
+    const response = await server.sendTransaction(signedTx);
 
-    if (sendResponse.status === "ERROR") {
+    if (response.status === "ERROR") {
       throw new ContractError(
         ContractErrorCode.SUBMISSION_FAILED,
-        `Transaction submission failed: ${sendResponse.errorResult}`,
-        { correlationId }
-      );
-    }
-
-    // 8. Wait for transaction confirmation (optional but recommended)
-    let getResponse = await server.getTransaction(sendResponse.hash);
-    let attempts = 0;
-    const maxAttempts = 20;
-
-    while (
-      getResponse.status === rpc.Api.GetTransactionStatus.NOT_FOUND &&
-      attempts < maxAttempts
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      getResponse = await server.getTransaction(sendResponse.hash);
-      attempts++;
-    }
-
-    if (getResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
-      throw new ContractError(
-        ContractErrorCode.TRANSACTION_FAILED,
-        `Transaction failed: ${getResponse.resultXdr}`,
+        `Transaction submission failed: ${JSON.stringify(response.errorResult)}`,
         { correlationId }
       );
     }
@@ -364,180 +288,123 @@ export async function invokeContract(
     });
 
     return {
-      hash: sendResponse.hash,
-      status: sendResponse.status,
+      hash: response.hash,
+      status: response.status,
     };
   } catch (error) {
-    const contractError =
-      error instanceof ContractError
-        ? error
-        : new ContractError(
-            ContractErrorCode.SUBMISSION_FAILED,
-            error instanceof Error ? error.message : "Unknown contract error",
-            { correlationId, cause: error }
-          );
+    if (error instanceof ContractError) {
+      logContractEvent("failure", {
+        correlationId,
+        contractId,
+        method,
+        code: error.code,
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
 
     logContractEvent("failure", {
-      correlationId: contractError.correlationId,
-      contractId,
-      method,
-      code: contractError.code,
-      durationMs: Date.now() - startedAt,
-    });
-
-    throw contractError;
-  }
-}
-
-/**
- * Read-only contract query (no transaction submission).
- *
- * @param contractId - The contract address
- * @param method - The contract method name
- * @param args - Array of XDR-encoded arguments for the method
- * @returns The decoded result
- */
-export async function queryContract<T>(
-  contractId: string,
-  method: string,
-  args: xdr.ScVal[] = []
-): Promise<T> {
-  const correlationId = generateCorrelationId();
-  const startedAt = Date.now();
-
-  if (!contractId) {
-    throw new ContractError(
-      ContractErrorCode.NOT_CONFIGURED,
-      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local",
-      { correlationId }
-    );
-  }
-
-  logContractEvent("start", { correlationId, contractId, method });
-
-  try {
-    const contract = new Contract(contractId);
-
-    // Use a dummy source account for simulation
-    const dummyAccount = new Account(
-      "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-      "0"
-    );
-
-    const operation = contract.call(method, ...args);
-
-    const transaction = new TransactionBuilder(dummyAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
-    })
-      .addOperation(operation)
-      .setTimeout(180)
-      .build();
-
-    const simulated = await server.simulateTransaction(transaction);
-
-    if (rpc.Api.isSimulationError(simulated)) {
-      throw new ContractError(
-        ContractErrorCode.SIMULATION_FAILED,
-        `Simulation failed: ${simulated.error}`,
-        { correlationId }
-      );
-    }
-
-    if (!simulated.result) {
-      throw new ContractError(
-        ContractErrorCode.SIMULATION_FAILED,
-        "Simulation returned no result",
-        { correlationId }
-      );
-    }
-
-    // Decode the result
-    const resultValue = simulated.result.retval;
-
-    logContractEvent("success", {
       correlationId,
       contractId,
       method,
+      code: ContractErrorCode.UNKNOWN,
       durationMs: Date.now() - startedAt,
     });
 
-    // Return the raw XDR value - caller should decode based on expected type
-    return resultValue as unknown as T;
+    throw new ContractError(
+      ContractErrorCode.UNKNOWN,
+      error instanceof Error ? error.message : "Unknown contract error",
+      { correlationId, cause: error }
+    );
+  }
+}
+
+/**
+ * Sign a transaction XDR with the Freighter wallet extension.
+ */
+async function signWithFreighter(
+  xdrString: string,
+  networkPassphrase: string
+): Promise<string> {
+  if (typeof window === "undefined" || !window.freighter) {
+    throw new ContractError(
+      ContractErrorCode.WALLET_UNAVAILABLE,
+      "Freighter wallet extension is not available."
+    );
+  }
+
+  try {
+    const result = await window.freighter.signTransaction(xdrString, {
+      networkPassphrase,
+    });
+    return result;
   } catch (error) {
-    const contractError =
-      error instanceof ContractError
-        ? error
-        : new ContractError(
-            ContractErrorCode.SIMULATION_FAILED,
-            error instanceof Error ? error.message : "Unknown contract error",
-            { correlationId, cause: error }
-          );
-
-    logContractEvent("failure", {
-      correlationId: contractError.correlationId,
-      contractId,
-      method,
-      code: contractError.code,
-      durationMs: Date.now() - startedAt,
-    });
-
-    throw contractError;
+    throw new ContractError(
+      ContractErrorCode.SIGNING_REJECTED,
+      error instanceof Error ? error.message : "Signing was rejected.",
+      { cause: error }
+    );
   }
 }
 
 /**
- * A user's open position in a market, as returned by the contract's
- * `get_position` read method. Share/collateral amounts are in stroops
- * (1 token = 10^7 stroops).
+ * Read-only contract call (simulation only, no signing).
  */
-export interface PositionData {
-  yesShares: bigint;
-  noShares: bigint;
-  lockedCollateral: bigint;
-  totalDeposited: bigint;
-  isSettled: boolean;
-}
-
-/**
- * Read a user's live position for a market straight from the contract.
- * Returns `null` when the user has no recorded position (the contract's
- * `get_position` returns `None`).
- */
-export async function getPosition(
-  marketId: number,
-  userAddress: string
-): Promise<PositionData | null> {
-  const retval = await queryContract<xdr.ScVal>(MARKET_CONTRACT_ID, "get_position", [
-    u32ToScVal(marketId),
-    addressToScVal(userAddress),
-  ]);
-
-  const native = scValToNative(retval) as
-    | {
-        yes_shares: bigint;
-        no_shares: bigint;
-        locked_collateral: bigint;
-        total_deposited: bigint;
-        is_settled: boolean;
-      }
-    | null
-    | undefined;
-
-  if (native == null) {
-    return null;
+export async function readContract(
+  contractId: string,
+  method: string,
+  args: xdr.ScVal[] = [],
+  sourceAddress?: string
+): Promise<unknown> {
+  if (!contractId) {
+    throw new ContractError(
+      ContractErrorCode.NOT_CONFIGURED,
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
+    );
   }
 
-  return {
-    yesShares: BigInt(native.yes_shares),
-    noShares: BigInt(native.no_shares),
-    lockedCollateral: BigInt(native.locked_collateral),
-    totalDeposited: BigInt(native.total_deposited),
-    isSettled: Boolean(native.is_settled),
-  };
+  const account = new Account(
+    sourceAddress ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "0"
+  );
+
+  const contract = new Contract(contractId);
+  const operation = contract.call(method, ...args);
+
+  const transaction = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(operation)
+    .setTimeout(30)
+    .build();
+
+  const simulated = await server.simulateTransaction(transaction);
+
+  if (rpc.Api.isSimulationError(simulated)) {
+    throw new ContractError(
+      ContractErrorCode.SIMULATION_FAILED,
+      `Simulation failed: ${simulated.error}`
+    );
+  }
+
+  if (rpc.Api.isSimulationSuccess(simulated) && simulated.result) {
+    return scValToNative(simulated.result.retval);
+  }
+
+  return null;
 }
 
 /**
- * Helper to convert string amounts to i128
+ * Convert a JS value to an ScVal for contract arguments.
+ */
+export function toScVal(value: unknown): xdr.ScVal {
+  return nativeToScVal(value);
+}
 
-/* … truncated 814 chars — edit only what you need near the top … */
+/**
+ * Convert an address string to an ScVal address.
+ */
+export function addressToScVal(address: string): xdr.ScVal {
+  return new Address(address).toScVal();
+}

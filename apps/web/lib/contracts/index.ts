@@ -14,9 +14,11 @@ export * from './resolution';
 /**
  * Stable error codes for contract call failures.
  *
- * Aligned with `apps/web/lib/errors.ts`. Do not introduce ad-hoc string
- * errors in callers — map every failure to one of these codes so the web
- * layer cannot drift from on-chain error semantics.
+ * This is the single source of truth for contract error codes in the web
+ * package. `apps/web/lib/contract-client.ts` imports this object rather than
+ * declaring its own taxonomy. Aligned with `apps/web/lib/errors.ts`. Do not
+ * introduce ad-hoc string errors in callers — map every failure to one of
+ * these codes so the web layer cannot drift from on-chain error semantics.
  */
 export const ContractErrorCode = {
   /** Caller is not authorized for a privileged entrypoint. */
@@ -35,6 +37,20 @@ export const ContractErrorCode = {
   CONTRACT_REJECTED: 'CONTRACT_REJECTED',
   /** Unclassified failure — treat as fail-closed. */
   UNKNOWN: 'CONTRACT_UNKNOWN',
+  /** Client is missing required contract/RPC configuration. */
+  NOT_CONFIGURED: 'CONTRACT_NOT_CONFIGURED',
+  /** Wallet provider is unavailable or not connected. */
+  WALLET_UNAVAILABLE: 'CONTRACT_WALLET_UNAVAILABLE',
+  /** User rejected the signing request in their wallet. */
+  SIGNING_REJECTED: 'CONTRACT_SIGNING_REJECTED',
+  /** Transaction simulation failed before submission. */
+  SIMULATION_FAILED: 'CONTRACT_SIMULATION_FAILED',
+  /** Transaction submission to the network failed. */
+  SUBMISSION_FAILED: 'CONTRACT_SUBMISSION_FAILED',
+  /** Submitted transaction failed on-chain. */
+  TRANSACTION_FAILED: 'CONTRACT_TRANSACTION_FAILED',
+  /** Input failed client-side validation (alias of INVALID_ARGUMENT). */
+  INVALID_INPUT: 'CONTRACT_INVALID_INPUT',
 } as const;
 
 export type ContractErrorCode =
