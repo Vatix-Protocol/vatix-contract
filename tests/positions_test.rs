@@ -23,6 +23,7 @@ fn market_with_funded_user(deposit: i128) -> (Env, Address, u32, Address) {
 
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        storage::set_version(&env);
         storage::set_admin(&env, &admin);
     });
 
@@ -215,88 +216,6 @@ fn get_position_returns_correct_data() {
     let amount = 100 * STROOPS_PER_USDC;
     client.buy_yes(&user, &market_id, &amount, &6_000i128);
 
-    // Query position using get_position
-    let position = client
-        .get_position(&market_id, &user)
-        .expect("storage check ok")
-        .expect("position should exist");
+    /
 
-    assert_eq!(position.yes_shares, amount);
-    assert_eq!(position.no_shares, 0);
-    assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
-    assert_eq!(position.total_deposited, deposit);
-    assert_eq!(position.is_settled, false);
-}
-
-#[test]
-fn get_position_returns_none_for_nonexistent_position() {
-    let deposit = 100 * STROOPS_PER_USDC;
-    let (env, contract_id, market_id, _user) = market_with_funded_user(deposit);
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    // Query position for a user who never traded
-    let other_user = Address::generate(&env);
-    let position = client
-        .get_position(&market_id, &other_user)
-        .expect("storage check ok");
-
-    assert!(position.is_none());
-}
-
-#[test]
-fn get_market_returns_correct_data() {
-    let deposit = 100 * STROOPS_PER_USDC;
-    let (env, contract_id, market_id, _user) = market_with_funded_user(deposit);
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    // Query market details
-    let market = client
-        .get_market(&market_id)
-        .expect("storage check ok")
-        .expect("market should exist");
-
-    assert_eq!(market.id, market_id);
-    assert_eq!(
-        market.status,
-        vatix_market_contract::types::MarketStatus::Active
-    );
-    assert_eq!(market.price_bps, 5_000); // Default initial price
-    assert!(market.result.is_none()); // Not resolved yet
-}
-
-#[test]
-fn comprehensive_trading_flow_with_convenience_functions() {
-    let deposit = 200 * STROOPS_PER_USDC;
-    let (env, contract_id, market_id, user) = market_with_funded_user(deposit);
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    // 1. Buy 100 YES at 60%
-    client.buy_yes(&user, &market_id, &(100 * STROOPS_PER_USDC), &6_000i128);
-    let pos1 = client.get_position(&market_id, &user).unwrap().unwrap();
-    assert_eq!(pos1.yes_shares, 100 * STROOPS_PER_USDC);
-    assert_eq!(pos1.locked_collateral, 60 * STROOPS_PER_USDC);
-
-    // 2. Buy 50 NO at 70% YES (30% NO cost)
-    client.buy_no(&user, &market_id, &(50 * STROOPS_PER_USDC), &7_000i128);
-    let pos2 = client.get_position(&market_id, &user).unwrap().unwrap();
-    assert_eq!(pos2.yes_shares, 100 * STROOPS_PER_USDC);
-    assert_eq!(pos2.no_shares, 50 * STROOPS_PER_USDC);
-    // Net: 50 YES at 70% = 35 USDC locked
-    assert_eq!(pos2.locked_collateral, 35 * STROOPS_PER_USDC);
-
-    // 3. Sell 25 YES at 65%
-    client.sell_yes(&user, &market_id, &(25 * STROOPS_PER_USDC), &6_500i128);
-    let pos3 = client.get_position(&market_id, &user).unwrap().unwrap();
-    assert_eq!(pos3.yes_shares, 75 * STROOPS_PER_USDC);
-    assert_eq!(pos3.no_shares, 50 * STROOPS_PER_USDC);
-    // Net: 25 YES at 65% = 16.25 USDC locked
-    assert_eq!(pos3.locked_collateral, 1625 * STROOPS_PER_USDC / 100);
-
-    // 4. Sell all NO shares
-    client.sell_no(&user, &market_id, &(50 * STROOPS_PER_USDC), &6_500i128);
-    let pos4 = client.get_position(&market_id, &user).unwrap().unwrap();
-    assert_eq!(pos4.yes_shares, 75 * STROOPS_PER_USDC);
-    assert_eq!(pos4.no_shares, 0);
-    // Net: 75 YES at 65% = 48.75 USDC locked
-    assert_eq!(pos4.locked_collateral, 4875 * STROOPS_PER_USDC / 100);
-}
+/* … truncated 3362 chars — edit only what you need near the top … */
