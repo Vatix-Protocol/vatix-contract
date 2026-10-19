@@ -54,6 +54,8 @@ pub mod types;
 #[cfg(test)]
 mod bond_split_proptest;
 #[cfg(test)]
+mod storage_test;
+#[cfg(test)]
 mod test;
 
 use crate::error::ContractError;

@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -21,11 +22,16 @@ interface Toast {
 export interface ToastState {
   /** Show a toast. Auto-dismisses after ~6s (errors) or ~4s (success). */
   showToast: (message: string, variant?: ToastVariant) => void;
+  /**
+   * Dismiss a toast by id. Idempotent: dismissing an id that is no longer
+   * present leaves the toast list unchanged and cancels any pending timer.
+   */
+  dismiss: (id: number) => void;
 }
 
 const ToastContext = createContext<ToastState | null>(null);
 
-const DISMISS_MS: Record<ToastVariant, number> = {
+export const DISMISS_MS: Record<ToastVariant, number> = {
   error: 6000,
   success: 4000,
 };
@@ -33,8 +39,22 @@ const DISMISS_MS: Record<ToastVariant, number> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
+  /**
+   * Pending auto-dismiss timers, keyed by toast id. Tracking the handles lets
+   * us cancel a toast's timer when it is dismissed manually and cancel every
+   * outstanding timer when the provider unmounts, so a timer can never fire
+   * `setToasts` on an unmounted component.
+   */
+  const timers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   const dismiss = useCallback((id: number) => {
+    // Cancel the pending auto-dismiss timer, if any. Clearing it here makes a
+    // manual dismiss followed by the timer (or the reverse) idempotent.
+    const timer = timers.current.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timers.current.delete(id);
+    }
     setToasts((current) => current.filter((t) => t.id !== id));
   }, []);
 
@@ -42,12 +62,29 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (message: string, variant: ToastVariant = "error") => {
       const id = nextId.current++;
       setToasts((current) => [...current, { id, message, variant }]);
-      setTimeout(() => dismiss(id), DISMISS_MS[variant]);
+      const timer = setTimeout(() => {
+        // Drop the handle before dismissing so the entry is not left behind.
+        timers.current.delete(id);
+        dismiss(id);
+      }, DISMISS_MS[variant]);
+      timers.current.set(id, timer);
     },
     [dismiss]
   );
 
-  const value = useMemo(() => ({ showToast }), [showToast]);
+  // Clear every outstanding timer on unmount (route change, error-boundary
+  // reset) so nothing fires into an unmounted provider.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) {
+        clearTimeout(timer);
+      }
+      pending.clear();
+    };
+  }, []);
+
+  const value = useMemo(() => ({ showToast, dismiss }), [showToast, dismiss]);
 
   return (
     <ToastContext.Provider value={value}>
