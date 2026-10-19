@@ -427,3 +427,25 @@ fn transfer_fails_closed_when_storage_version_is_missing() {
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
     assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 50i128);
 }
+
+// ── Issue #1069: state-mutating pub fn without a mutating-guarded layout ──
+
+/// #1069 audit coverage: `cancel_market_contract` clears pending rotation
+/// state, so it must call `assert_version` before touching storage and fail
+/// closed with `UpgradeRequired` on a stale layout.
+#[test]
+fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    // Simulate a partial cross-contract upgrade: the on-chain schema version
+    // no longer matches what this compiled contract expects.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let result = client.try_cancel_market_contract(&admin);
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+}

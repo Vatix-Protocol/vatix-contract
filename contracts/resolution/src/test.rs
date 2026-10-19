@@ -463,6 +463,81 @@ fn initialize_stores_default_challenge_window() {
     assert_eq!(client.get_default_challenge_window(), DEFAULT_WINDOW);
 }
 
+// ── Issue #1068: version-guarded config readers fail closed ──────────────────
+
+/// #1068: on an initialized-but-stale deployment (config present,
+/// `StorageVersion` mismatched), the contract-level `get_config` read path
+/// fails closed with `UpgradeRequired` instead of returning stale config.
+#[test]
+fn get_config_fails_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, _, _, _) = setup(&env);
+
+    // Simulate a partial cross-contract upgrade: the on-chain schema version
+    // no longer matches what this compiled contract expects.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    assert_eq!(
+        client.try_get_config(),
+        Err(Ok(ContractError::UpgradeRequired)),
+        "stale StorageVersion must fail closed with UpgradeRequired"
+    );
+}
+
+/// #1068: the sibling version-guarded readers (`get_admin`, `get_factory`,
+/// `get_market_contract`, `get_default_challenge_window`) fail closed with
+/// the same typed error on a stale layout.
+#[test]
+fn version_guarded_readers_fail_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, _, _, _) = setup(&env);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    assert_eq!(
+        client.try_get_admin(),
+        Err(Ok(ContractError::UpgradeRequired))
+    );
+    assert_eq!(
+        client.try_get_factory(),
+        Err(Ok(ContractError::UpgradeRequired))
+    );
+    assert_eq!(
+        client.try_get_market_contract(),
+        Err(Ok(ContractError::UpgradeRequired))
+    );
+    assert_eq!(
+        client.try_get_default_challenge_window(),
+        Err(Ok(ContractError::UpgradeRequired))
+    );
+}
+
+/// #1068: on a never-initialized deployment (no `Config` stored at all), the
+/// version-guarded read fails closed with a typed `NotInitialized` error
+/// rather than an uncatchable host panic.
+#[test]
+fn get_config_returns_typed_error_when_never_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(ResolutionContract, ());
+    let client = ResolutionContractClient::new(&env, &contract_id);
+
+    // No `initialize` call: no `Config` is ever stored.
+    assert_eq!(
+        client.try_get_config(),
+        Err(Ok(ContractError::NotInitialized)),
+        "uninitialized read must be a typed error, not a panic"
+    );
+}
+
 #[test]
 fn admin_can_update_default_challenge_window() {
     let env = Env::default();
@@ -2355,7 +2430,6 @@ fn bond_refunded_event_supports_zero_amount_payload() {
         .unwrap()
         .into_val(&env);
     assert_eq!(refunded_at, 777);
-}
 }
 
 /// Issue #1023: `finalize` must reject a candidate whose `signature_expiry`

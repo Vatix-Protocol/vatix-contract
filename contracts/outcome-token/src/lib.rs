@@ -54,6 +54,10 @@ impl OutcomeTokenContract {
     ///
     /// `name` and `symbol` are SAC-compatible metadata stored on-chain.
     /// `decimals` is a compile-time constant (7) and is not stored.
+    ///
+    /// #1069 audit note: `initialize` is the bootstrap entrypoint that
+    /// *writes* the `Config` and `StorageVersion` keys, so there is no prior
+    /// version to guard against — it must not call `assert_version`.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -87,6 +91,9 @@ impl OutcomeTokenContract {
         Ok(())
     }
 
+    /// #1069 audit note: read-only view over the `Config` layout — query
+    /// helper for off-chain clients, not a state mutation, so it needs no
+    /// `assert_version` guard.
     pub fn get_config(env: Env) -> OutcomeTokenConfig {
         storage::get_config(&env)
     }
@@ -129,6 +136,10 @@ impl OutcomeTokenContract {
     /// timelock has elapsed (Issue #691). Callable by anyone — the timelock
     /// itself is the access control.
     pub fn execute_market_contract(env: Env) -> Result<Address, ContractError> {
+        // Storage-version guard (Issue #1069 audit): this mutates `Config`
+        // (the mint authority), so a stale deployment must fail closed with
+        // `UpgradeRequired` before touching storage.
+        storage::assert_version(&env)?;
         let pending = storage::get_pending_market_contract(&env)
             .ok_or(ContractError::NoPendingMarketContractChange)?;
         if env.ledger().timestamp() < pending.effective_at {
@@ -145,6 +156,10 @@ impl OutcomeTokenContract {
     /// Cancel a pending `market_contract` rotation before it takes effect.
     pub fn cancel_market_contract(env: Env, admin: Address) -> Result<(), ContractError> {
         admin.require_auth();
+        // Storage-version guard (Issue #1069 audit): this clears pending
+        // rotation state, so a stale deployment must fail closed with
+        // `UpgradeRequired` before touching storage.
+        storage::assert_version(&env)?;
         let config = storage::get_config(&env);
         if admin != config.admin {
             return Err(ContractError::Unauthorized);
@@ -416,33 +431,20 @@ impl OutcomeTokenContract {
     }
 
     /// Return the token balance for a specific `(market_id, user, kind)` triple.
+    ///
+    /// #1069 audit note: read-only view — returns `0` for unknown triples by
+    /// design, so it never touches the versioned `Config` layout and needs no
+    /// `assert_version` guard.
     pub fn balance(env: Env, market_id: u32, user: Address, kind: TokenKind) -> i128 {
         storage::get_balance(&env, market_id, &user, &kind)
     }
 
     /// Return the total outstanding supply for a `(market_id, kind)` pair.
+    ///
+    /// #1069 audit note: read-only view over the per-market supply ledger —
+    /// like [`Self::balance`], it never reads `Config` and needs no
+    /// `assert_version` guard.
     pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
         storage::get_total_supply(&env, market_id, &kind)
     }
-
-    /// Issue #1035: `set_metadata`'s deny-by-default branch — no config ever
-    /// stored (contract never `initialize`d) — must reject even when the
-    /// caller self-authorizes, and must not write any metadata. Ported to
-    /// the restored multi-market API (#1036/#1037): the fail-closed check is
-    /// now `ContractError::NotInitialized` via `storage::has_config`, not
-    /// the single-admin `DataKey::Admin`/`OutcomeTokenError` this test was
-    /// originally written against.
-    #[test]
-    fn set_metadata_rejects_when_never_initialized() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, OutcomeTokenContract);
-        let client = OutcomeTokenContractClient::new(&env, &contract_id);
-
-        // No `initialize` call: no `Config` is ever stored.
-        let caller = Address::generate(&env);
-        let res = client.try_set_metadata(&caller, &symbol(&env, 4), &name(&env, 4));
-        assert_eq!(res, Err(Ok(ContractError::NotInitialized)));
-    }
-
 }

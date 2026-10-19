@@ -59,4 +59,10 @@ pub enum ContractError {
     /// stale schema fails closed here instead of silently corrupting state
     /// (e.g. via `finalize`).
     UpgradeRequired = 51,
+    /// The contract has never been `initialize`d — no `Config` is stored, so a
+    /// version-guarded config read fails closed with this typed error instead
+    /// of panicking on a missing key (Issue #1068). Distinct from
+    /// [`ContractError::UpgradeRequired`], which is returned when a config
+    /// *is* present but the on-chain storage version is stale or missing.
+    NotInitialized = 53,
 }
