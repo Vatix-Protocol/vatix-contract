@@ -227,6 +227,32 @@ mod tests {
             storage::get_fee_waivers(&env).len()
         });
         assert_eq!(count, storage::MAX_FEE_WAIVERS);
+
+        // Issue #1066 (3): re-adding an address that is already present at
+        // capacity is still an idempotent no-op — Ok(()) with no growth.
+        // The duplicate check runs before the cap check, so the guard pins
+        // the ordering: presence first, cap second.
+        let mut first_at_capacity: Option<Address> = None;
+        env.as_contract(&contract_id, || {
+            let waivers = storage::get_fee_waivers(&env);
+            first_at_capacity = Some(waivers.get(0).expect("list must be full"));
+        });
+        let duplicate = first_at_capacity.expect("list must be full");
+        let result = env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &duplicate)
+        });
+        assert_eq!(
+            result,
+            Ok(()),
+            "re-adding a present address at capacity must stay a no-op"
+        );
+        let count = env.as_contract(&contract_id, || {
+            storage::get_fee_waivers(&env).len()
+        });
+        assert_eq!(
+            count, storage::MAX_FEE_WAIVERS,
+            "idempotent re-add at capacity must not grow the list"
+        );
     }
 
     #[test]

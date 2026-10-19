@@ -80,6 +80,27 @@ pub fn get_config(env: &Env) -> ResolutionConfig {
         .expect("Resolution config not set")
 }
 
+/// Version-guarded read of the resolution config (Issue #1068).
+///
+/// Fails closed with [`ContractError::NotInitialized`] when no config has ever
+/// been written (a never-bootstrapped deployment), and with
+/// [`ContractError::UpgradeRequired`] when a stored config is read against a
+/// stale or missing on-chain [`STORAGE_VERSION`] — instead of panicking on a
+/// missing `Config` key the way the unchecked [`get_config`] does. Callers
+/// that have already run [`assert_version`] may keep using [`get_config`];
+/// untrusted and read paths should prefer this accessor so a stale or
+/// uninitialized deployment surfaces a typed error rather than an
+/// uncatchable host panic.
+pub fn get_config_checked(env: &Env) -> Result<ResolutionConfig, ContractError> {
+    // Distinguish a never-initialized deployment (no config at all) from an
+    // initialized-but-stale one (config present but version mismatch) so
+    // operators can tell the two apart.
+    let config: Option<ResolutionConfig> = env.storage().persistent().get(&StorageKey::Config);
+    let config = config.ok_or(ContractError::NotInitialized)?;
+    assert_version(env)?;
+    Ok(config)
+}
+
 pub fn set_config(env: &Env, config: &ResolutionConfig) {
     env.storage().persistent().set(&StorageKey::Config, config);
 }
@@ -273,6 +294,52 @@ mod test {
         let contract_id = env.register(crate::ResolutionContract, ());
         env.as_contract(&contract_id, || {
             assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// #1068: reading config on a never-initialized env returns a typed error
+    /// (`NotInitialized`) rather than the host panic that the unchecked
+    /// `get_config` produces via `.expect("Resolution config not set")`.
+    #[test]
+    fn test_get_config_checked_uninitialized_returns_typed_error() {
+        let env = Env::default();
+        let contract_id = env.register(crate::ResolutionContract, ());
+        env.as_contract(&contract_id, || {
+            let res = get_config_checked(&env);
+            assert_eq!(
+                res,
+                Err(ContractError::NotInitialized),
+                "uninitialized read must be a typed error, not a panic"
+            );
+        });
+    }
+
+    /// #1068: reading config after manually writing a mismatched
+    /// `StorageVersion` returns `UpgradeRequired`, distinguishable from the
+    /// never-initialized `NotInitialized` above.
+    #[test]
+    fn test_get_config_checked_fails_closed_on_stale_version() {
+        use soroban_sdk::testutils::Address as _;
+        let env = Env::default();
+        let contract_id = env.register(crate::ResolutionContract, ());
+        env.as_contract(&contract_id, || {
+            set_config(
+                &env,
+                &ResolutionConfig {
+                    admin: Address::generate(&env),
+                    factory: Address::generate(&env),
+                    market_contract: Address::generate(&env),
+                    challenge_window_secs: 3600u64,
+                },
+            );
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1u32));
+            assert_eq!(
+                get_config_checked(&env),
+                Err(ContractError::UpgradeRequired),
+                "stale StorageVersion must fail closed with UpgradeRequired"
+            );
         });
     }
 

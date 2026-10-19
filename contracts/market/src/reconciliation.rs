@@ -202,21 +202,65 @@ mod tests {
 
     const STROOPS_PER_USDC: i128 = 10_000_000;
 
+    /// Issue #1067: the vacuous-parity branch is the default state for any
+    /// market deployed before `set_outcome_token_contract` is called — with
+    /// no second ledger, token balances mirror shares 1:1 and parity is
+    /// vacuously satisfied, even for a position with non-zero shares.
     #[test]
     fn test_parity_matches_when_no_outcome_token_contract_registered() {
         let env = Env::default();
         let contract_id = env.register(crate::MarketContract, ());
         let user = <Address as TestAddress>::generate(&env);
+        let admin = <Address as TestAddress>::generate(&env);
         let market_id = 1;
 
+        // A position with non-zero shares and no outcome-token contract
+        // registered: balances must mirror shares 1:1 and report matched.
         let parity = env.as_contract(&contract_id, || {
             storage::set_version(&env);
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
             get_position_token_parity(&env, market_id, &user).unwrap()
         });
 
         assert!(parity.is_matched);
-        assert_eq!(parity.yes_shares, 0);
-        assert_eq!(parity.no_shares, 0);
+        assert_eq!(parity.yes_shares, 100);
+        assert_eq!(parity.no_shares, 50);
+        assert_eq!(
+            parity.yes_token_balance, parity.yes_shares,
+            "with no outcome-token contract, balances must mirror shares 1:1"
+        );
+        assert_eq!(
+            parity.no_token_balance, parity.no_shares,
+            "with no outcome-token contract, balances must mirror shares 1:1"
+        );
+
+        // Reconciliation in this state must be a no-op: no mint/burn, no
+        // `PositionTokensReconciled` event, and the `correlation_id` must
+        // not be consumed (a later genuine repair may reuse it).
+        let correlation_id = BytesN::from_array(&env, &[9u8; 32]);
+        let events_before = env.events().all().len();
+        let repaired = env.as_contract(&contract_id, || {
+            reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap()
+        });
+        assert!(
+            repaired.is_matched,
+            "reconcile on vacuous parity must stay matched"
+        );
+        let events_after = env.events().all().len();
+        assert_eq!(
+            events_after, events_before,
+            "reconcile with no outcome-token contract must emit no event"
+        );
+        let record = env.as_contract(&contract_id, || {
+            storage::get_reconciliation_record(&env, &correlation_id)
+        });
+        assert!(
+            record.is_none(),
+            "no-op reconcile must not consume the correlation_id"
+        );
     }
 
     /// Issue #708 / #578 parity: once a position is settled, every settle

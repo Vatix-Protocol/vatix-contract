@@ -144,8 +144,8 @@ impl ResolutionContract {
         Ok(())
     }
 
-    pub fn get_default_challenge_window(env: Env) -> u64 {
-        storage::get_config(&env).challenge_window_secs
+    pub fn get_default_challenge_window(env: Env) -> Result<u64, ContractError> {
+        Ok(storage::get_config_checked(&env)?.challenge_window_secs)
     }
 
     /// Update the contract-wide *default* challenge window (#723).
@@ -197,8 +197,8 @@ impl ResolutionContract {
         Ok(())
     }
 
-    pub fn get_config(env: Env) -> ResolutionConfig {
-        storage::get_config(&env)
+    pub fn get_config(env: Env) -> Result<ResolutionConfig, ContractError> {
+        storage::get_config_checked(&env)
     }
 
     /// Return the registered factory address (#752).
@@ -208,21 +208,21 @@ impl ResolutionContract {
     /// timelock. Backend oracle services need a direct getter rather than
     /// deserializing the full `ResolutionConfig` struct, both for
     /// convenience and because the full config type may grow over time.
-    pub fn get_factory(env: Env) -> Address {
-        storage::get_config(&env).factory
+    pub fn get_factory(env: Env) -> Result<Address, ContractError> {
+        Ok(storage::get_config_checked(&env)?.factory)
     }
 
     /// Return the registered market contract address.
     ///
     /// Symmetric to [`get_factory`] — backend services that manage the
     /// resolution→market relationship need both addresses independently.
-    pub fn get_market_contract(env: Env) -> Address {
-        storage::get_config(&env).market_contract
+    pub fn get_market_contract(env: Env) -> Result<Address, ContractError> {
+        Ok(storage::get_config_checked(&env)?.market_contract)
     }
 
     /// Return the registered admin address.
-    pub fn get_admin(env: Env) -> Address {
-        storage::get_config(&env).admin
+    pub fn get_admin(env: Env) -> Result<Address, ContractError> {
+        Ok(storage::get_config_checked(&env)?.admin)
     }
 
     pub const ADDRESS_TIMELOCK_SECONDS: u64 = 172_800;
