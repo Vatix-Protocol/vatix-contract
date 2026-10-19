@@ -152,6 +152,18 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_settlement_rejects_non_resolved_statuses() {
+        let env = Env::default();
+        let pos = create_test_position(&env, 100, 0, false);
+
+        for status in [MarketStatus::Active, MarketStatus::Canceled] {
+            let market = create_test_market(&env, status, None);
+            let result = validate_settlement_eligibility(&pos, &market);
+            assert_eq!(result, Err(ContractError::MarketNotResolved));
+        }
+    }
+
+    #[test]
     fn test_validate_settlement_already_settled() {
         let env = Env::default();
         let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
