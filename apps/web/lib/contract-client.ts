@@ -19,10 +19,16 @@ import {
 
 import { ContractErrorCode } from "./contracts";
 
-// Network configuration from environment
+// Network configuration from environment.
+// The passphrase is intentionally NOT defaulted: a mainnet deployment that
+// forgets NEXT_PUBLIC_NETWORK_PASSPHRASE must fail fast rather than silently
+// sign against testnet. A testnet default is only applied when the explicit
+// development flag NEXT_PUBLIC_ALLOW_TESTNET_DEFAULT is set.
 const NETWORK_PASSPHRASE =
   process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ??
-  "Test SDF Network ; September 2015";
+  (process.env.NEXT_PUBLIC_ALLOW_TESTNET_DEFAULT === "true"
+    ? "Test SDF Network ; September 2015"
+    : "");
 
 const SOROBAN_RPC_URL =
   process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
@@ -86,6 +92,40 @@ export function generateCorrelationId(): string {
   return `cid-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 10)}`;
+}
+
+/**
+ * Fail fast when a contract id is missing. Callers that build an invocation
+ * with an empty id would otherwise fail deep inside the SDK with an opaque
+ * error; this surfaces the stable NOT_CONFIGURED code instead.
+ */
+export function requireContractId(
+  id: string,
+  correlationId: string
+): string {
+  if (!id) {
+    throw new ContractError(
+      ContractErrorCode.NOT_CONFIGURED,
+      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local",
+      { correlationId }
+    );
+  }
+  return id;
+}
+
+/**
+ * Fail fast when the network passphrase is missing. Required whenever a
+ * contract id is present so we never sign against the wrong network.
+ */
+export function requireNetworkPassphrase(correlationId: string): string {
+  if (!NETWORK_PASSPHRASE) {
+    throw new ContractError(
+      ContractErrorCode.NOT_CONFIGURED,
+      "Network passphrase not configured. Set NEXT_PUBLIC_NETWORK_PASSPHRASE in .env.local",
+      { correlationId }
+    );
+  }
+  return NETWORK_PASSPHRASE;
 }
 
 /**
@@ -208,18 +248,14 @@ export async function invokeContract(
   const correlationId = generateCorrelationId();
   const startedAt = Date.now();
 
+  // Fail fast on missing configuration before touching the network.
+  requireContractId(contractId, correlationId);
+  const networkPassphrase = requireNetworkPassphrase(correlationId);
+
   if (typeof window === "undefined") {
     throw new ContractError(
       ContractErrorCode.WALLET_UNAVAILABLE,
       "invokeContract can only run in the browser (requires a wallet extension).",
-      { correlationId }
-    );
-  }
-
-  if (!contractId) {
-    throw new ContractError(
-      ContractErrorCode.NOT_CONFIGURED,
-      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local",
       { correlationId }
     );
   }
@@ -250,7 +286,7 @@ export async function invokeContract(
 
     const transaction = new TransactionBuilder(account, {
       fee: BASE_FEE,
-      networkPassphrase: NETWORK_PASSPHRASE,
+      networkPassphrase,
     })
       .addOperation(operation)
       .setTimeout(30)
@@ -273,17 +309,17 @@ export async function invokeContract(
     // 5. Sign with Freighter
     const signedXdr = await signWithFreighter(
       prepared.toXDR(),
-      NETWORK_PASSPHRASE
+      networkPassphrase
     );
 
     // 6. Submit the transaction
-    const signedTx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
+    const signedTx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
     const response = await server.sendTransaction(signedTx);
 
     if (response.status === "ERROR") {
       throw new ContractError(
         ContractErrorCode.SUBMISSION_FAILED,
-        `Transaction submission failed: ${JSON.stringify(response.errorResult)}`,
+        "Transaction submission failed",
         { correlationId }
       );
     }
@@ -299,7 +335,7 @@ export async function invokeContract(
   } catch (error) {
     if (error instanceof ContractError) {
       logContractEvent("failure", {
-        correlationId: error.correlationId,
+        correlationId,
         contractId,
         method,
         code: error.code,
@@ -337,37 +373,5 @@ async function signWithFreighter(
     networkPassphrase,
   });
 
-  if (typeof result === "string") {
-    return result;
-  }
-
-  if (result && typeof result === "object" && "signedTxXdr" in result) {
-    return (result as { signedTxXdr: string }).signedTxXdr;
-  }
-
-  throw new ContractError(
-    ContractErrorCode.WALLET_UNAVAILABLE,
-    "Freighter did not return a signed transaction."
-  );
-}
-
-/**
- * Helper to convert a JS value to a Soroban ScVal.
- */
-export function toScVal(value: unknown): xdr.ScVal {
-  return nativeToScVal(value);
-}
-
-/**
- * Helper to convert a Soroban ScVal back to a JS value.
- */
-export function fromScVal(value: xdr.ScVal): unknown {
-  return scValToNative(value);
-}
-
-/**
- * Helper to convert a Stellar address string to a Soroban Address ScVal.
- */
-export function addressToScVal(address: string): xdr.ScVal {
-  return new Address(address).toScVal();
+  return result;
 }
