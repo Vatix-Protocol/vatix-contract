@@ -197,38 +197,61 @@ export function freighterErrorMessage(code: string): string {
   );
 }
 
+/**
+ * Stable error codes for the web contract client. Surfaced to callers instead
+ * of raw SDK/RPC messages so configuration failures are actionable and never
+ * leak secrets.
+ */
+export const CONTRACT_ERROR_CODES = {
+  /** Contract ID missing / not configured for the active network. */
+  NOT_CONFIGURED: "CONTRACT_NOT_CONFIGURED",
+  /** No network passphrase was configured for this environment. */
+  MISSING_NETWORK_PASSPHRASE: "CONTRACT_MISSING_NETWORK_PASSPHRASE",
+} as const;
+
+export type ContractErrorCode =
+  (typeof CONTRACT_ERROR_CODES)[keyof typeof CONTRACT_ERROR_CODES];
+
+/**
+ * Error thrown by the web contract client when a configuration invariant is
+ * violated (missing contract id or network passphrase). Carries a stable
+ * `code` so callers can branch on it and so logs stay free of secrets.
+ */
+export class ContractError extends Error {
+  readonly code: ContractErrorCode;
+  readonly correlationId?: string;
+
+  constructor(code: ContractErrorCode, message: string, correlationId?: string) {
+    super(message);
+    this.name = "ContractError";
+    this.code = code;
+    this.correlationId = correlationId;
+  }
+}
+
+/**
+ * Human-readable copy for each contract client error code, safe to show in
+ * the UI.
+ */
+export const CONTRACT_ERROR_MESSAGES: Record<ContractErrorCode, string> = {
+  [CONTRACT_ERROR_CODES.NOT_CONFIGURED]:
+    "This app isn't configured with a contract address for the active network. Contact support.",
+  [CONTRACT_ERROR_CODES.MISSING_NETWORK_PASSPHRASE]:
+    "This app isn't configured with an expected Stellar network. Contact support.",
+};
+
 export function parseContractError(err: unknown): string {
   if (err instanceof FreighterError) {
+    return err.message;
+  }
+
+  if (err instanceof ContractError) {
     return err.message;
   }
 
   const message = err instanceof Error ? err.message : String(err);
 
   // Soroban host trap, e.g. `Error(Contract, #10)` — surfaced as-is by the
-  // SDK inside simulation/transaction failure messages.
-  const contractError = message.match(/Error\(Contract,\s*#(\d+)\)/);
-  if (contractError) {
-    const code = Number(contractError[1]);
-    const known = marketErrorMessage(code);
-    if (known) {
-      return known;
-    }
-    return `Contract rejected the transaction (error #${contractError[1]}).`;
-  }
+  // SDK inside simulation
 
-  const simulationFailed = message.match(/^Simulation failed:\s*([\s\S]+)$/);
-  if (simulationFailed) {
-    return `Transaction would fail: ${simulationFailed[1]}`;
-  }
-
-  const txFailed = message.match(/^Transaction failed:\s*([\s\S]+)$/);
-  if (txFailed) {
-    return `Transaction failed: ${txFailed[1]}`;
-  }
-
-  if (/denied|rejected|cancel/i.test(message)) {
-    return "Request was rejected in the wallet.";
-  }
-
-  return message;
-}
+/* … truncated 774 chars — edit only what you need near the top … */

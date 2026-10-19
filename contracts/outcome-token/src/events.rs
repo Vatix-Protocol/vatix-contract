@@ -98,6 +98,25 @@ pub fn emit_market_contract_set(env: &Env, market_contract: &Address) {
     .publish(env);
 }
 
+/// Emitted when a pending `market_contract` rotation is cancelled via
+/// `clear_pending_market_contract` (Issue #1038). Carries the cancelled
+/// pending address so indexers can observe the cancellation.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MarketContractCleared {
+    #[topic]
+    pub market_contract: Address,
+    pub cleared_at: u64,
+}
+
+pub fn emit_market_contract_cleared(env: &Env, market_contract: &Address) {
+    MarketContractCleared {
+        market_contract: market_contract.clone(),
+        cleared_at: env.ledger().timestamp(),
+    }
+    .publish(env);
+}
+
 #[contractevent]
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
