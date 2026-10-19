@@ -6,10 +6,48 @@ use crate::error::ContractError;
 use crate::types::TokenKind;
 use crate::{OutcomeTokenContract, OutcomeTokenContractClient};
 
+/// Minimal stand-in for the market contract's `get_market_status` surface
+/// (mirrors the equivalent `mock_market` module in
+/// `contracts/resolution/src/test.rs`), so `transfer`'s real cross-contract
+/// call has a deployed address to invoke instead of a bare generated one.
+mod mock_market {
+    use crate::types::MarketStatus;
+    use soroban_sdk::{contract, contractimpl, contracttype, Env};
+
+    #[contracttype]
+    #[derive(Clone)]
+    enum DataKey {
+        Status,
+    }
+
+    #[contract]
+    pub struct MockMarket;
+
+    #[contractimpl]
+    impl MockMarket {
+        pub fn init(env: Env) {
+            env.storage()
+                .instance()
+                .set(&DataKey::Status, &MarketStatus::Active);
+        }
+
+        pub fn get_market_status(env: Env, _market_id: u32) -> MarketStatus {
+            env.storage().instance().get(&DataKey::Status).unwrap()
+        }
+
+        pub fn set_status(env: Env, status: MarketStatus) {
+            env.storage().instance().set(&DataKey::Status, &status);
+        }
+    }
+}
+
+use mock_market::{MockMarket, MockMarketClient};
+
 fn setup<'a>(env: &'a Env) -> (OutcomeTokenContractClient<'a>, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
-    let market_contract = Address::generate(env);
+    let market_contract = env.register(MockMarket, ());
+    MockMarketClient::new(env, &market_contract).init();
     let contract_id = env.register(OutcomeTokenContract, ());
     let client = OutcomeTokenContractClient::new(env, &contract_id);
     client.initialize(
@@ -287,4 +325,105 @@ fn mint_rejects_non_market_contract_caller() {
     env.mock_auths(&[]);
 
     client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+}
+
+// ── Issue #1037: is_paused / set_paused must share one storage domain ──────
+
+#[test]
+fn pause_blocks_mint_burn_and_transfer_then_unpause_restores_mint_and_burn() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    // Give the user a starting balance so burn/transfer have something to
+    // act on once we start toggling the pause flag.
+    client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+    assert!(!client.is_paused());
+
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // All three token-mutating entrypoints must observe the same pause flag
+    // that `pause` just set — this is the fix for #1037 (is_paused reading
+    // a different storage domain than set_paused writes).
+    assert_eq!(
+        client.try_mint(&1u32, &user, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+    assert_eq!(
+        client.try_burn(&1u32, &user, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+    // Rejected calls must not mutate balances.
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+
+    // mint/burn succeed again once unpaused.
+    client.mint(&1u32, &user, &TokenKind::Yes, &10i128);
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 110i128);
+    client.burn(&1u32, &user, &TokenKind::Yes, &10i128);
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+
+    // `transfer` is permanently non-transferable by design (see the
+    // module-level docs): once unpaused it fails with the ordinary
+    // business-rule error instead of `ContractPaused`, proving the pause
+    // gate — not the unrelated non-transferable policy — was what blocked
+    // it above.
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::MarketNotResolved))
+    );
+}
+
+// ── Issue #1036: transfer must assert_version before touching storage ─────
+
+#[test]
+fn transfer_fails_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &50i128);
+
+    // Simulate a partial cross-contract upgrade: the on-chain schema version
+    // no longer matches what this compiled contract expects.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let result = client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128);
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+
+    // The rejected transfer must leave balances untouched.
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 50i128);
+}
+
+#[test]
+fn transfer_fails_closed_when_storage_version_is_missing() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &50i128);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .remove(&crate::storage::StorageKey::StorageVersion);
+    });
+
+    let result = client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128);
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 50i128);
 }

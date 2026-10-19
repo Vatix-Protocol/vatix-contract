@@ -1700,10 +1700,108 @@ fn unchallenged_finalize_refunds_full_bond() {
     assert_eq!(balance(&env, &token, &this), 0);
 }
 
-/// Issue #1024: `challenge` with a bond below `MIN_CHALLENGE_BOND_AMOUNT`
-/// must be rejected with `InsufficientChallengeBond`, leave the candidate
-/// `Proposed` with no `ChallengeRecord` appended, and a bond of exactly the
-/// minimum must succeed and record exactly one challenger with that bond.
+// ── Issue #1027: `propose`/`challenge` enforce `MAX_URI_BYTES` on URIs ────
+
+fn uri_of_len(env: &Env, len: u32) -> String {
+    String::from_str(env, &"u".repeat(len as usize))
+}
+
+/// `propose` rejects an `evidence_uri` one byte over the cap and creates no
+/// candidate.
+#[test]
+fn propose_rejects_evidence_uri_over_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let result = client.try_propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &uri_of_len(&env, crate::MAX_URI_BYTES + 1),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+    assert_eq!(result, Err(Ok(ContractError::InvalidEvidenceUri)));
+    assert_eq!(client.get_candidate_id_for_market(&1u32), None);
+}
+
+/// An `evidence_uri` of exactly `MAX_URI_BYTES` is accepted (boundary case).
+#[test]
+fn propose_accepts_evidence_uri_at_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &uri_of_len(&env, crate::MAX_URI_BYTES),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+    assert_eq!(client.get_candidate_id_for_market(&1u32), Some(candidate_id));
+}
+
+/// `challenge`'s `challenge_uri` is capped the same way as `propose`'s
+/// `evidence_uri`. A rejected challenge must not move the candidate out of
+/// `Proposed` or take a bond.
+#[test]
+fn challenge_rejects_challenge_uri_over_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &evidence(&env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    let result = client.try_challenge(
+        &challenger,
+        &candidate_id,
+        &uri_of_len(&env, crate::MAX_URI_BYTES + 1),
+        &BOND,
+    );
+    assert_eq!(result, Err(Ok(ContractError::InvalidEvidenceUri)));
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Proposed);
+    assert!(client.get_challengers(&candidate_id).is_empty());
+    assert_eq!(balance(&env, &token, &challenger), BOND);
+}
+
+// ── Issue #1024: `challenge` enforces MIN_CHALLENGE_BOND_AMOUNT ──────────
+
+/// `challenge` with a bond below `MIN_CHALLENGE_BOND_AMOUNT` must be
+/// rejected with `InsufficientChallengeBond`, leave the candidate `Proposed`
+/// with no `ChallengeRecord` appended, and a bond of exactly the minimum
+/// must succeed and record exactly one challenger with that bond.
 #[test]
 fn challenge_rejects_bond_below_minimum_and_accepts_exact_minimum() {
     let env = Env::default();
@@ -1724,7 +1822,195 @@ fn challenge_rejects_bond_below_minimum_and_accepts_exact_minimum() {
     );
 
     let challenger = Address::generate(&env);
-    fund(&env, &token, &c
+    fund(&env, &token, &challenger, crate::MIN_CHALLENGE_BOND_AMOUNT);
+    let uri = String::from_str(&env, "ipfs://below-min");
+    assert_eq!(
+        client.try_challenge(
+            &challenger,
+            &candidate_id,
+            &uri,
+            &(crate::MIN_CHALLENGE_BOND_AMOUNT - 1),
+        ),
+        Err(Ok(ContractError::InsufficientChallengeBond))
+    );
+
+    // Rejected challenge must not change candidate status or append a record.
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Proposed);
+    assert!(client.get_challengers(&candidate_id).is_empty());
+
+    // Exactly the minimum bond succeeds and records one challenger.
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &uri,
+        &crate::MIN_CHALLENGE_BOND_AMOUNT,
+    );
+    let challengers = client.get_challengers(&candidate_id);
+    assert_eq!(challengers.len(), 1);
+    let record = challengers.get(0).unwrap();
+    assert_eq!(record.challenger, challenger);
+    assert_eq!(record.bond, crate::MIN_CHALLENGE_BOND_AMOUNT);
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Challenged);
+}
+
+// ── Issue #1026: arbitration timelock gates arbitrate_uphold_proposer/void_market ──
+
+/// Drives a candidate through `rounds` challenge/appeal cycles (reusing the
+/// same `challenger` each round), leaving it `Challenged` with
+/// `appeal_round == rounds`. Returns the candidate id and its current
+/// `challenge_deadline` — the anchor `require_arbitrable` adds
+/// `ARBITRATION_TIMELOCK_SECONDS` to.
+fn propose_and_challenge_through_rounds<'a>(
+    env: &Env,
+    client: &ResolutionContractClient<'a>,
+    proposer: &Address,
+    challenger: &Address,
+    market_id: u32,
+    rounds: u32,
+) -> (u32, u64) {
+    let expiry = env.ledger().timestamp() + (rounds as u64 + 2) * DEFAULT_WINDOW + 3600;
+    let candidate_id = client.propose(
+        proposer,
+        &market_id,
+        &true,
+        &signature(env),
+        &expiry,
+        &evidence(env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    let mut deadline = client.get_candidate(&candidate_id).unwrap().challenge_deadline;
+    for round in 0..=rounds {
+        client.challenge(
+            challenger,
+            &candidate_id,
+            &String::from_str(env, "ipfs://challenge"),
+            &BOND,
+        );
+        if round < rounds {
+            client.appeal(
+                proposer,
+                &candidate_id,
+                &true,
+                &signature(env),
+                &evidence(env),
+                &DEFAULT_WINDOW,
+            );
+            deadline = client.get_candidate(&candidate_id).unwrap().challenge_deadline;
+        }
+    }
+    (candidate_id, deadline)
+}
+
+/// A candidate that was never challenged (still `Proposed`) is not
+/// arbitrable at all — `require_arbitrable` only accepts a `Challenged`
+/// candidate. (`appeal_round` is 0, i.e. below `MAX_APPEAL_ROUNDS`, which is
+/// deliberately *not* what gates this error — see the `require_arbitrable`
+/// doc comment in `lib.rs`: the timelock alone, not `appeal_round`, decides
+/// arbitrability so an abandoned round-0 dispute isn't stuck forever.)
+#[test]
+fn arbitrate_uphold_proposer_rejects_a_never_challenged_candidate() {
+    let env = Env::default();
+    let (client, admin, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &evidence(&env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    assert_eq!(
+        client.try_arbitrate_uphold_proposer(&admin, &candidate_id),
+        Err(Ok(ContractError::NotArbitrable))
+    );
+}
+
+/// Both terminal admin paths reject a maximally-appealed, still-`Challenged`
+/// candidate until `ARBITRATION_TIMELOCK_SECONDS` has elapsed since its
+/// `challenge_deadline`, and leave it `Challenged` when they do.
+#[test]
+fn arbitrate_and_void_reject_before_arbitration_timelock_elapses() {
+    let env = Env::default();
+    let (client, admin, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, 4 * BOND);
+
+    let (candidate_id, deadline) =
+        propose_and_challenge_through_rounds(&env, &client, &proposer, &challenger, 1u32, crate::MAX_APPEAL_ROUNDS);
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.appeal_round, crate::MAX_APPEAL_ROUNDS);
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Challenged);
+
+    // One second before the timelock elapses: both paths are still rejected.
+    set_time(&env, deadline + crate::ARBITRATION_TIMELOCK_SECONDS - 1);
+    assert_eq!(
+        client.try_arbitrate_uphold_proposer(&admin, &candidate_id),
+        Err(Ok(ContractError::ArbitrationTimelockNotElapsed))
+    );
+    assert_eq!(
+        client.get_candidate(&candidate_id).unwrap().status,
+        crate::types::CandidateStatus::Challenged
+    );
+
+    assert_eq!(
+        client.try_void_market(&admin, &candidate_id),
+        Err(Ok(ContractError::ArbitrationTimelockNotElapsed))
+    );
+    assert_eq!(
+        client.get_candidate(&candidate_id).unwrap().status,
+        crate::types::CandidateStatus::Challenged
+    );
+}
+
+/// Once the arbitration timelock has elapsed, `arbitrate_uphold_proposer`
+/// succeeds and the mock market records the resolution.
+#[test]
+fn arbitrate_uphold_proposer_succeeds_at_timelock_deadline_and_resolves_market() {
+    let env = Env::default();
+    let (client, admin, market_contract, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, 4 * BOND);
+
+    let (candidate_id, deadline) =
+        propose_and_challenge_through_rounds(&env, &client, &proposer, &challenger, 7u32, crate::MAX_APPEAL_ROUNDS);
+
+    set_time(&env, deadline + crate::ARBITRATION_TIMELOCK_SECONDS);
+    let arbitrated = client.arbitrate_uphold_proposer(&admin, &candidate_id);
+    assert_eq!(arbitrated.status, crate::types::CandidateStatus::Finalized);
+
+    let resolved = MockMarketClient::new(&env, &market_contract)
+        .get_last_resolved()
+        .expect("arbitrate_uphold_proposer must resolve the market");
+    assert_eq!(resolved.outcome, arbitrated.outcome);
+    assert!(!resolved.is_v2);
+}
+
+/// `appeal` on a candidate that was never challenged (still `Proposed`)
+/// must be rejected with `CandidateNotChallenged` and leave the candidate
+/// untouched at `appeal_round == 0`.
+#[test]
+fn appeal_rejects_a_never_challenged_candidate() {
     let env = Env::default();
     let (client, _, _, token) = setup(&env);
     set_time(&env, 1_000);

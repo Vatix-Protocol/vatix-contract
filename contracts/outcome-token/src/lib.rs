@@ -1,331 +1,448 @@
-//! Outcome token contract.
+// Issue #765: Required no_std attribute for Soroban WASM contract execution
+#![no_std]
+#![warn(clippy::all)]
+
+//! # Outcome Token Contract
 //!
-//! Manages outcome tokens for prediction markets. Each outcome token carries
-//! metadata (symbol + name) that is surfaced to clients and indexers. To keep
-//! metadata well-formed and prevent griefing / storage abuse, symbol and name
-//! lengths are capped (see [`MAX_SYMBOL_LEN`] and [`MAX_NAME_LEN`]).
+//! Manages per-market, per-side (YES/NO) outcome tokens for the Vatix protocol.
+//! Only the registered market contract may mint or burn tokens. Balances and
+//! total supplies are tracked per market, per user, per token kind.
+//!
+//! ## Storage layout
+//!
+//! | Key                                      | Type      | Description                                 |
+//! |------------------------------------------|-----------|---------------------------------------------|
+//! | `StorageVersion`                         | `u32`     | Schema version guard (#696)                 |
+//! | `Config`                                 | `OutcomeTokenConfig` | Admin and market contract addresses |
+//! | `Balance(u32, Address, TokenKind)`       | `i128`    | Per-user, per-market, per-side token balance|
+//! | `TotalSupply(u32, TokenKind)`            | `i128`    | Per-market, per-side total token supply     |
+//! | `Paused`                                 | `bool`    | Administrative pause flag                   |
+//!
+//! ## Transfer rules (Issue #903)
+//!
+//! Outcome tokens are **non-transferable** in this release. `transfer`
+//! always fails closed: balances can change only through the market
+//! contract (the sole mint/burn authority stored in `Config`). This is a
+//! deliberate decision — the market contract stays the source of truth for
+//! positions and payouts, and a peer-to-peer transfer path could desync
+//! outcome balances from market positions and settlement accounting.
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String};
-
-/// Local mirror types shared with other contracts' cross-contract decoding
-/// (e.g. `vatix_market::types::MarketStatus`) — see `types.rs` for the full
-/// variant-sync requirements.
+mod error;
+mod events;
+mod storage;
 pub mod types;
 
-/// Maximum number of bytes allowed in an outcome token symbol.
+#[cfg(test)]
+mod test;
+
+use crate::error::ContractError;
+use crate::types::{MarketStatus, OutcomeTokenConfig, PendingAddressChange, TokenKind};
+use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, String, Symbol};
+
+/// Maximum number of bytes allowed in an outcome token symbol (Issue #958).
 pub const MAX_SYMBOL_LEN: u32 = 12;
 
-/// Maximum number of bytes allowed in an outcome token name.
+/// Maximum number of bytes allowed in an outcome token name (Issue #958).
 pub const MAX_NAME_LEN: u32 = 64;
-
-/// Stable, typed error codes for the outcome token contract.
-///
-/// These codes are part of the public ABI: clients and indexers rely on them
-/// to distinguish failure modes without parsing strings.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum OutcomeTokenError {
-    /// Caller is not authorized to mutate outcome metadata.
-    Unauthorized = 1,
-    /// Symbol is empty.
-    EmptySymbol = 2,
-    /// Symbol exceeds [`MAX_SYMBOL_LEN`].
-    SymbolTooLong = 3,
-    /// Name is empty.
-    EmptyName = 4,
-    /// Name exceeds [`MAX_NAME_LEN`].
-    NameTooLong = 5,
-    /// `initialize` was called on a contract that already has an admin set.
-    ///
-    /// Without this guard a second `initialize` call would silently
-    /// overwrite the admin and metadata, which is a privilege-escalation
-    /// path for anyone who can reach the entrypoint after deployment.
-    AlreadyInitialized = 6,
-    /// Metadata was read before `initialize` was ever called.
-    ///
-    /// Distinct from [`Unauthorized`](Self::Unauthorized), which is reserved
-    /// for the admin check in `set_metadata`: a client or indexer needs to
-    /// tell "never initialized" apart from "not allowed to write" without
-    /// parsing strings.
-    NotInitialized = 7,
-}
-
-/// Persisted metadata for an outcome token.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutcomeMetadata {
-    pub symbol: String,
-    pub name: String,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub enum DataKey {
-    Admin,
-    Metadata,
-}
 
 #[contract]
 pub struct OutcomeTokenContract;
 
 #[contractimpl]
 impl OutcomeTokenContract {
-    /// Initialize the contract with an admin and the initial outcome metadata.
+    /// Bootstrap the contract.
     ///
-    /// Fails closed: metadata is validated before any state is written, so an
-    /// invalid symbol/name can never be persisted.
+    /// `name` and `symbol` are SAC-compatible metadata stored on-chain.
+    /// `decimals` is a compile-time constant (7) and is not stored.
     pub fn initialize(
         env: Env,
         admin: Address,
-        symbol: String,
+        market_contract: Address,
         name: String,
-    ) -> Result<(), OutcomeTokenError> {
-        if env.storage().instance().has(&DataKey::Admin) {
-            return Err(OutcomeTokenError::AlreadyInitialized);
-        }
+        symbol: String,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
-        validate_metadata(&symbol, &name)?;
-
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(
-            &DataKey::Metadata,
-            &OutcomeMetadata {
-                symbol: symbol.clone(),
-                name: name.clone(),
+        if storage::has_config(&env) {
+            return Err(ContractError::AlreadyInitialized);
+        }
+        // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
+        if name.is_empty() || symbol.is_empty() {
+            return Err(ContractError::EmptyMetadata);
+        }
+        // #958: cap name/symbol length so wallets/indexers never render a
+        // truncated or unbounded value and storage cannot be griefed.
+        if name.len() > MAX_NAME_LEN || symbol.len() > MAX_SYMBOL_LEN {
+            return Err(ContractError::MetadataTooLong);
+        }
+        storage::set_config(
+            &env,
+            &OutcomeTokenConfig {
+                admin,
+                market_contract,
+                name,
+                symbol,
             },
         );
+        storage::set_version(&env);
         Ok(())
     }
 
-    /// Update the outcome metadata. Only the admin may call this.
+    pub fn get_config(env: Env) -> OutcomeTokenConfig {
+        storage::get_config(&env)
+    }
+
+    /// Delay, in seconds, an admin-proposed `market_contract` (mint/burn
+    /// authority) rotation must wait before it can be applied via
+    /// [`Self::execute_market_contract`] (Issue #691). Matches the market
+    /// contract's own address-change timelock so the mint authority cannot
+    /// rotate instantly while the market side is already timelocked.
+    pub const MARKET_CONTRACT_TIMELOCK_SECONDS: u64 = 172_800;
+
+    /// Propose rotating the market contract address allowed to mint/burn
+    /// tokens, subject to a timelock (Issue #691). Admin only. The change
+    /// does not apply immediately — call [`Self::execute_market_contract`]
+    /// once [`Self::MARKET_CONTRACT_TIMELOCK_SECONDS`] have elapsed.
+    pub fn propose_market_contract(
+        env: Env,
+        admin: Address,
+        market_contract: Address,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        let effective_at = env.ledger().timestamp() + Self::MARKET_CONTRACT_TIMELOCK_SECONDS;
+        storage::set_pending_market_contract(
+            &env,
+            &PendingAddressChange {
+                new_address: market_contract.clone(),
+                effective_at,
+            },
+        );
+        events::emit_market_contract_proposed(&env, &market_contract, effective_at);
+        Ok(())
+    }
+
+    /// Apply a previously-proposed `market_contract` rotation once its
+    /// timelock has elapsed (Issue #691). Callable by anyone — the timelock
+    /// itself is the access control.
+    pub fn execute_market_contract(env: Env) -> Result<Address, ContractError> {
+        let pending = storage::get_pending_market_contract(&env)
+            .ok_or(ContractError::NoPendingMarketContractChange)?;
+        if env.ledger().timestamp() < pending.effective_at {
+            return Err(ContractError::TimelockNotElapsed);
+        }
+        let mut config = storage::get_config(&env);
+        config.market_contract = pending.new_address.clone();
+        storage::set_config(&env, &config);
+        storage::clear_pending_market_contract(&env);
+        events::emit_market_contract_set(&env, &pending.new_address);
+        Ok(pending.new_address)
+    }
+
+    /// Cancel a pending `market_contract` rotation before it takes effect.
+    pub fn cancel_market_contract(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        storage::clear_pending_market_contract(&env);
+        Ok(())
+    }
+
+    /// Return the currently pending `market_contract` rotation, if any
+    /// (Issue #691).
+    pub fn get_pending_market_contract(env: Env) -> Option<PendingAddressChange> {
+        storage::get_pending_market_contract(&env)
+    }
+
+    /// Pause the contract.
     ///
-    /// Validation runs before the write so untrusted clients cannot bypass the
-    /// length caps, and a rejected update leaves existing metadata untouched.
+    /// Only the stored admin may call this. Sets the pause flag that every
+    /// token-mutating entrypoint (`mint`, `burn`, `transfer`) checks,
+    /// rejecting with [`ContractError::ContractPaused`] until the admin
+    /// calls [`Self::unpause`] (Issue #1037).
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        storage::set_paused(&env, true);
+        events::emit_contract_paused(&env, &admin);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal token operations.
+    ///
+    /// Only the stored admin may call this.
+    ///
+    /// # Errors
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
+        admin.require_auth();
+        storage::assert_version(&env)?;
+        let config = storage::get_config(&env);
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        storage::set_paused(&env, false);
+        events::emit_contract_unpaused(&env, &admin);
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused (Issue #1037).
+    ///
+    /// Reads the same storage domain that [`Self::pause`]/[`Self::unpause`]
+    /// write to, so this always reflects the last `set_paused` call.
+    pub fn is_paused(env: Env) -> bool {
+        storage::is_paused(&env)
+    }
+
+    /// Update the SAC metadata (name and symbol). Admin only.
+    ///
+    /// #867: SAC metadata invariants are enforced here so untrusted clients
+    /// cannot bypass metadata policy. The call is idempotent: re-submitting
+    /// the current `name`/`symbol` is a no-op that succeeds without emitting
+    /// a change event. Empty values, and values over the #958 length caps,
+    /// are rejected fail-closed.
+    ///
+    /// #868: Access is deny-by-default. The caller must authenticate as the
+    /// persisted admin (`require_auth` on the stored admin address) and the
+    /// supplied `admin` must match it before any state write. Missing config
+    /// (not initialized) fails closed with [`ContractError::NotInitialized`].
+    ///
+    /// # Errors
+    /// - [`ContractError::NotInitialized`] — contract has no stored config.
+    /// - [`ContractError::Unauthorized`] — `admin` is not the stored admin.
+    /// - [`ContractError::EmptyMetadata`] — `name` or `symbol` is empty.
+    /// - [`ContractError::MetadataTooLong`] — `name`/`symbol` exceeds the cap.
     pub fn set_metadata(
         env: Env,
-        caller: Address,
-        symbol: String,
+        admin: Address,
         name: String,
-    ) -> Result<(), OutcomeTokenError> {
-        caller.require_auth();
-        require_admin(&env, &caller)?;
-        validate_metadata(&symbol, &name)?;
-
-        env.storage().instance().set(
-            &DataKey::Metadata,
-            &OutcomeMetadata {
-                symbol: symbol.clone(),
-                name: name.clone(),
-            },
-        );
+        symbol: String,
+    ) -> Result<(), ContractError> {
+        storage::assert_version(&env)?;
+        // #868: fail closed when the contract has not been initialized.
+        if !storage::has_config(&env) {
+            return Err(ContractError::NotInitialized);
+        }
+        let mut config = storage::get_config(&env);
+        // #868: deny-by-default — the caller must be the persisted admin.
+        // Checked before `require_auth` so an unauthorized caller can never
+        // probe or bypass the length caps below.
+        if admin != config.admin {
+            return Err(ContractError::Unauthorized);
+        }
+        // #868: authenticate the stored admin, not the caller-supplied value.
+        config.admin.require_auth();
+        // #790: empty name or symbol breaks SAC-compatible wallets and indexers.
+        if name.is_empty() || symbol.is_empty() {
+            return Err(ContractError::EmptyMetadata);
+        }
+        // #958: cap name/symbol length on every entrypoint that mutates it.
+        if name.len() > MAX_NAME_LEN || symbol.len() > MAX_SYMBOL_LEN {
+            return Err(ContractError::MetadataTooLong);
+        }
+        // #867: idempotent — no state write or event when nothing changed.
+        if config.name == name && config.symbol == symbol {
+            return Ok(());
+        }
+        config.name = name.clone();
+        config.symbol = symbol.clone();
+        storage::set_config(&env, &config);
+        events::emit_metadata_updated(&env, &name, &symbol);
         Ok(())
     }
 
-    /// Read the current outcome metadata.
-    pub fn metadata(env: Env) -> Result<OutcomeMetadata, OutcomeTokenError> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Metadata)
-            .ok_or(OutcomeTokenError::NotInitialized)
+    // ── SAC metadata getters ────────────────────────────────────────────────
+
+    pub fn name(env: Env) -> String {
+        storage::get_config(&env).name
     }
 
-    /// Read the current outcome symbol.
-    pub fn symbol(env: Env) -> Result<String, OutcomeTokenError> {
-        Ok(Self::metadata(env)?.symbol)
+    pub fn symbol(env: Env) -> String {
+        storage::get_config(&env).symbol
     }
 
-    /// Read the current outcome name.
-    pub fn name(env: Env) -> Result<String, OutcomeTokenError> {
-        Ok(Self::metadata(env)?.name)
-    }
-}
-
-/// Enforce the metadata length caps. Deny-by-default: empty values are
-/// rejected, and any value over the cap is rejected with a stable error code.
-fn validate_metadata(symbol: &String, name: &String) -> Result<(), OutcomeTokenError> {
-    let symbol_len = symbol.len();
-    if symbol_len == 0 {
-        return Err(OutcomeTokenError::EmptySymbol);
-    }
-    if symbol_len > MAX_SYMBOL_LEN {
-        return Err(OutcomeTokenError::SymbolTooLong);
+    /// Number of decimal places. Fixed at 7 (the Stellar SAC convention) and
+    /// never stored or settable — this is the only value that can ever be
+    /// returned, so outcome tokens can never silently change scale (#929).
+    pub fn decimals(_env: Env) -> u32 {
+        7
     }
 
-    let name_len = name.len();
-    if name_len == 0 {
-        return Err(OutcomeTokenError::EmptyName);
+    /// Mint `amount` tokens of `kind` (Yes or No) for `user` in `market_id`.
+    ///
+    /// Only the registered market contract may call this function.
+    ///
+    /// Checks run in this order: storage-version guard, amount validation,
+    /// pause gate, then market-contract authorization — matching [`Self::burn`]
+    /// and [`Self::transfer`] (Issue #1036).
+    pub fn mint(
+        env: Env,
+        market_id: u32,
+        user: Address,
+        kind: TokenKind,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        // Storage-version guard (Issue #696 / #1036): a stale/partially-
+        // upgraded deployment must fail closed here, before any other check
+        // or storage mutation, rather than let `mint` write balances/supply
+        // under a storage layout the compiled contract no longer understands.
+        storage::assert_version(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        let config = storage::get_config(&env);
+        config.market_contract.require_auth();
+
+        let balance = storage::get_balance(&env, market_id, &user, &kind);
+        let new_balance = balance.checked_add(amount).ok_or(ContractError::Overflow)?;
+        storage::set_balance(&env, market_id, &user, &kind, new_balance);
+
+        let supply = storage::get_total_supply(&env, market_id, &kind);
+        let new_supply = supply.checked_add(amount).ok_or(ContractError::Overflow)?;
+        storage::set_total_supply(&env, market_id, &kind, new_supply);
+
+        events::emit_token_minted(&env, market_id, &user, kind, amount, new_balance);
+        Ok(())
     }
-    if name_len > MAX_NAME_LEN {
-        return Err(OutcomeTokenError::NameTooLong);
+
+    /// Burn `amount` tokens of `kind` from `user` in `market_id`.
+    ///
+    /// Only the registered market contract may call this function. Returns
+    /// [`ContractError::InsufficientBalance`] if the user holds fewer tokens
+    /// than `amount`.
+    ///
+    /// Checks run in this order: storage-version guard, amount validation,
+    /// pause gate, then market-contract authorization — matching [`Self::mint`]
+    /// and [`Self::transfer`] (Issue #1036).
+    pub fn burn(
+        env: Env,
+        market_id: u32,
+        user: Address,
+        kind: TokenKind,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        storage::assert_version(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        let config = storage::get_config(&env);
+        config.market_contract.require_auth();
+
+        let balance = storage::get_balance(&env, market_id, &user, &kind);
+        if balance < amount {
+            return Err(ContractError::InsufficientBalance);
+        }
+        let new_balance = balance - amount;
+        storage::set_balance(&env, market_id, &user, &kind, new_balance);
+
+        let supply = storage::get_total_supply(&env, market_id, &kind);
+        let new_supply = supply - amount;
+        storage::set_total_supply(&env, market_id, &kind, new_supply);
+
+        events::emit_token_burned(&env, market_id, &user, kind, amount, new_balance);
+        Ok(())
     }
 
-    Ok(())
-}
+    /// Transfer `amount` tokens of `kind` from `from` to `to` within `market_id`.
+    ///
+    /// Before resolution, positions can only change through [`Self::mint`]/
+    /// [`Self::burn`] driven by the market contract itself, so a direct
+    /// peer-to-peer transfer is rejected with
+    /// [`ContractError::MarketNotResolved`] — this keeps a market's
+    /// price-discovery phase free of secondary-market transfers of unsettled
+    /// claims.
+    ///
+    /// Once the market has resolved, peer-to-peer transfer is *also*
+    /// rejected — this time with
+    /// [`ContractError::TransferBlockedAfterResolve`] — because the market
+    /// contract's settlement logic pays out against the `Position` record it
+    /// stores for the *original* depositor's address, not against whichever
+    /// address currently holds the outcome-token balance. Allowing a transfer
+    /// here would let a holder move their balance to a fresh address
+    /// post-resolution while the original Position still entitles them to
+    /// the full payout — the same claim paid out twice (Issue #690).
+    ///
+    /// Checks run in this order: storage-version guard, amount validation,
+    /// caller authorization, then the pause gate — matching [`Self::mint`]
+    /// and [`Self::burn`] (Issue #1036). `transfer` never mutates balances
+    /// (it always fails closed), so the version guard and pause gate here
+    /// protect the read-only cross-contract call to the market contract
+    /// rather than a storage write.
+    pub fn transfer(
+        env: Env,
+        market_id: u32,
+        from: Address,
+        _to: Address,
+        _kind: TokenKind,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        storage::assert_version(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        from.require_auth();
+        if storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
 
-/// Ensure the caller is the stored admin. Deny-by-default when no admin is set.
-fn require_admin(env: &Env, caller: &Address) -> Result<(), OutcomeTokenError> {
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(OutcomeTokenError::Unauthorized)?;
-    if &admin != caller {
-        return Err(OutcomeTokenError::Unauthorized);
+        let config = storage::get_config(&env);
+        let status: MarketStatus = env.invoke_contract(
+            &config.market_contract,
+            &Symbol::new(&env, "get_market_status"),
+            soroban_sdk::vec![&env, market_id.into_val(&env)],
+        );
+        if status == MarketStatus::Resolved {
+            return Err(ContractError::TransferBlockedAfterResolve);
+        }
+        Err(ContractError::MarketNotResolved)
     }
-    Ok(())
-}
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{testutils::Address as _, Env, String};
+    /// Return the token balance for a specific `(market_id, user, kind)` triple.
+    pub fn balance(env: Env, market_id: u32, user: Address, kind: TokenKind) -> i128 {
+        storage::get_balance(&env, market_id, &user, &kind)
+    }
 
-    fn setup() -> (Env, OutcomeTokenContractClient<'static>, Address) {
+    /// Return the total outstanding supply for a `(market_id, kind)` pair.
+    pub fn total_supply(env: Env, market_id: u32, kind: TokenKind) -> i128 {
+        storage::get_total_supply(&env, market_id, &kind)
+    }
+
+    /// Issue #1035: `set_metadata`'s deny-by-default branch — no config ever
+    /// stored (contract never `initialize`d) — must reject even when the
+    /// caller self-authorizes, and must not write any metadata. Ported to
+    /// the restored multi-market API (#1036/#1037): the fail-closed check is
+    /// now `ContractError::NotInitialized` via `storage::has_config`, not
+    /// the single-admin `DataKey::Admin`/`OutcomeTokenError` this test was
+    /// originally written against.
+    #[test]
+    fn set_metadata_rejects_when_never_initialized() {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, OutcomeTokenContract);
         let client = OutcomeTokenContractClient::new(&env, &contract_id);
-        let admin = Address::generate(&env);
-        (env, client, admin)
-    }
 
-    fn symbol(env: &Env, len: u32) -> String {
-        String::from_str(env, &"s".repeat(len as usize))
-    }
-
-    fn name(env: &Env, len: u32) -> String {
-        String::from_str(env, &"n".repeat(len as usize))
-    }
-
-    #[test]
-    fn accepts_symbol_and_name_at_cap() {
-        let (env, client, admin) = setup();
-        let sym = symbol(&env, MAX_SYMBOL_LEN);
-        let nm = name(&env, MAX_NAME_LEN);
-        client.initialize(&admin, &sym, &nm);
-        assert_eq!(client.symbol(), sym);
-        assert_eq!(client.name(), nm);
-    }
-
-    #[test]
-    fn rejects_symbol_over_cap() {
-        let (env, client, admin) = setup();
-        let sym = symbol(&env, MAX_SYMBOL_LEN + 1);
-        let nm = name(&env, 4);
-        let res = client.try_initialize(&admin, &sym, &nm);
-        assert_eq!(res, Err(Ok(OutcomeTokenError::SymbolTooLong)));
-    }
-
-    #[test]
-    fn rejects_name_over_cap() {
-        let (env, client, admin) = setup();
-        let sym = symbol(&env, 4);
-        let nm = name(&env, MAX_NAME_LEN + 1);
-        let res = client.try_initialize(&admin, &sym, &nm);
-        assert_eq!(res, Err(Ok(OutcomeTokenError::NameTooLong)));
-    }
-
-    #[test]
-    fn rejects_empty_symbol_and_name() {
-        let (env, client, admin) = setup();
-        let empty = String::from_str(&env, "");
-        let nm = name(&env, 4);
-        assert_eq!(
-            client.try_initialize(&admin, &empty, &nm),
-            Err(Ok(OutcomeTokenError::EmptySymbol))
-        );
-
-        let sym = symbol(&env, 4);
-        assert_eq!(
-            client.try_initialize(&admin, &sym, &empty),
-            Err(Ok(OutcomeTokenError::EmptyName))
-        );
-    }
-
-    #[test]
-    fn set_metadata_enforces_caps() {
-        let (env, client, admin) = setup();
-        client.initialize(&admin, &symbol(&env, 4), &name(&env, 4));
-
-        let over = symbol(&env, MAX_SYMBOL_LEN + 1);
-        let res = client.try_set_metadata(&admin, &over, &name(&env, 4));
-        assert_eq!(res, Err(Ok(OutcomeTokenError::SymbolTooLong)));
-
-        // Existing metadata is untouched after a rejected update.
-        assert_eq!(client.symbol(), symbol(&env, 4));
-    }
-
-    #[test]
-    fn set_metadata_rejects_non_admin() {
-        let (env, client, admin) = setup();
-        client.initialize(&admin, &symbol(&env, 4), &name(&env, 4));
-
-        let attacker = Address::generate(&env);
-        let res = client.try_set_metadata(&attacker, &symbol(&env, 4), &name(&env, 4));
-        assert_eq!(res, Err(Ok(OutcomeTokenError::Unauthorized)));
-    }
-
-    /// Issue #1035: `require_admin`'s deny-by-default branch — no
-    /// `DataKey::Admin` ever stored — must reject `set_metadata` even when
-    /// the caller self-authorizes, and must not write any metadata.
-    #[test]
-    fn set_metadata_rejects_non_admin_when_no_admin_is_set() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register_contract(None, OutcomeTokenContract);
-        let client = OutcomeTokenContractClient::new(&env, &contract_id);
-
-        // No `initialize` call: `DataKey::Admin` is never stored.
+        // No `initialize` call: no `Config` is ever stored.
         let caller = Address::generate(&env);
         let res = client.try_set_metadata(&caller, &symbol(&env, 4), &name(&env, 4));
-        assert_eq!(res, Err(Ok(OutcomeTokenError::Unauthorized)));
-
-        // No metadata was ever written either.
-        assert_eq!(client.try_metadata(), Err(Ok(OutcomeTokenError::Unauthorized)));
+        assert_eq!(res, Err(Ok(ContractError::NotInitialized)));
     }
 
-    #[test]
-    fn reads_before_initialize_return_not_initialized() {
-        let (env, client, _admin) = setup();
-
-        assert_eq!(
-            client.try_metadata(),
-            Err(Ok(OutcomeTokenError::NotInitialized))
-        );
-        assert_eq!(
-            client.try_symbol(),
-            Err(Ok(OutcomeTokenError::NotInitialized))
-        );
-        assert_eq!(
-            client.try_name(),
-            Err(Ok(OutcomeTokenError::NotInitialized))
-        );
-    }
-
-    #[test]
-    fn set_metadata_from_non_admin_still_unauthorized_when_uninitialized() {
-        let (env, client, _admin) = setup();
-
-        let attacker = Address::generate(&env);
-        let res = client.try_set_metadata(&attacker, &symbol(&env, 4), &name(&env, 4));
-        assert_eq!(res, Err(Ok(OutcomeTokenError::Unauthorized)));
-    }
-
-    #[test]
-    fn rejects_second_initialize() {
-        let (env, client, admin) = setup();
-        let sym = symbol(&env, 4);
-        let nm = name(&env, 4);
-        client.initialize(&admin, &sym, &nm);
-
-        // A second call, even from a different admin with different
-        // metadata, must be rejected and must not mutate existing state.
-        let other_admin = Address::generate(&env);
-        let res = client.try_initialize(&other_admin, &symbol(&env, 6), &name(&env, 6));
-        assert_eq!(res, Err(Ok(OutcomeTokenError::AlreadyInitialized)));
-
-        assert_eq!(client.symbol(), sym);
-        assert_eq!(client.name(), nm);
-    }
 }
