@@ -619,3 +619,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-955 -->
 - #955: Settle emits events once only
+
+<!-- handsoff-issue-1042 -->
+- #1042: Market contract: oracle_adapter has no test asserting the disabled-adapter path fails closed
