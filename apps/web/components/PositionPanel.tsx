@@ -6,6 +6,7 @@ import { getPosition, type PositionData } from "@/lib/contract-client";
 import { DepositForm } from "./DepositForm";
 import { WithdrawForm } from "./WithdrawForm";
 import { LoadingSkeleton } from "./LoadingSkeleton";
+import { fromStroops } from "@/lib/stroops";
 
 interface PositionPanelProps {
   /**
@@ -15,10 +16,8 @@ interface PositionPanelProps {
   marketId?: string;
 }
 
-const STROOPS_PER_UNIT = 10_000_000;
-
 function formatShares(stroops: bigint): string {
-  return (Number(stroops) / STROOPS_PER_UNIT).toLocaleString(undefined, {
+  return fromStroops(stroops).toLocaleString(undefined, {
     maximumFractionDigits: 2,
   });
 }
