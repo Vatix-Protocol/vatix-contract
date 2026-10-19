@@ -76,11 +76,18 @@ export class ContractCallError extends Error {
  * Privileged entrypoints that require an explicit role check before
  * invocation. Deny-by-default: anything not listed here is treated as
  * unprivileged, and anything listed here must pass `assertAuthorized`.
+ *
+ * Names must match the generated client functions exported from
+ * `./market`, `./treasury`, and `./resolution` — see
+ * `apps/web/lib/contracts/index.test.ts` which asserts this invariant.
  */
 export const PRIVILEGED_ENTRYPOINTS = [
   'admin_set_paused',
+  'admin_set_fee_bps',
+  'admin_set_treasury',
   'treasury_withdraw',
   'resolution_finalize',
+  'resolve_market',
 ] as const;
 
 export type PrivilegedEntrypoint = (typeof PRIVILEGED_ENTRYPOINTS)[number];
@@ -88,13 +95,19 @@ export type PrivilegedEntrypoint = (typeof PRIVILEGED_ENTRYPOINTS)[number];
 /**
  * Money-path entrypoints that must carry a correlation id and emit
  * ops-safe metrics. Secrets and private keys are never logged.
+ *
+ * Names must match the generated client functions exported from
+ * `./market`, `./outcome-token`, and `./resolution` — see
+ * `apps/web/lib/contracts/index.test.ts` which asserts this invariant.
  */
 export const MONEY_PATH_ENTRYPOINTS = [
   'deposit_collateral',
-  'withdraw_collateral',
-  'swap',
-  'settle',
-  'resolve',
+  'withdraw_unused_collateral',
+  'settle_position',
+  'resolve_market',
+  'mint',
+  'burn',
+  'transfer',
 ] as const;
 
 export type MoneyPathEntrypoint = (typeof MONEY_PATH_ENTRYPOINTS)[number];

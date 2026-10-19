@@ -5,6 +5,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseContractError, marketErrorMessage, MARKET_ERROR_MESSAGES } from "./errors";
+import {
+  PRIVILEGED_ENTRYPOINTS,
+  MONEY_PATH_ENTRYPOINTS,
+  assertAuthorized,
+  ContractCallError,
+} from "./contracts";
+import * as marketClient from "./contracts/market";
+import * as outcomeTokenClient from "./contracts/outcome-token";
 
 test("maps a deposit failure (MarketClosedToDeposits, #6) to clear copy", () => {
   const err = new Error("Error(Contract, #6)");
@@ -63,4 +71,46 @@ test("still surfaces transaction failures unrelated to a contract code", () => {
 test("still surfaces wallet rejections", () => {
   const err = new Error("User denied access");
   assert.equal(parseContractError(err), "Request was rejected in the wallet.");
+});
+
+// Collect the exported function names from a generated client module.
+function exportedFunctionNames(mod: Record<string, unknown>): Set<string> {
+  return new Set(
+    Object.entries(mod)
+      .filter(([, value]) => typeof value === "function")
+      .map(([name]) => name)
+  );
+}
+
+const marketFns = exportedFunctionNames(marketClient as Record<string, unknown>);
+const outcomeTokenFns = exportedFunctionNames(
+  outcomeTokenClient as Record<string, unknown>
+);
+
+// Every entrypoint name must exist on at least one generated client so the
+// deny-by-default guard and money-path logging cannot silently drift.
+function assertEntrypointsExist(names: readonly string[], label: string) {
+  for (const name of names) {
+    assert.ok(
+      marketFns.has(name) || outcomeTokenFns.has(name),
+      `${label} entrypoint "${name}" is not exported by any generated client`
+    );
+  }
+}
+
+test("PRIVILEGED_ENTRYPOINTS are all real generated client functions", () => {
+  assertEntrypointsExist(PRIVILEGED_ENTRYPOINTS, "PRIVILEGED_ENTRYPOINTS");
+});
+
+test("MONEY_PATH_ENTRYPOINTS are all real generated client functions", () => {
+  assertEntrypointsExist(MONEY_PATH_ENTRYPOINTS, "MONEY_PATH_ENTRYPOINTS");
+});
+
+test("assertAuthorized throws ContractCallError for a real privileged entrypoint when role is not admin", () => {
+  const privileged = PRIVILEGED_ENTRYPOINTS[0];
+  assert.ok(privileged, "expected at least one privileged entrypoint");
+  assert.throws(
+    () => assertAuthorized(privileged, "user"),
+    (err: unknown) => err instanceof ContractCallError
+  );
 });

@@ -127,17 +127,25 @@ function logContractEvent(
  * here is treated as privileged and requires an explicit authorization
  * check before it can be invoked from the web client. The server/contract
  * remains the source of truth for balances, swaps, and admin actions.
+ *
+ * Names must match the real entrypoints exposed by the generated clients
+ * (see apps/web/lib/contracts/index.ts).
  */
 const PRIVILEGED_METHODS: ReadonlySet<string> = new Set([
   "mint",
   "burn",
+  "transfer",
   "swap",
   "add_liquidity",
   "remove_liquidity",
-  "deposit",
-  "withdraw",
-  "settle",
-  "resolve",
+  "deposit_collateral",
+  "withdraw_collateral",
+  "withdraw_unused_collateral",
+  "settle_position",
+  "resolve_market",
+  "resolution_finalize",
+  "treasury_withdraw",
+  "admin_set_paused",
   "set_admin",
   "upgrade",
   "pause",
@@ -287,14 +295,11 @@ export async function invokeContract(
       durationMs: Date.now() - startedAt,
     });
 
-    return {
-      hash: response.hash,
-      status: response.status,
-    };
+    return { hash: response.hash, status: response.status };
   } catch (error) {
     if (error instanceof ContractError) {
       logContractEvent("failure", {
-        correlationId,
+        correlationId: error.correlationId,
         contractId,
         method,
         code: error.code,
@@ -320,90 +325,48 @@ export async function invokeContract(
 }
 
 /**
- * Sign a transaction XDR with the Freighter wallet extension.
+ * Sign a transaction XDR with Freighter wallet.
  */
 async function signWithFreighter(
   xdrString: string,
   networkPassphrase: string
 ): Promise<string> {
-  if (typeof window === "undefined" || !window.freighter) {
-    throw new ContractError(
-      ContractErrorCode.WALLET_UNAVAILABLE,
-      "Freighter wallet extension is not available."
-    );
-  }
+  const freighter = await import("@stellar/freighter-api");
 
-  try {
-    const result = await window.freighter.signTransaction(xdrString, {
-      networkPassphrase,
-    });
+  const result = await freighter.signTransaction(xdrString, {
+    networkPassphrase,
+  });
+
+  if (typeof result === "string") {
     return result;
-  } catch (error) {
-    throw new ContractError(
-      ContractErrorCode.SIGNING_REJECTED,
-      error instanceof Error ? error.message : "Signing was rejected.",
-      { cause: error }
-    );
-  }
-}
-
-/**
- * Read-only contract call (simulation only, no signing).
- */
-export async function readContract(
-  contractId: string,
-  method: string,
-  args: xdr.ScVal[] = [],
-  sourceAddress?: string
-): Promise<unknown> {
-  if (!contractId) {
-    throw new ContractError(
-      ContractErrorCode.NOT_CONFIGURED,
-      "Contract ID not configured. Set NEXT_PUBLIC_*_CONTRACT_ID in .env.local"
-    );
   }
 
-  const account = new Account(
-    sourceAddress ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-    "0"
+  if (result && typeof result === "object" && "signedTxXdr" in result) {
+    return (result as { signedTxXdr: string }).signedTxXdr;
+  }
+
+  throw new ContractError(
+    ContractErrorCode.WALLET_UNAVAILABLE,
+    "Freighter did not return a signed transaction."
   );
-
-  const contract = new Contract(contractId);
-  const operation = contract.call(method, ...args);
-
-  const transaction = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(operation)
-    .setTimeout(30)
-    .build();
-
-  const simulated = await server.simulateTransaction(transaction);
-
-  if (rpc.Api.isSimulationError(simulated)) {
-    throw new ContractError(
-      ContractErrorCode.SIMULATION_FAILED,
-      `Simulation failed: ${simulated.error}`
-    );
-  }
-
-  if (rpc.Api.isSimulationSuccess(simulated) && simulated.result) {
-    return scValToNative(simulated.result.retval);
-  }
-
-  return null;
 }
 
 /**
- * Convert a JS value to an ScVal for contract arguments.
+ * Helper to convert a JS value to a Soroban ScVal.
  */
 export function toScVal(value: unknown): xdr.ScVal {
   return nativeToScVal(value);
 }
 
 /**
- * Convert an address string to an ScVal address.
+ * Helper to convert a Soroban ScVal back to a JS value.
+ */
+export function fromScVal(value: xdr.ScVal): unknown {
+  return scValToNative(value);
+}
+
+/**
+ * Helper to convert a Stellar address string to a Soroban Address ScVal.
  */
 export function addressToScVal(address: string): xdr.ScVal {
   return new Address(address).toScVal();
