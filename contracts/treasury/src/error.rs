@@ -90,12 +90,15 @@ mod tests {
         assert_eq!(TreasuryError::InvalidStakeholderWeights as u32, 32);
         assert_eq!(TreasuryError::NotInitialized as u32, 33);
         assert_eq!(TreasuryError::NoStakeholdersConfigured as u32, 34);
+        assert_eq!(TreasuryError::NoPendingStakeholderChange as u32, 35);
         assert_eq!(TreasuryError::CallerNotMarket as u32, 40);
         assert_eq!(TreasuryError::Unauthorized as u32, 41);
         assert_eq!(TreasuryError::AlreadyInitialized as u32, 42);
+        assert_eq!(TreasuryError::InvalidAdmin as u32, 43);
         assert_eq!(TreasuryError::ContractPaused as u32, 50);
         assert_eq!(TreasuryError::EmergencyModeActive as u32, 51);
         assert_eq!(TreasuryError::DepositsPaused as u32, 52);
         assert_eq!(TreasuryError::ArithmeticOverflow as u32, 60);
+        assert_eq!(TreasuryError::TimelockNotElapsed as u32, 70);
     }
 }
