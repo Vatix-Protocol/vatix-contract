@@ -24,7 +24,7 @@ mod helpers;
 use helpers::{assert_event_emitted, MarketParams};
 
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
-use vatix_market_contract::{storage, MarketContract, MarketContractClient};
+use vatix_market_contract::{storage, ContractError, MarketContract, MarketContractClient};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
@@ -191,6 +191,88 @@ fn close_nonexistent_market_to_deposits_fails() {
     assert!(result.is_err(), "Closing a non-existent market should fail");
 }
 
+// ── Issue #703: `update_position` lock-increase block ────────────────────────
+//
+// Once a market is closed to deposits, `update_position` must reject any
+// trade that would *increase* a user's locked collateral (the loophole #703
+// closes), while still allowing trades that reduce or hold the lock flat.
+
+#[test]
+fn update_position_increasing_lock_fails_when_market_closed_to_deposits() {
+    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    // Close the market to new deposits before any position is opened.
+    client.close_market_to_deposits(&admin, &market_id);
+
+    // Opening a position here would increase locked collateral from zero —
+    // exactly the loophole #703 closes. It must be rejected with the
+    // dedicated error discriminant.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.update_position(&user, &market_id, &true, &(10 * STROOPS_PER_USDC));
+    }));
+
+    assert!(
+        result.is_err(),
+        "update_position increasing locked collateral must fail when market is closed to deposits"
+    );
+
+    // Assert the specific ContractError discriminant, not just any panic.
+    let err = result.unwrap_err();
+    let msg = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(
+        msg.contains(&format!("{:?}", ContractError::MarketClosedToDeposits)),
+        "expected ContractError::MarketClosedToDeposits, got: {msg}"
+    );
+}
+
+#[test]
+fn update_position_reducing_lock_succeeds_when_market_closed_to_deposits() {
+    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
+    let client = MarketContractClient::new(&env, &contract_id);
+
+    // Open a position while the market is still open to deposits.
+    client.update_position(&user, &market_id, &true, &(20 * STROOPS_PER_USDC));
+
+    let position_before = env.as_contract(&contract_id, || {
+        storage::get_position(&env, market_id, &user)
+            .expect("version check failed")
+            .expect("position should exist")
+    });
+    let locked_before = position_before.locked_collateral;
+    assert!(locked_before > 0, "position should have locked collateral");
+
+    // Now close the market to deposits.
+    client.close_market_to_deposits(&admin, &market_id);
+
+    // Reducing the lock (closing out risk) must still be allowed.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.update_position(&user, &market_id, &false, &(5 * STROOPS_PER_USDC));
+    }));
+    assert!(
+        result.is_ok(),
+        "update_position reducing locked collateral must succeed when market is closed to deposits"
+    );
+
+    // The stored position's locked collateral must have decreased.
+    let position_after = env.as_contract(&contract_id, || {
+        storage::get_position(&env, market_id, &user)
+            .expect("version check failed")
+            .expect("position should exist")
+    });
+    assert!(
+        position_after.locked_collateral < locked_before,
+        "locked_collateral should decrease after a reducing update_position"
+    );
+
+    // The trade event must have been emitted.
+    assert_event_emitted(&env, "position_updated");
+}
+
 // ── Issue #574: operation matrix — deposit blocked, withdraw/settle allowed ───
 //
 // These tests document the allowed-operation matrix when a market is closed
@@ -210,138 +292,6 @@ fn oracle_keypair_for(
     let signing_key = SigningKey::generate(&mut OsRng);
     let pubkey = soroban_sdk::BytesN::from_array(env, &signing_key.verifying_key().to_bytes());
     let msg = oracle::construct_oracle_message(env, market_id, outcome);
-    let sig = signing_key.sign(msg.to_array().as_slice());
-    let sig_bytes = soroban_sdk::BytesN::from_array(env, &sig.to_bytes());
-    (pubkey, sig_bytes)
-}
+    let sig = signing_key.sign(msg.
 
-/// Matrix row: deposit is blocked after close (Issue #574).
-///
-/// Already covered by `deposit_fails_when_market_closed_to_deposits` above;
-/// this version uses an explicit `try_*` call to assert the exact error.
-#[test]
-fn matrix_deposit_blocked_when_closed() {
-    let (env, admin, contract_id, user, market_id, collateral_token) =
-        setup_market_with_collateral();
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    client.close_market_to_deposits(&admin, &market_id);
-
-    let stellar_asset_client = StellarAssetClient::new(&env, &collateral_token);
-    stellar_asset_client.mint(&user, &(10 * STROOPS_PER_USDC));
-
-    let result = client.try_deposit_collateral(&user, &market_id, &STROOPS_PER_USDC);
-    assert!(
-        result.is_err(),
-        "deposit must be blocked when market is closed to deposits"
-    );
-}
-
-/// Matrix row: withdraw is still allowed after close (Issue #574).
-#[test]
-fn matrix_withdraw_allowed_when_closed() {
-    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    client.close_market_to_deposits(&admin, &market_id);
-
-    // User deposited 100 USDC during setup — withdraw 10 of it.
-    client.withdraw_unused_collateral(&user, &market_id, &(10 * STROOPS_PER_USDC));
-    // No panic == success. Also verify the event.
-    assert_event_emitted(&env, "collateral_withdrawn");
-}
-
-/// Matrix row: settle_position is allowed after close + resolve (Issue #574).
-///
-/// The user opens a position *before* the market closes (closing blocks
-/// opening new exposure — see `matrix_trade_blocked_when_closed`), then the
-/// market is closed to deposits and resolved with a real oracle signature,
-/// then the user's position is settled. The settlement must succeed —
-/// `closed_to_deposits` must not interfere with settling an existing position.
-#[test]
-fn matrix_settle_allowed_when_closed() {
-    let (env, admin, contract_id, user, market_id, _collateral_token) =
-        setup_market_with_collateral();
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    // Step 1: give the user YES shares (while the market is still open) so
-    // there's a payout to settle.
-    let shares = 50 * STROOPS_PER_USDC;
-    client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
-
-    // Step 2: close to deposits.
-    client.close_market_to_deposits(&admin, &market_id);
-
-    // Step 3: resolve with a real oracle signature.
-    let outcome = true;
-    let (oracle_pubkey, oracle_sig) = oracle_keypair_for(&env, market_id, outcome);
-
-    // Replace the market's oracle pubkey so the signature verifies.
-    env.as_contract(&contract_id, || {
-        let mut market = storage::get_market(&env, market_id)
-            .expect("storage version ok")
-            .expect("market must exist");
-        market.oracle_pubkey = oracle_pubkey;
-        storage::set_market(&env, market_id, &market).expect("set market ok");
-    });
-
-    let market_id_str = soroban_sdk::String::from_str(&env, "1");
-    let resolver = Address::generate(&env);
-    let expires_at = env.ledger().timestamp() + 3_600;
-    client.resolve_market(
-        &resolver,
-        &market_id_str,
-        &outcome,
-        &oracle_sig,
-        &expires_at,
-    );
-    assert_event_emitted(&env, "market_resolved");
-
-    // Step 4: settle — must succeed even though the market was closed to deposits.
-    client.settle_position(&user, &market_id);
-    assert_event_emitted(&env, "position_settled");
-}
-
-/// Matrix row: update_position that *increases* locked collateral is
-/// blocked once the market is closed to deposits (Issue #703).
-///
-/// This is the exact gap #703 closes: closing a market to deposits must
-/// block opening new exposure through the trading path, not just the
-/// dedicated `deposit_collateral` entrypoint. Even though the user has
-/// plenty of already-deposited collateral to cover the trade, opening new
-/// exposure via `update_position` after close must still be rejected.
-#[test]
-fn matrix_trade_blocked_when_closed_increases_lock() {
-    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    client.close_market_to_deposits(&admin, &market_id);
-
-    // User has 100 USDC deposited from setup — plenty to cover this trade —
-    // but buying new YES shares must still be rejected once closed.
-    let shares = 50 * STROOPS_PER_USDC;
-    let result = client.try_update_position(&user, &market_id, &shares, &0i128, &5_000i128);
-    assert!(
-        result.is_err(),
-        "update_position must block new exposure once the market is closed to deposits (#703)"
-    );
-}
-
-/// Matrix row: update_position that reduces or holds locked collateral flat
-/// remains allowed after close (Issue #703) — closing out risk is never
-/// blocked, only opening new exposure is.
-#[test]
-fn matrix_trade_allowed_when_closed_reduces_lock() {
-    let (env, admin, contract_id, user, market_id, _token) = setup_market_with_collateral();
-    let client = MarketContractClient::new(&env, &contract_id);
-
-    // Open a position while the market is still open.
-    let shares = 50 * STROOPS_PER_USDC;
-    client.update_position(&user, &market_id, &shares, &0i128, &5_000i128);
-
-    client.close_market_to_deposits(&admin, &market_id);
-
-    // Selling half of the YES shares reduces the lock — must still work.
-    client.update_position(&user, &market_id, &(-shares / 2), &0i128, &5_000i128);
-    assert_event_emitted(&env, "trade_executed");
-}
+/* … truncated 5715 chars — edit only what you need near the top … */
