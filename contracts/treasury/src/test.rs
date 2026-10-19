@@ -467,4 +467,28 @@ fn distribute_fees_conserves_total_like_the_proptest_model() {
     assert!(remaining > 0, "expected a nonzero floor-division remainder");
 }
 
+// ── Issue #1110: withdraw_fees returns InsufficientBalance, not a transfer panic ──
+
+/// Requesting more than the treasury's custodied `token` balance must be
+/// rejected with `TreasuryError::InsufficientBalance` by `withdraw_fees`'s
+/// own balance check, before the token transfer is ever attempted — not
+/// surface as a panic from `token::Client::transfer`.
+#[test]
+fn withdraw_fees_rejects_amount_above_balance_with_insufficient_balance_error() {
+    let s = setup();
+    let funded = 1_000i128;
+    fund_treasury_via_fee(&s, funded);
+
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &(funded + 1))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InsufficientBalance);
+
+    // State and recipient balance are untouched by the rejected call.
+    assert_eq!(s.client.token_balance(&s.token), funded);
+    assert_eq!(balance(&s.env, &s.token, &recipient), 0);
+}
 }
