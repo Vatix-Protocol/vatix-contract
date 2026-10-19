@@ -135,6 +135,25 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_payout_losing_side_returns_zero() {
+        let env = Env::default();
+        let pos = create_test_position(&env, 100, 30, false);
+
+        assert_eq!(calculate_payout(&pos, true), pos.yes_shares);
+        assert_eq!(calculate_payout(&pos, false), pos.no_shares);
+
+        // Losing side contributes nothing: a position with a non-zero
+        // no_shares count must still pay out exactly 0 when yes wins,
+        // and vice versa. This pins the branch against a regression
+        // that swaps the arms or sums both share counts.
+        let yes_only = create_test_position(&env, 50, 0, false);
+        assert_eq!(calculate_payout(&yes_only, false), 0);
+
+        let no_only = create_test_position(&env, 0, 75, false);
+        assert_eq!(calculate_payout(&no_only, true), 0);
+    }
+
+    #[test]
     fn test_calculate_payout_zero_shares() {
         let env = Env::default();
         let pos = create_test_position(&env, 0, 0, false);
