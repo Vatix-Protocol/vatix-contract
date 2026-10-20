@@ -31,6 +31,16 @@ export class DarkModeErrorBoundary extends React.Component<
     }
   }
 
+  /**
+   * Clears the error state so the subtree is re-mounted/re-rendered on the
+   * next render. Without this, once an error is caught the boundary stays
+   * stuck showing the fallback for the rest of the session (#1103), since
+   * nothing ever flips `hasError` back to false.
+   */
+  reset = (): void => {
+    this.setState({ hasError: false, error: null });
+  };
+
   render(): React.ReactNode {
     if (this.state.hasError) {
       return (
@@ -41,6 +51,13 @@ export class DarkModeErrorBoundary extends React.Component<
           <p className="mt-1 text-sm text-slate-700 dark:text-slate-300">
             An error occurred while applying dark mode styles. Using fallback styling.
           </p>
+          <button
+            type="button"
+            onClick={this.reset}
+            className="mt-3 text-sm font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+          >
+            Retry
+          </button>
         </div>
       );
     }
