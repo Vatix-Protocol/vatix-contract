@@ -711,7 +711,9 @@ mod tests {
     /// happen after the position has been marked settled. This asserts the
     /// CEI ordering end-to-end: after `settle_position` succeeds, both the
     /// `is_settled` flag is set and the outcome-token balances are zero, and
-    /// a replayed settle is rejected rather than re-burning.
+    /// a replayed settle is rejected rather than re-burning. Pins the
+    /// ordering documented on `burn_settled_outcome_tokens` and in
+    /// `settle_position`'s CEI comment.
     #[test]
     fn test_settle_position_burns_outcome_tokens_after_marking_settled() {
         use ed25519_dalek::{Signer, SigningKey};
