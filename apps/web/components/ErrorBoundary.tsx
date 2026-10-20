@@ -25,11 +25,22 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    // Always report caught errors, in every environment, so production
+    // failures are never silently swallowed. In development we also log the
+    // extra component stack to speed up debugging.
+    console.error("[ErrorBoundary]", {
+      scope: "error-boundary",
+      message: error.message,
+      stack: error.stack,
+    });
     if (process.env.NODE_ENV === "development") {
-      console.error("Error caught by boundary:", error);
       console.error("Error info:", errorInfo);
     }
   }
+
+  resetErrorBoundary = (): void => {
+    this.setState({ hasError: false, error: null });
+  };
 
   render(): React.ReactNode {
     if (this.state.hasError) {
@@ -42,16 +53,25 @@ export class ErrorBoundary extends React.Component<
             Something went wrong
           </p>
           <p className="mt-1 text-sm text-rose-800 dark:text-rose-300">
-            We encountered an error while rendering this component. Please try
-            refreshing the page.
+            We encountered an error while rendering this component. You can
+            try again or refresh the page.
           </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-3 rounded px-3 py-1 text-sm font-medium text-rose-700 hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:text-rose-300 dark:hover:bg-rose-900 dark:focus:ring-offset-rose-950"
-            aria-label="Refresh page to recover from error"
-          >
-            Refresh Page
-          </button>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={this.resetErrorBoundary}
+              className="rounded px-3 py-1 text-sm font-medium text-rose-700 hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:text-rose-300 dark:hover:bg-rose-900 dark:focus:ring-offset-rose-950"
+              aria-label="Try again"
+            >
+              Try Again
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="rounded px-3 py-1 text-sm font-medium text-rose-700 hover:bg-rose-100 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:text-rose-300 dark:hover:bg-rose-900 dark:focus:ring-offset-rose-950"
+              aria-label="Refresh page to recover from error"
+            >
+              Refresh Page
+            </button>
+          </div>
         </div>
       );
     }

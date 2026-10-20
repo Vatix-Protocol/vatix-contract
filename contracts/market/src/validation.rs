@@ -19,28 +19,6 @@ pub const MAX_MARKET_TITLE_LENGTH: u32 = 500;
 /// CIDv1, an `ar://` tx id, or an https URL; anything longer is rejected.
 pub const MAX_METADATA_URI_LENGTH: u32 = 512;
 
-/// Guard function to validate input before processing.
-///
-/// This is a general-purpose validation guard that can be used in integration tests
-/// and contract entry points to ensure invalid inputs are rejected early.
-///
-/// # Arguments
-/// * `input` - The input value to validate
-///
-/// # Returns
-/// `Ok(())` if input is valid, `Err(ContractError::InvalidQuantity)` if invalid
-///
-/// # Example
-/// ```ignore
-/// validation::validate_input_guard(amount)?;
-/// ```
-pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
-    if input <= 0 {
-        return Err(ContractError::InvalidQuantity);
-    }
-    Ok(())
-}
-
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
@@ -667,26 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_input_guard_valid() {
-        assert!(validate_input_guard(1).is_ok());
-        assert!(validate_input_guard(100).is_ok());
-        assert!(validate_input_guard(i128::MAX / 2).is_ok());
-    }
-
-    #[test]
-    fn test_validate_input_guard_invalid() {
-        assert_eq!(validate_input_guard(0), Err(ContractError::InvalidQuantity));
-        assert_eq!(
-            validate_input_guard(-1),
-            Err(ContractError::InvalidQuantity)
-        );
-        assert_eq!(
-            validate_input_guard(-100),
-            Err(ContractError::InvalidQuantity)
-        );
-    }
-
-    #[test]
     fn test_calculate_fee_valid() {
         assert_eq!(calculate_fee(1000, 100).unwrap(), 10); // 1% of 1000
         assert_eq!(calculate_fee(10000, 500).unwrap(), 500); // 5% of 10000
@@ -739,6 +697,30 @@ mod tests {
         assert_eq!(
             validate_deposit_amount(0),
             Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_end_time_exactly_at_one_year_boundary_passes() {
+        let current_time = 1000;
+        // end_time == current_time + ONE_YEAR_SECONDS exactly: the check is
+        // `end_time > current_time + ONE_YEAR_SECONDS`, so the boundary value
+        // itself is still accepted (inclusive upper bound).
+        let end_time = current_time + 31_536_000;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+    }
+
+    #[test]
+    fn test_end_time_one_second_past_one_year_boundary_fails() {
+        let current_time = 1000;
+        let end_time = current_time + 31_536_000 + 1;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert_eq!(
+            validate_market_creation(&question, end_time, current_time),
+            Err(ContractError::InvalidTimestamp)
         );
     }
 
