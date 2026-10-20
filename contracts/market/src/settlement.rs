@@ -806,7 +806,8 @@ mod tests {
     /// guard gets a chance to fire against the now-burned/zeroed token
     /// balances of a settled position. This is only meaningfully exercised
     /// when an outcome-token contract is actually wired up, so the parity
-    /// guard is non-vacuous.
+    /// guard is non-vacuous. Confirms `validate_settlement_eligibility` is
+    /// called ahead of `assert_position_token_parity` in `compute_settlement`.
     #[test]
     fn test_compute_settlement_already_settled_wins_over_parity_guard() {
         use ed25519_dalek::{Signer, SigningKey};
