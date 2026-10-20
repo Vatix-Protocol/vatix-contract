@@ -36,7 +36,12 @@ fn find_fee_collected_event(env: &Env) -> Option<(std::vec::Vec<Val>, Val)> {
         env.events().all().iter().collect();
     for (_contract, topics, data) in all.into_iter().rev() {
         let topics: std::vec::Vec<Val> = topics.iter().collect();
-        let first: Symbol = topics[0].clone().into_val(env);
+        let Some(first_topic) = topics.first() else {
+            // Skip events with an empty topic vector (#1098): indexing
+            // topics[0] unconditionally would panic on such an event.
+            continue;
+        };
+        let first: Symbol = first_topic.clone().into_val(env);
         if first == target {
             return Some((topics, data));
         }
