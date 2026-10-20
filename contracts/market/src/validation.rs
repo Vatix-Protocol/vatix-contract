@@ -125,16 +125,30 @@ pub fn validate_market_creation(
 /// validation::validate_metadata_uri(&uri)?;
 /// ```
 pub fn validate_metadata_uri(metadata_uri: &Option<String>) -> Result<(), ContractError> {
+    // Fixed-size scratch buffer used to stream the URI out of the host in
+    // chunks. This is intentionally *not* sized from `MAX_METADATA_URI_LENGTH`:
+    // that constant is a tunable application-level cap, while this buffer's
+    // size is a stack budget. Decoupling them means raising the cap can
+    // never silently grow the stack allocation here.
+    const SCRATCH_LEN: usize = 64;
+
     if let Some(uri) = metadata_uri {
         let len = uri.len();
         if len == 0 || len > MAX_METADATA_URI_LENGTH {
             return Err(ContractError::InvalidMetadataUri);
         }
-        let mut buf = [0u8; MAX_METADATA_URI_LENGTH as usize];
-        let bytes = &mut buf[..len as usize];
-        uri.copy_into_slice(bytes);
-        if !bytes.iter().all(u8::is_ascii_graphic) {
-            return Err(ContractError::InvalidMetadataUri);
+        let mut buf = [0u8; SCRATCH_LEN];
+        let mut offset = 0usize;
+        let len = len as usize;
+        while offset < len {
+            let chunk_len = core::cmp::min(SCRATCH_LEN, len - offset);
+            let chunk = &mut buf[..chunk_len];
+            uri.slice(offset as u32..(offset + chunk_len) as u32)
+                .copy_into_slice(chunk);
+            if !chunk.iter().all(u8::is_ascii_graphic) {
+                return Err(ContractError::InvalidMetadataUri);
+            }
+            offset += chunk_len;
         }
     }
     Ok(())
