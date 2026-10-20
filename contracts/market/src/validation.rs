@@ -19,28 +19,6 @@ pub const MAX_MARKET_TITLE_LENGTH: u32 = 500;
 /// CIDv1, an `ar://` tx id, or an https URL; anything longer is rejected.
 pub const MAX_METADATA_URI_LENGTH: u32 = 512;
 
-/// Guard function to validate input before processing.
-///
-/// This is a general-purpose validation guard that can be used in integration tests
-/// and contract entry points to ensure invalid inputs are rejected early.
-///
-/// # Arguments
-/// * `input` - The input value to validate
-///
-/// # Returns
-/// `Ok(())` if input is valid, `Err(ContractError::InvalidQuantity)` if invalid
-///
-/// # Example
-/// ```ignore
-/// validation::validate_input_guard(amount)?;
-/// ```
-pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
-    if input <= 0 {
-        return Err(ContractError::InvalidQuantity);
-    }
-    Ok(())
-}
-
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
@@ -580,26 +558,6 @@ mod tests {
         assert_eq!(
             validate_market_price(10_001),
             Err(ContractError::InvalidPrice)
-        );
-    }
-
-    #[test]
-    fn test_validate_input_guard_valid() {
-        assert!(validate_input_guard(1).is_ok());
-        assert!(validate_input_guard(100).is_ok());
-        assert!(validate_input_guard(i128::MAX / 2).is_ok());
-    }
-
-    #[test]
-    fn test_validate_input_guard_invalid() {
-        assert_eq!(validate_input_guard(0), Err(ContractError::InvalidQuantity));
-        assert_eq!(
-            validate_input_guard(-1),
-            Err(ContractError::InvalidQuantity)
-        );
-        assert_eq!(
-            validate_input_guard(-100),
-            Err(ContractError::InvalidQuantity)
         );
     }
 
