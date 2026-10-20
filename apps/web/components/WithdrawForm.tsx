@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal, getPosition } from "@/lib/contract-client";
 import { TxResult } from "@/components/TxResult";
@@ -25,9 +25,9 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [available, setAvailable] = useState<bigint | null>(null);
 
-  useEffect(() => {
+  const refreshAvailable = useCallback(() => {
     if (address && marketId && !isNaN(parseInt(marketId))) {
-      getPosition(parseInt(marketId), address)
+      return getPosition(parseInt(marketId), address)
         .then((pos) => {
           if (pos) {
             setAvailable(pos.totalDeposited - pos.lockedCollateral);
@@ -38,8 +38,13 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
         .catch(console.error);
     } else {
       setAvailable(null);
+      return Promise.resolve();
     }
   }, [address, marketId]);
+
+  useEffect(() => {
+    void refreshAvailable();
+  }, [refreshAvailable]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,6 +90,11 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
 
       setTxHash(result.hash);
       setAmount("");
+
+      // Refetch this form's own `available` balance so it reflects the
+      // withdrawal immediately, rather than staying stale until marketId
+      // or address changes (#1101).
+      void refreshAvailable();
 
       // Notify parent so it can refetch the position and reflect the updated
       // on-chain state without requiring a full page reload (#591).
