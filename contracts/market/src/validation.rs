@@ -660,6 +660,30 @@ mod tests {
     }
 
     #[test]
+    fn test_end_time_exactly_at_one_year_boundary_passes() {
+        let current_time = 1000;
+        // end_time == current_time + ONE_YEAR_SECONDS exactly: the check is
+        // `end_time > current_time + ONE_YEAR_SECONDS`, so the boundary value
+        // itself is still accepted (inclusive upper bound).
+        let end_time = current_time + 31_536_000;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+    }
+
+    #[test]
+    fn test_end_time_one_second_past_one_year_boundary_fails() {
+        let current_time = 1000;
+        let end_time = current_time + 31_536_000 + 1;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert_eq!(
+            validate_market_creation(&question, end_time, current_time),
+            Err(ContractError::InvalidTimestamp)
+        );
+    }
+
+    #[test]
     fn test_end_time_no_overflow_near_u64_max() {
         assert!(validate_end_time(u64::MAX, u64::MAX - 1).is_ok());
     }
