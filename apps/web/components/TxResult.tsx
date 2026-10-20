@@ -59,9 +59,11 @@ interface TxResultProps {
   hash: string;
   /** Optional label shown before the link (defaults to "Transaction"). */
   label?: string;
+  /** Additional context about the confirmed transaction. */
+  note?: string;
 }
 
-export function TxResult({ hash, label = "Transaction" }: TxResultProps) {
+export function TxResult({ hash, label = "Transaction", note }: TxResultProps) {
   const explorerUrl = buildExplorerTxUrl(EXPLORER_BASE, hash);
   const trimmed = hash.trim();
   const short = `${trimmed.slice(0, 8)}…${trimmed.slice(-8)}`;
@@ -87,6 +89,7 @@ export function TxResult({ hash, label = "Transaction" }: TxResultProps) {
         // the explorer root that would look like a successful confirmation.
         <span data-testid="tx-hash-plain">{trimmed || "unknown"}</span>
       )}
+      {note && <span className="block mt-1">{note}</span>}
     </p>
   );
 }

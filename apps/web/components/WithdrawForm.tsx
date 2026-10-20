@@ -1,5 +1,6 @@
 "use client";
 
+import { xdr } from "@stellar/stellar-sdk";
 import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal, getPosition } from "@/lib/contract-client";
@@ -24,6 +25,7 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [feeRetained, setFeeRetained] = useState(false);
   const [available, setAvailable] = useState<bigint | null>(null);
 
   const refreshAvailable = useCallback(() => {
@@ -62,6 +64,7 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
     setIsLoading(true);
     setError(null);
     setTxHash(null);
+    setFeeRetained(false);
 
     try {
       // Convert amount to stroops using BigInt-safe math so precision isn't
@@ -95,9 +98,16 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
         MARKET_CONTRACT_ID,
         "withdraw_unused_collateral",
         args,
-        address
+        address,
+        { waitForConfirmation: true },
       );
 
+      setFeeRetained(result.events?.some((event) =>
+        event.contractId === MARKET_CONTRACT_ID && event.topics.some((topic) =>
+          topic.switch() === xdr.ScValType.scvSymbol() &&
+          topic.sym().toString() === "fee_retained_no_treasury"
+        )
+      ) ?? false);
       setTxHash(result.hash);
       setAmount("");
 
@@ -164,7 +174,9 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
             {error}
           </p>
         )}
-        {txHash && <TxResult hash={txHash} label="Withdrawal" />}
+        {txHash && <TxResult hash={txHash} label="Withdrawal" note={feeRetained
+          ? "A fee was retained by the protocol because no treasury is currently registered."
+          : undefined} />}
         <button
           type="submit"
           disabled={isLoading || !amount || !address}

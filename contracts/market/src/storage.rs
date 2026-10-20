@@ -412,3 +412,187 @@ pub fn get_market_adapter_config(
 ) -> Option<crate::types::MarketAdapterConfig> {
     None
 }
+
+// Storage required by the deposit/trade/withdraw implementations. Variant
+// names preserve the pre-#1003 money-path key encodings.
+#[soroban_sdk::contracttype]
+enum MoneyPathKey {
+    Market(u32),
+    DepositLock,
+    CollateralBalance(Address),
+    TotalLockedCollateral(Address),
+    MarketParticipants(u32),
+    LastDepositTime(u32, Address),
+    FeeRateBps,
+    Treasury,
+    EmergencyMode,
+    Operator(Address, Address),
+    ConsumedRequest(Address, u64),
+}
+
+pub fn has_admin(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .has(&crate::StorageKey::Admin.symbol())
+}
+
+pub fn get_market(
+    env: &Env,
+    id: u32,
+) -> Result<Option<crate::types::Market>, crate::error::ContractError> {
+    Ok(env.storage().persistent().get(&MoneyPathKey::Market(id)))
+}
+
+pub fn set_market(
+    env: &Env,
+    id: u32,
+    market: &crate::types::Market,
+) -> Result<(), crate::error::ContractError> {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::Market(id), market);
+    Ok(())
+}
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&crate::StorageKey::Paused.symbol())
+        .unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage()
+        .instance()
+        .set(&crate::StorageKey::Paused.symbol(), &paused);
+}
+
+pub fn get_emergency_mode(env: &Env) -> crate::types::EmergencyMode {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::EmergencyMode)
+        .unwrap_or(crate::types::EmergencyMode::Normal)
+}
+
+pub fn is_deposit_locked(env: &Env) -> bool {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::DepositLock)
+        .unwrap_or(false)
+}
+
+pub fn set_deposit_locked(env: &Env, locked: bool) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::DepositLock, &locked);
+}
+
+pub fn get_collateral_balance(env: &Env, user: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::CollateralBalance(user.clone()))
+        .unwrap_or(0)
+}
+
+pub fn set_collateral_balance(env: &Env, user: &Address, balance: i128) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::CollateralBalance(user.clone()), &balance);
+}
+
+pub fn debit_collateral_balance(env: &Env, user: &Address, amount: i128) {
+    // Legacy positions may predate the shared collateral ledger.
+    set_collateral_balance(
+        env,
+        user,
+        get_collateral_balance(env, user)
+            .saturating_sub(amount)
+            .max(0),
+    );
+}
+
+pub fn get_total_locked_collateral(env: &Env, user: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::TotalLockedCollateral(user.clone()))
+        .unwrap_or(0)
+}
+
+pub fn set_total_locked_collateral(env: &Env, user: &Address, value: i128) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::TotalLockedCollateral(user.clone()), &value);
+}
+
+pub fn add_market_participant(env: &Env, id: u32, user: &Address) {
+    let key = MoneyPathKey::MarketParticipants(id);
+    let mut participants: soroban_sdk::Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+    if !participants.contains(user) && participants.len() < 1000 {
+        participants.push_back(user.clone());
+        env.storage().persistent().set(&key, &participants);
+    }
+}
+
+pub fn get_last_deposit_time(env: &Env, id: u32, user: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::LastDepositTime(id, user.clone()))
+}
+
+pub fn set_last_deposit_time(env: &Env, id: u32, user: &Address, timestamp: u64) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::LastDepositTime(id, user.clone()), &timestamp);
+}
+
+pub fn get_fee_rate_bps(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::FeeRateBps)
+        .unwrap_or(0)
+}
+
+pub fn set_fee_rate_bps(env: &Env, rate: i128) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::FeeRateBps, &rate);
+}
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&MoneyPathKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::Treasury, treasury);
+}
+
+pub fn is_fee_waived(env: &Env, user: &Address) -> bool {
+    get_fee_waivers(env).contains(user)
+}
+
+pub fn is_operator(env: &Env, owner: &Address, caller: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::Operator(owner.clone(), caller.clone()))
+        .unwrap_or(false)
+}
+
+pub fn is_request_consumed(env: &Env, owner: &Address, request: u64) -> bool {
+    env.storage()
+        .persistent()
+        .get(&MoneyPathKey::ConsumedRequest(owner.clone(), request))
+        .unwrap_or(false)
+}
+
+pub fn mark_request_consumed(env: &Env, owner: &Address, request: u64) {
+    env.storage().persistent().set(
+        &MoneyPathKey::ConsumedRequest(owner.clone(), request),
+        &true,
+    );
+}

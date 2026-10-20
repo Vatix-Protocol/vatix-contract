@@ -225,9 +225,15 @@ export function isValidStellarAddress(address: string): boolean {
 /**
  * Contract invocation result
  */
+export interface InvocationEvent {
+  contractId: string;
+  topics: xdr.ScVal[];
+}
+
 export interface InvokeResult {
   hash: string;
   status: string;
+  events?: InvocationEvent[];
 }
 
 /**
@@ -237,13 +243,15 @@ export interface InvokeResult {
  * @param method - The contract method name
  * @param args - Array of XDR-encoded arguments for the method
  * @param sourceAddress - The user's Stellar address (from Freighter)
- * @returns Transaction hash and status
+ * @param options Set waitForConfirmation to read committed contract events.
+ * @returns Transaction hash, status, and confirmed events when requested
  */
 export async function invokeContract(
   contractId: string,
   method: string,
   args: xdr.ScVal[],
-  sourceAddress: string
+  sourceAddress: string,
+  options: { waitForConfirmation?: boolean } = {},
 ): Promise<InvokeResult> {
   const correlationId = generateCorrelationId();
   const startedAt = Date.now();
@@ -324,6 +332,10 @@ export async function invokeContract(
       );
     }
 
+    const result = options.waitForConfirmation
+      ? await confirmContractTransaction(response.hash)
+      : { hash: response.hash, status: response.status };
+
     logContractEvent("success", {
       correlationId,
       contractId,
@@ -331,7 +343,7 @@ export async function invokeContract(
       durationMs: Date.now() - startedAt,
     });
 
-    return { hash: response.hash, status: response.status };
+    return result;
   } catch (error) {
     if (error instanceof ContractError) {
       logContractEvent("failure", {
@@ -374,4 +386,25 @@ async function signWithFreighter(
   });
 
   return result;
+}
+
+/** Read events only from a successfully committed transaction, never simulation. */
+export async function confirmContractTransaction(hash: string): Promise<InvokeResult> {
+  const transaction = await server.pollTransaction(hash, { attempts: 30 });
+  if (transaction.status === rpc.Api.GetTransactionStatus.FAILED) {
+    throw new ContractError(ContractErrorCode.TRANSACTION_FAILED, "Transaction failed on-chain.");
+  }
+  if (transaction.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new ContractError(
+      ContractErrorCode.DEPENDENCY_UNAVAILABLE,
+      `Transaction ${hash} is still pending. Check its status before submitting again.`,
+    );
+  }
+  const events = transaction.events.contractEventsXdr.flat()
+    .filter((event) => event.type() === xdr.ContractEventType.contract() && event.contractId() !== null)
+    .map((event) => ({
+      contractId: Address.fromScAddress(xdr.ScAddress.scAddressTypeContract(event.contractId()!)).toString(),
+      topics: event.body().v0().topics(),
+    }));
+  return { hash, status: transaction.status, events };
 }

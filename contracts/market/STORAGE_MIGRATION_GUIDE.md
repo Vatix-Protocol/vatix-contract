@@ -650,3 +650,22 @@ behind a feature flag or kill switch:
 ---
 
 **Last Updated:** See git history for this file.
+
+### Deposit/trade/withdraw module reactivation (#1080, #1081)
+
+The executable regression tests restore the deposit, position and withdrawal
+module graph removed in #1003. Their storage accessors use the private
+`MoneyPathKey` contract enum in `src/storage.rs`. The existing root
+`StorageKey` symbols, position keys, and version marker remain unchanged.
+
+The restored persistent keys are `Market(u32)`, `DepositLock`,
+`CollateralBalance(Address)`, `TotalLockedCollateral(Address)`,
+`MarketParticipants(u32)`, `LastDepositTime(u32, Address)`, `FeeRateBps`,
+`Treasury`, and `EmergencyMode`. These retain their pre-#1003 variant names.
+`Operator(Address, Address)` and `ConsumedRequest(Address, u64)` support the
+position module's authorization/replay checks; no operator grant entrypoint is
+exposed by this reactivation.
+
+This is not a migration from a historical deployment: the reduced contract
+already uses a different position/version layout. Validate any deployed-state
+migration separately before upgrading a historical contract.

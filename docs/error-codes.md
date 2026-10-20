@@ -135,3 +135,16 @@ as `1` in the treasury contract. Always decode with the contract id.
 
 See the doc comments on each variant in the source for when it is returned.
 When adding a variant, update this table in the same PR.
+
+### Reactivated market money-path guards (#1080, #1081)
+
+The restored guards use previously unused market error codes:
+
+| Code | Variant |
+| ---: | --- |
+| 46 | `ContractPaused` |
+| 47 | `EmergencyModeActive` |
+| 48 | `ReentrantCall` |
+
+Uninitialized money-path calls use the existing `Unauthorized = 40` code.
+No existing discriminants are renumbered.
