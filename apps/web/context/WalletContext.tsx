@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -84,6 +85,15 @@ export interface WalletState {
   expectedNetwork: StellarNetwork;
   connect: () => Promise<void>;
   disconnect: () => void;
+  /**
+   * Re-verify the wallet's current network against `expectedNetwork`.
+   *
+   * Called automatically on window focus so a mid-session network switch in
+   * Freighter is detected, and exposed so callers can trigger a re-check
+   * explicitly. Fails closed: on a mismatch the address and network are
+   * cleared and `connectErrorCode` is set.
+   */
+  refreshNetwork: () => Promise<void>;
 }
 
 const WalletContext = createContext<WalletState | null>(null);
@@ -104,6 +114,89 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setNetwork(null);
   }, []);
 
+  /**
+   * Read the wallet's current network passphrase and check it against the
+   * network this app is configured for.
+   *
+   * Returns the verified network on success, or `null` after failing closed:
+   * an unrecognized passphrase yields `WALLET_NETWORK_UNKNOWN` and a
+   * recognized-but-different passphrase yields `WALLET_NETWORK_MISMATCH`.
+   * In both failure cases the address and network are cleared so no signing
+   * action can be offered against the wrong network.
+   */
+  const verifyNetwork = useCallback(async (): Promise<StellarNetwork | null> => {
+    let reportedPassphrase: string | null = null;
+    try {
+      const { getNetwork } = await import("@stellar/freighter-api");
+      const networkResult = await getNetwork();
+      if (networkResult && !networkResult.error) {
+        reportedPassphrase = networkResult.networkPassphrase ?? networkResult.network ?? null;
+      }
+    } catch {
+      reportedPassphrase = null;
+    }
+
+    const reportedNetwork = resolveNetworkFromPassphrase(reportedPassphrase);
+    if (!reportedNetwork) {
+      fail(
+        "WALLET_NETWORK_UNKNOWN",
+        `Could not determine the Freighter network. Expected ${expectedNetwork}. Switch networks in Freighter and retry.`,
+      );
+      return null;
+    }
+
+    if (reportedNetwork !== expectedNetwork) {
+      fail(
+        "WALLET_NETWORK_MISMATCH",
+        `Freighter is on ${reportedNetwork} but this app requires ${expectedNetwork}. Switch networks in Freighter and retry.`,
+      );
+      return null;
+    }
+
+    return reportedNetwork;
+  }, [expectedNetwork, fail]);
+
+  /**
+   * Re-verify the wallet network outside of `connect`.
+   *
+   * Used on window focus so a network switch performed in the Freighter
+   * extension while the app is open is detected and fails closed.
+   */
+  const refreshNetwork = useCallback(async () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    // Only meaningful while a wallet is connected.
+    if (!address) {
+      return;
+    }
+
+    const verifiedNetwork = await verifyNetwork();
+    if (!verifiedNetwork) {
+      // `fail` already cleared the address and network.
+      return;
+    }
+    setNetwork(verifiedNetwork);
+    setConnectError(null);
+    setConnectErrorCode(null);
+  }, [address, verifyNetwork]);
+
+  // Re-check the wallet network when the user returns to the tab: Freighter
+  // may have been switched to another network while we were in the
+  // background. The listener is removed on unmount.
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const onFocus = () => {
+      void refreshNetwork();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshNetwork]);
+
   const connect = useCallback(async () => {
     if (typeof window === "undefined") {
       // Guards against SSR/pre-render invocation; the wallet extension only
@@ -119,7 +212,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setConnectError(null);
     setConnectErrorCode(null);
     try {
-      const { isConnected, getAddress, getNetwork } = await import("@stellar/freighter-api");
+      const { isConnected, getAddress } = await import("@stellar/freighter-api");
 
       let connectedResult: { isConnected: boolean; error?: unknown };
       try {
@@ -185,36 +278,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
 
       // Fail closed: verify the wallet's network passphrase matches the network
-      // this app is configured for before accepting the connection.
-      let reportedPassphrase: string | null = null;
-      try {
-        const networkResult = await getNetwork();
-        if (networkResult && !networkResult.error) {
-          reportedPassphrase = networkResult.networkPassphrase ?? networkResult.network ?? null;
-        }
-      } catch {
-        reportedPassphrase = null;
-      }
-
-      const reportedNetwork = resolveNetworkFromPassphrase(reportedPassphrase);
-      if (!reportedNetwork) {
-        fail(
-          "WALLET_NETWORK_UNKNOWN",
-          `Could not determine the Freighter network. Expected ${expectedNetwork}. Switch networks in Freighter and retry.`,
-        );
-        return;
-      }
-
-      if (reportedNetwork !== expectedNetwork) {
-        fail(
-          "WALLET_NETWORK_MISMATCH",
-          `Freighter is on ${reportedNetwork} but this app requires ${expectedNetwork}. Switch networks in Freighter and retry.`,
-        );
+      // this app is configured for before accepting the connection. The same
+      // verification is reused by `refreshNetwork` so a mid-session network
+      // switch is caught by exactly the same rules.
+      const verifiedNetwork = await verifyNetwork();
+      if (!verifiedNetwork) {
         return;
       }
 
       setAddress(result.address);
-      setNetwork(reportedNetwork);
+      setNetwork(verifiedNetwork);
     } catch (err) {
       // Freighter API not available (extension absent or incompatible)
       const msg = err instanceof Error ? err.message : String(err);
@@ -222,7 +295,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
-  }, [expectedNetwork, fail, isConnecting]);
+  }, [expectedNetwork, fail, isConnecting, verifyNetwork]);
 
   const disconnect = useCallback(() => {
     setAddress(null);
@@ -241,6 +314,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       expectedNetwork,
       connect,
       disconnect,
+      refreshNetwork,
     }),
     [
       address,
@@ -251,6 +325,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       expectedNetwork,
       connect,
       disconnect,
+      refreshNetwork,
     ],
   );
 
