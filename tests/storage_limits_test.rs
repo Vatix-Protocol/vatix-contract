@@ -66,7 +66,7 @@ fn market_with_many_positions_stays_within_mainnet_budget() {
         client.buy_yes(&user, &market_id, &(10 * STROOPS_PER_USDC), &5_000i128);
     }
 
-    assert_event_emitted(&env, "trade_executed_event");
+    assert_event_emitted(&env, "trade_executed");
 
     // Reaching this point means the whole flow completed without exceeding
     // the mainnet-equivalent CPU/memory budget above. Sanity-check the

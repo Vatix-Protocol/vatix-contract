@@ -161,8 +161,66 @@ function buildContracts(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Validate individual WASM files
+// Validate built WASM artifacts against the configured contract list (#1059)
 // ---------------------------------------------------------------------------
+
+/**
+ * Expected on-disk artifact name for a configured contract.
+ *
+ * Mirrors the naming rule used by `resolveWasmPath` so the two can never
+ * drift apart: `vatix_<wasmStem>_contract.wasm`.
+ */
+function expectedWasmFileName(contract: ContractConfig): string {
+  return `vatix_${contract.wasmStem}_contract.wasm`;
+}
+
+/**
+ * Cross-check the WASM artifacts in `WASM_TARGET` against `CONTRACTS`.
+ *
+ * - Fails (exit 1) when a configured contract has no matching artifact,
+ *   naming the missing contract and the expected path under `WASM_TARGET`.
+ * - Warns (but still succeeds) when a `.wasm` file is found that does not
+ *   correspond to any configured contract, so a renamed crate or mistyped
+ *   `wasmStem` is visible instead of silently ignored.
+ *
+ * Hash pinning is intentionally out of scope here — that is
+ * `scripts/verify-wasm-hash.sh`'s job.
+ */
+export function verifyWasmArtifacts(wasmDir: string = WASM_TARGET): void {
+  const present = new Set(
+    readdirSync(wasmDir).filter((f) => f.endsWith(".wasm"))
+  );
+
+  const missing = CONTRACTS.filter(
+    (contract) => !present.has(expectedWasmFileName(contract))
+  );
+  if (missing.length > 0) {
+    const details = missing
+      .map(
+        (contract) =>
+          `  - "${contract.name}": expected ${join(
+            wasmDir,
+            expectedWasmFileName(contract)
+          )}`
+      )
+      .join("\n");
+    fatal(
+      `Missing WASM artifact(s) for ${missing.length} configured contract(s):\n${details}\n` +
+        "Rebuild with `stellar contract build` and check that every crate name " +
+        "matches its `wasmStem` in CONTRACTS."
+    );
+  }
+
+  const expected = new Set(CONTRACTS.map(expectedWasmFileName));
+  const unexpected = [...present].filter((f) => !expected.has(f));
+  for (const file of unexpected) {
+    warn(
+      `Unexpected WASM file "${file}" in ${wasmDir} does not match any ` +
+        "contract in CONTRACTS — it will be ignored. If a crate was renamed, " +
+        "update its `wasmStem` in CONTRACTS."
+    );
+  }
+}
 
 function resolveWasmPath(contract: ContractConfig): string | null {
   const wasmFile = join(WASM_TARGET, `vatix_${contract.wasmStem}_contract.wasm`);
@@ -272,6 +330,7 @@ function main(): void {
   checkStellarCli();
   checkRustTarget();
   buildContracts();
+  verifyWasmArtifacts();
 
   const { generated, skipped } = generateBindings();
 
