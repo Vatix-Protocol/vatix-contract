@@ -56,6 +56,17 @@ pub fn validate_settlement_eligibility(
 ///
 /// # Returns
 /// Ok if payout is valid, error otherwise
+///
+/// # Why this isn't on the public ABI (#1092)
+/// `validate_payout` (and the private `compute_settlement` that calls it)
+/// are intentionally not exposed as contract entrypoints: there is no
+/// read-only preview of a settlement payout. Callers (indexers, the web
+/// client) can only observe the payout via the collateral balance delta
+/// around a state-changing `settle_position`/`batch_settle_positions` call.
+/// The payout math itself is covered directly by unit tests in this module
+/// (`test_settlement_payout_equals_winning_side_share_count` and the
+/// `calculate_payout`/`validate_payout` tests below), which assert the
+/// exact-collateral-share invariant (#930) without needing ABI exposure.
 fn validate_payout(payout: i128) -> Result<(), ContractError> {
     if payout < 0 {
         return Err(ContractError::InvalidQuantity);
@@ -675,6 +686,203 @@ mod tests {
     fn test_validate_payout_invalid() {
         assert_eq!(validate_payout(-1), Err(ContractError::InvalidQuantity));
         assert_eq!(validate_payout(-100), Err(ContractError::InvalidQuantity));
+    }
+
+    /// #1092: the payout invariant is exercised directly at the unit level
+    /// (not via a public ABI entrypoint) — the computed settlement payout for
+    /// a resolved market equals the winning-side share count exactly.
+    #[test]
+    fn test_settlement_payout_equals_winning_side_share_count() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        let market = create_test_market(&env, MarketStatus::Resolved, Some(true));
+        let mut pos = create_test_position(&env, 250, 75, false);
+
+        let payout = env.as_contract(&contract_id, || {
+            execute_settlement(&env, &mut pos, &market).unwrap()
+        });
+
+        assert_eq!(payout, pos.yes_shares);
+        assert_eq!(calculate_payout(&create_test_position(&env, 250, 75, false), true), 250);
+    }
+
+    /// #1091: the burn of a settled position's outcome tokens must only
+    /// happen after the position has been marked settled. This asserts the
+    /// CEI ordering end-to-end: after `settle_position` succeeds, both the
+    /// `is_settled` flag is set and the outcome-token balances are zero, and
+    /// a replayed settle is rejected rather than re-burning.
+    #[test]
+    fn test_settle_position_burns_outcome_tokens_after_marking_settled() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+        use soroban_sdk::token::StellarAssetClient;
+        use soroban_sdk::String;
+        use vatix_outcome_token_contract::{OutcomeTokenContract, OutcomeTokenContractClient};
+
+        const DEPOSIT: i128 = 100_000_000;
+        const SHARES: i128 = 100_000_000;
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        let ot_contract_id = env.register(OutcomeTokenContract, ());
+        let ot_client = OutcomeTokenContractClient::new(&env, &ot_contract_id);
+        ot_client.initialize(
+            &admin,
+            &contract_id,
+            &String::from_str(&env, "Vatix Outcome Token"),
+            &String::from_str(&env, "VOT"),
+        );
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let question = String::from_str(&env, "Settle burns after marking settled?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None,
+        );
+        env.as_contract(&contract_id, || {
+            storage::set_outcome_token_contract(&env, &ot_contract_id)
+        });
+
+        let user = Address::generate(&env);
+        sac.mint(&user, &DEPOSIT);
+        client.deposit_collateral(&user, &market_id, &DEPOSIT);
+        client.update_position(&user, &market_id, &SHARES, &0i128, &5_000i128);
+
+        let outcome = true;
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        let market_id_str = String::from_str(&env, "1");
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
+
+        client.settle_position(&user, &market_id);
+
+        // Position is marked settled and the burn has retired both sides'
+        // outcome tokens — the CEI ordering (settle flag before burn) means
+        // this state is only reachable if the flag was written first.
+        let pos = env
+            .as_contract(&contract_id, || storage::get_position(&env, market_id, &user))
+            .unwrap()
+            .unwrap();
+        assert!(pos.is_settled);
+        assert_eq!(ot_client.balance(&market_id, &user, &TokenKind::Yes), 0);
+        assert_eq!(ot_client.balance(&market_id, &user, &TokenKind::No), 0);
+
+        // A replayed settle must be rejected, not re-burn.
+        let result = env.as_contract(&contract_id, || {
+            let mut pos2 = storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .unwrap();
+            let market = storage::get_market(&env, market_id).unwrap().unwrap();
+            compute_settlement(&env, &mut pos2, &market)
+        });
+        assert_eq!(result, Err(ContractError::PositionAlreadySettled));
+    }
+
+    /// #1090: `compute_settlement`'s eligibility check (which rejects an
+    /// already-settled position) must run — and fail — before the parity
+    /// guard gets a chance to fire against the now-burned/zeroed token
+    /// balances of a settled position. This is only meaningfully exercised
+    /// when an outcome-token contract is actually wired up, so the parity
+    /// guard is non-vacuous.
+    #[test]
+    fn test_compute_settlement_already_settled_wins_over_parity_guard() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+        use soroban_sdk::token::StellarAssetClient;
+        use soroban_sdk::String;
+        use vatix_outcome_token_contract::{OutcomeTokenContract, OutcomeTokenContractClient};
+
+        const DEPOSIT: i128 = 100_000_000;
+        const SHARES: i128 = 100_000_000;
+
+        let env = soroban_sdk::Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            storage::set_admin(&env, &admin);
+            storage::set_version(&env);
+        });
+
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin);
+        let collateral_token = token.address();
+        let sac = StellarAssetClient::new(&env, &collateral_token);
+
+        let ot_contract_id = env.register(OutcomeTokenContract, ());
+        let ot_client = OutcomeTokenContractClient::new(&env, &ot_contract_id);
+        ot_client.initialize(
+            &admin,
+            &contract_id,
+            &String::from_str(&env, "Vatix Outcome Token"),
+            &String::from_str(&env, "VOT"),
+        );
+
+        let mut csprng = OsRng;
+        let signing_key = SigningKey::generate(&mut csprng);
+        let oracle_pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
+
+        let client = crate::MarketContractClient::new(&env, &contract_id);
+        let question = String::from_str(&env, "Already-settled beats parity guard?");
+        let end_time = env.ledger().timestamp() + 86_400;
+        let market_id = client.initialize_market(
+            &admin, &question, &end_time, &oracle_pubkey, &collateral_token, &None,
+        );
+        env.as_contract(&contract_id, || {
+            storage::set_outcome_token_contract(&env, &ot_contract_id)
+        });
+
+        let user = Address::generate(&env);
+        sac.mint(&user, &DEPOSIT);
+        client.deposit_collateral(&user, &market_id, &DEPOSIT);
+        client.update_position(&user, &market_id, &SHARES, &0i128, &5_000i128);
+
+        let outcome = true;
+        let message = crate::oracle::construct_oracle_message(&env, market_id, outcome);
+        let sig_bytes = signing_key.sign(message.to_array().as_slice()).to_bytes();
+        let signature = BytesN::from_array(&env, &sig_bytes);
+        let market_id_str = String::from_str(&env, "1");
+        let resolver = Address::generate(&env);
+        let expires_at = end_time + 86_400;
+        client.resolve_market(&resolver, &market_id_str, &outcome, &signature, &expires_at);
+
+        // First settle: succeeds, burns tokens via the outcome-token contract
+        // so parity is non-vacuous (balances now legitimately zero).
+        client.settle_position(&user, &market_id);
+
+        // Second call goes straight through `compute_settlement`: the
+        // eligibility check must reject it as already-settled rather than
+        // the parity guard firing on the now-zeroed/burned balances.
+        let result = env.as_contract(&contract_id, || {
+            let mut pos2 = storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .unwrap();
+            let market = storage::get_market(&env, market_id).unwrap().unwrap();
+            compute_settlement(&env, &mut pos2, &market)
+        });
+        assert_eq!(result, Err(ContractError::PositionAlreadySettled));
     }
 
     #[test]
