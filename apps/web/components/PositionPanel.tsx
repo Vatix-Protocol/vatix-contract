@@ -6,6 +6,7 @@ import { getPosition, type PositionData } from "@/lib/contract-client";
 import { DepositForm } from "./DepositForm";
 import { WithdrawForm } from "./WithdrawForm";
 import { LoadingSkeleton } from "./LoadingSkeleton";
+import { fromStroops } from "@/lib/stroops";
 
 interface PositionPanelProps {
   /**
@@ -15,10 +16,8 @@ interface PositionPanelProps {
   marketId?: string;
 }
 
-const STROOPS_PER_UNIT = 10_000_000;
-
 function formatShares(stroops: bigint): string {
-  return (Number(stroops) / STROOPS_PER_UNIT).toLocaleString(undefined, {
+  return fromStroops(stroops).toLocaleString(undefined, {
     maximumFractionDigits: 2,
   });
 }
@@ -86,7 +85,7 @@ export function PositionPanel({ marketId }: PositionPanelProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Attach the ref to the wrapper so we can scroll to the deposit form */}
         <div ref={depositFormRef}>
-          <DepositForm marketId={marketId} />
+          <DepositForm marketId={marketId} onSuccess={refresh} />
         </div>
         {/*
          * Pass `refresh` as `onSuccess` so the position panel refetches

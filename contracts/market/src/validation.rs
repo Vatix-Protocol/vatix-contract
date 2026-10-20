@@ -19,28 +19,6 @@ pub const MAX_MARKET_TITLE_LENGTH: u32 = 500;
 /// CIDv1, an `ar://` tx id, or an https URL; anything longer is rejected.
 pub const MAX_METADATA_URI_LENGTH: u32 = 512;
 
-/// Guard function to validate input before processing.
-///
-/// This is a general-purpose validation guard that can be used in integration tests
-/// and contract entry points to ensure invalid inputs are rejected early.
-///
-/// # Arguments
-/// * `input` - The input value to validate
-///
-/// # Returns
-/// `Ok(())` if input is valid, `Err(ContractError::InvalidQuantity)` if invalid
-///
-/// # Example
-/// ```ignore
-/// validation::validate_input_guard(amount)?;
-/// ```
-pub fn validate_input_guard(input: i128) -> Result<(), ContractError> {
-    if input <= 0 {
-        return Err(ContractError::InvalidQuantity);
-    }
-    Ok(())
-}
-
 /// Validates that end_time is in the future and within reasonable bounds
 fn validate_end_time(end_time: u64, current_time: u64) -> Result<(), ContractError> {
     if end_time <= current_time {
@@ -67,14 +45,38 @@ fn validate_question_format(question: &String) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Validates that `collateral_token` is a plausible Stellar Asset Contract
+/// (SAC) address rather than a user account (#1099).
+///
+/// Soroban addresses come in two flavors: user accounts (Ed25519 keys,
+/// "G…") and deployed contracts ("C…"), distinguished by
+/// `Address::executable()` (mirrors [`validate_admin_address`] /
+/// [`validate_fee_waiver_account`] above). A SAC is always a deployed
+/// contract, so a user account can never be a legitimate collateral token;
+/// rejecting it here closes the gap where `validate_market_creation` never
+/// checked the collateral token at all, letting a non-SAC address (e.g. a
+/// plain user account) be accepted at market creation.
+///
+/// # Errors
+/// - [`ContractError::InvalidToken`] – `collateral_token` is a user account,
+///   not a contract address.
+pub fn validate_collateral_token(collateral_token: &Address) -> Result<(), ContractError> {
+    if collateral_token.executable().is_none() {
+        return Err(ContractError::InvalidToken);
+    }
+    Ok(())
+}
+
 /// Validates market creation parameters
 pub fn validate_market_creation(
     question: &String,
     end_time: u64,
     current_time: u64,
+    collateral_token: &Address,
 ) -> Result<(), ContractError> {
     validate_question_format(question)?;
     validate_end_time(end_time, current_time)?;
+    validate_collateral_token(collateral_token)?;
     Ok(())
 }
 
@@ -101,16 +103,30 @@ pub fn validate_market_creation(
 /// validation::validate_metadata_uri(&uri)?;
 /// ```
 pub fn validate_metadata_uri(metadata_uri: &Option<String>) -> Result<(), ContractError> {
+    // Fixed-size scratch buffer used to stream the URI out of the host in
+    // chunks. This is intentionally *not* sized from `MAX_METADATA_URI_LENGTH`:
+    // that constant is a tunable application-level cap, while this buffer's
+    // size is a stack budget. Decoupling them means raising the cap can
+    // never silently grow the stack allocation here.
+    const SCRATCH_LEN: usize = 64;
+
     if let Some(uri) = metadata_uri {
         let len = uri.len();
         if len == 0 || len > MAX_METADATA_URI_LENGTH {
             return Err(ContractError::InvalidMetadataUri);
         }
-        let mut buf = [0u8; MAX_METADATA_URI_LENGTH as usize];
-        let bytes = &mut buf[..len as usize];
-        uri.copy_into_slice(bytes);
-        if !bytes.iter().all(u8::is_ascii_graphic) {
-            return Err(ContractError::InvalidMetadataUri);
+        let mut buf = [0u8; SCRATCH_LEN];
+        let mut offset = 0usize;
+        let len = len as usize;
+        while offset < len {
+            let chunk_len = core::cmp::min(SCRATCH_LEN, len - offset);
+            let chunk = &mut buf[..chunk_len];
+            uri.slice(offset as u32..(offset + chunk_len) as u32)
+                .copy_into_slice(chunk);
+            if !chunk.iter().all(u8::is_ascii_graphic) {
+                return Err(ContractError::InvalidMetadataUri);
+            }
+            offset += chunk_len;
         }
     }
     Ok(())
@@ -419,59 +435,104 @@ mod tests {
 
     #[test]
     fn test_valid_market_creation() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Will it rain tomorrow?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Will it rain tomorrow?");
         let current_time = 1000;
         let end_time = current_time + 86400; // 1 day later
+        let collateral_token = env.register(crate::MarketContract, ());
 
-        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+        assert!(
+            validate_market_creation(&question, end_time, current_time, &collateral_token)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_empty_question_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "");
         let current_time = 1000;
         let end_time = current_time + 86400;
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidQuestion)
         );
     }
 
     #[test]
     fn test_long_question_fails() {
+        let env = soroban_sdk::Env::default();
         let long_str = "a".repeat(500);
-        let question = String::from_str(&soroban_sdk::Env::default(), &long_str);
+        let question = String::from_str(&env, &long_str);
         let current_time = 1000;
         let end_time = current_time + 86400;
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidQuestion)
         );
     }
 
     #[test]
     fn test_past_end_time_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
         let current_time = 1000;
         let end_time = current_time - 1; // In the past
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidTimestamp)
         );
     }
 
     #[test]
     fn test_far_future_end_time_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
         let current_time = 1000;
         let end_time = current_time + 31_536_001; // More than 1 year
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidTimestamp)
+        );
+    }
+
+    #[test]
+    fn test_validate_collateral_token_contract_ok() {
+        let env = soroban_sdk::Env::default();
+        let collateral_token = env.register(crate::MarketContract, ());
+        assert!(validate_collateral_token(&collateral_token).is_ok());
+    }
+
+    #[test]
+    fn test_validate_collateral_token_user_account_fails() {
+        let env = soroban_sdk::Env::default();
+        let collateral_token = Address::generate(&env);
+        assert_eq!(
+            validate_collateral_token(&collateral_token),
+            Err(ContractError::InvalidToken)
+        );
+    }
+
+    #[test]
+    fn test_market_creation_rejects_non_sac_collateral_token() {
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
+        let current_time = 1000;
+        let end_time = current_time + 86400;
+        // A plain user account is not a valid SAC collateral token (#1099).
+        let collateral_token = Address::generate(&env);
+
+        assert_eq!(
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
+            Err(ContractError::InvalidToken)
         );
     }
 
@@ -584,26 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_input_guard_valid() {
-        assert!(validate_input_guard(1).is_ok());
-        assert!(validate_input_guard(100).is_ok());
-        assert!(validate_input_guard(i128::MAX / 2).is_ok());
-    }
-
-    #[test]
-    fn test_validate_input_guard_invalid() {
-        assert_eq!(validate_input_guard(0), Err(ContractError::InvalidQuantity));
-        assert_eq!(
-            validate_input_guard(-1),
-            Err(ContractError::InvalidQuantity)
-        );
-        assert_eq!(
-            validate_input_guard(-100),
-            Err(ContractError::InvalidQuantity)
-        );
-    }
-
-    #[test]
     fn test_calculate_fee_valid() {
         assert_eq!(calculate_fee(1000, 100).unwrap(), 10); // 1% of 1000
         assert_eq!(calculate_fee(10000, 500).unwrap(), 500); // 5% of 10000
@@ -656,6 +697,30 @@ mod tests {
         assert_eq!(
             validate_deposit_amount(0),
             Err(ContractError::InvalidQuantity)
+        );
+    }
+
+    #[test]
+    fn test_end_time_exactly_at_one_year_boundary_passes() {
+        let current_time = 1000;
+        // end_time == current_time + ONE_YEAR_SECONDS exactly: the check is
+        // `end_time > current_time + ONE_YEAR_SECONDS`, so the boundary value
+        // itself is still accepted (inclusive upper bound).
+        let end_time = current_time + 31_536_000;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+    }
+
+    #[test]
+    fn test_end_time_one_second_past_one_year_boundary_fails() {
+        let current_time = 1000;
+        let end_time = current_time + 31_536_000 + 1;
+
+        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        assert_eq!(
+            validate_market_creation(&question, end_time, current_time),
+            Err(ContractError::InvalidTimestamp)
         );
     }
 

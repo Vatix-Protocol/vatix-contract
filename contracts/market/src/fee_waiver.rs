@@ -49,8 +49,9 @@ use soroban_sdk::{Address, Env};
 /// duplicate the entry, does not error).
 ///
 /// # Events
-/// Emits [`FeeWaiverAddedEvent`] with the caller, the new address, and the
-/// updated list length.
+/// Emits [`crate::events::FeeWaiverAdded`] with the waived `account` and the
+/// acting `admin` (plus `added_at`). The on-chain schema does not carry the
+/// updated list length; indexers derive it from the ordered event stream.
 ///
 /// # Errors
 /// - [`ContractError::NotAdmin`] – `caller` is not the admin
@@ -81,10 +82,9 @@ pub fn add_fee_waiver(
     }
 
     waivers.push_back(waiver_address.clone());
-    let count = waivers.len();
     storage::set_fee_waivers(env, &waivers);
 
-    crate::events::emit_fee_waiver_added(env, caller, waiver_address, count);
+    crate::events::emit_fee_waiver_added(env, waiver_address, caller);
     Ok(())
 }
 
@@ -126,16 +126,18 @@ pub fn remove_fee_waiver(
     }
 
     if found {
-        let count = new_waivers.len();
         storage::set_fee_waivers(env, &new_waivers);
-        crate::events::emit_fee_waiver_removed(env, caller, waiver_address, count);
+        crate::events::emit_fee_waiver_removed(env, waiver_address, caller);
     }
 
     Ok(())
 }
 
 /// Return `true` if `address` holds a fee waiver.
-#[allow(dead_code)]
+///
+/// Read-only: performs no auth. Exposed externally as the `get_fee_waiver`
+/// contract entrypoint (#1060), so the `#[allow(dead_code)]` that hid this
+/// helper from the ABI is removed.
 pub fn has_fee_waiver(env: &Env, address: &Address) -> bool {
     let waivers = storage::get_fee_waivers(env);
     for i in 0..waivers.len() {
@@ -182,7 +184,7 @@ mod tests {
     use crate::storage;
     use soroban_sdk::{testutils::Address as _, Address, Env};
 
-    fn setup(env: &Env) -> (Address, Address) {
+    pub(super) fn setup(env: &Env) -> (Address, Address) {
         let contract_id = env.register(crate::MarketContract, ());
         let admin = Address::generate(env);
         env.as_contract(&contract_id, || {
@@ -205,8 +207,7 @@ mod tests {
         for _ in 0..storage::MAX_FEE_WAIVERS {
             let addr = Address::generate(&env);
             env.as_contract(&contract_id, || {
-                add_fee_waiver(&env, &admin, &addr)
-                    .expect("add must succeed while under cap");
+                add_fee_waiver(&env, &admin, &addr).expect("add must succeed while under cap");
             });
         }
 
@@ -223,9 +224,7 @@ mod tests {
         );
 
         // List length must still be exactly MAX_FEE_WAIVERS.
-        let count = env.as_contract(&contract_id, || {
-            storage::get_fee_waivers(&env).len()
-        });
+        let count = env.as_contract(&contract_id, || storage::get_fee_waivers(&env).len());
         assert_eq!(count, storage::MAX_FEE_WAIVERS);
 
         // Issue #1066 (3): re-adding an address that is already present at
@@ -238,19 +237,16 @@ mod tests {
             first_at_capacity = Some(waivers.get(0).expect("list must be full"));
         });
         let duplicate = first_at_capacity.expect("list must be full");
-        let result = env.as_contract(&contract_id, || {
-            add_fee_waiver(&env, &admin, &duplicate)
-        });
+        let result = env.as_contract(&contract_id, || add_fee_waiver(&env, &admin, &duplicate));
         assert_eq!(
             result,
             Ok(()),
             "re-adding a present address at capacity must stay a no-op"
         );
-        let count = env.as_contract(&contract_id, || {
-            storage::get_fee_waivers(&env).len()
-        });
+        let count = env.as_contract(&contract_id, || storage::get_fee_waivers(&env).len());
         assert_eq!(
-            count, storage::MAX_FEE_WAIVERS,
+            count,
+            storage::MAX_FEE_WAIVERS,
             "idempotent re-add at capacity must not grow the list"
         );
     }
@@ -302,9 +298,7 @@ mod tests {
         let non_admin = Address::generate(&env);
         let waiver = Address::generate(&env);
 
-        let result = env.as_contract(&contract_id, || {
-            add_fee_waiver(&env, &non_admin, &waiver)
-        });
+        let result = env.as_contract(&contract_id, || add_fee_waiver(&env, &non_admin, &waiver));
         assert_eq!(result, Err(ContractError::NotAdmin));
 
         // Deny-by-default: the unauthorized add must not have mutated state.
@@ -355,9 +349,13 @@ mod tests {
         let (contract_id, admin) = setup(&env);
         let waived = Address::generate(&env);
 
+        // Separate harness-contract frames: each `require_auth` address is
+        // authorized for exactly one frame under `mock_all_auths`, so the
+        // fee-rate write and the waiver add must run in distinct frames.
         env.as_contract(&contract_id, || {
-            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250)
-                .expect("admin set should succeed");
+            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250).expect("admin set should succeed");
+        });
+        env.as_contract(&contract_id, || {
             add_fee_waiver(&env, &admin, &waived).expect("add should succeed");
         });
 
@@ -373,8 +371,7 @@ mod tests {
         let other = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250)
-                .expect("admin set should succeed");
+            crate::fee_rate::set_fee_rate_bps(&env, &admin, 250).expect("admin set should succeed");
         });
 
         let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &other));
@@ -392,5 +389,96 @@ mod tests {
         // implicit non-zero default.
         let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &account));
         assert_eq!(rate, 0, "unset fee rate must deny-by-default to zero");
+    }
+}
+
+#[cfg(test)]
+mod fee_waiver_view_tests {
+    use super::tests::setup;
+    use super::*;
+    use crate::MarketContractClient;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env};
+
+    /// The read-only view must reflect the waiver list: present after an
+    /// admin add (#1060).
+    #[test]
+    fn test_get_fee_waiver_returns_true_for_present_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let waived = Address::generate(&env);
+
+        // Admin add runs in its own harness frame, so its `require_auth`
+        // footprint is consumed exactly once.
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waived).expect("admin add should succeed");
+        });
+
+        let client = MarketContractClient::new(&env, &contract_id);
+        assert!(
+            client.get_fee_waiver(&waived),
+            "view must return true for a waived address"
+        );
+    }
+
+    /// The view must return `false` after the waiver is removed (#1060).
+    #[test]
+    fn test_get_fee_waiver_returns_false_after_removal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+        let waived = Address::generate(&env);
+
+        // Add and remove run in separate harness frames so their
+        // `require_auth` footprints are consumed once each.
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waived).expect("admin add should succeed");
+        });
+        env.as_contract(&contract_id, || {
+            remove_fee_waiver(&env, &admin, &waived).expect("admin remove should succeed");
+        });
+
+        let client = MarketContractClient::new(&env, &contract_id);
+        assert!(
+            !client.get_fee_waiver(&waived),
+            "view must return false after the waiver is removed"
+        );
+    }
+
+    /// The view must return `false` for an address that was never added
+    /// (#1060).
+    #[test]
+    fn test_get_fee_waiver_returns_false_for_never_added_address() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        assert!(
+            !client.get_fee_waiver(&stranger),
+            "view must return false for a never-added address"
+        );
+    }
+
+    /// The read-only view performs no auth, so it succeeds without any auth
+    /// setup (#1060: negative auth test).
+    #[test]
+    fn test_get_fee_waiver_requires_no_auth() {
+        let env = Env::default();
+        // Deliberately no `mock_all_auths()`: the view must not call
+        // `require_auth`, so this succeeds even with auth disabled.
+        let contract_id = env.register(crate::MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        assert!(!client.get_fee_waiver(&stranger));
     }
 }

@@ -287,6 +287,35 @@ fn distribute_fees_rejects_when_no_stakeholders_configured() {
     assert_eq!(err, TreasuryError::NoStakeholdersConfigured);
 }
 
+/// Regression test (#1109): `collect_fee` must reject a zero or negative
+/// `fee_amount` with `InvalidAmount` *before* mutating any balance,
+/// cumulative-fee, or total-collected state. The check already exists ahead
+/// of all storage writes in `collect_fee` (see `contracts/treasury/src/lib.rs`);
+/// this test locks that ordering in so a future refactor cannot regress it.
+#[test]
+fn collect_fee_rejects_zero_and_negative_amounts_without_mutating_state() {
+    let s = setup();
+
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &0i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAmount);
+
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &-1i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAmount);
+
+    // No balance was recorded for the token by either rejected call.
+    assert_eq!(s.client.token_balance(&s.token), 0i128);
+    assert_eq!(s.client.get_cumulative_fees(&s.token), 0i128);
+    assert_eq!(s.client.total_collected(), 0i128);
+}
+
 /// A stakeholder list summing to exactly 10_000 is accepted, and once
 /// executed `distribute_fees` succeeds and pays out proportionally.
 #[test]
@@ -419,5 +448,76 @@ fn cumulative_counters_stay_monotone_across_collect_and_withdraw() {
         data_i128(&env, &withdrawn_data, "remaining_token_balance"),
         expected_remaining
     );
+}
+
+// ── Issue #1111: on-chain distribute_fees conservation ───────────────────────
+
+/// `distribute_fees` on real contract storage/token state must conserve the
+/// total the same way `distribute_proptest::compute_distribution` models it:
+/// `sum(amounts paid to stakeholders) + remaining treasury balance == the
+/// pre-distribution balance`. Uses non-divisible shares/amount so floor
+/// division leaves a dust remainder, exercising the "leftover rolls back
+/// into the treasury" path documented above `distribute_fees`.
+#[test]
+fn distribute_fees_conserves_total_like_the_proptest_model() {
+    let s = setup();
+    let a = Address::generate(&s.env);
+    let b = Address::generate(&s.env);
+    let c = Address::generate(&s.env);
+    // 3333 / 3333 / 3334 bps: does not divide evenly into the funded amount,
+    // so floor division produces a nonzero dust remainder.
+    let shares: Vec<(Address, u32)> = soroban_sdk::vec![
+        &s.env,
+        (a.clone(), 3_333u32),
+        (b.clone(), 3_333u32),
+        (c.clone(), 3_334u32)
+    ];
+
+    s.client.propose_stakeholders(&s.admin, &shares);
+    s.env.ledger().with_mut(|l| {
+        l.timestamp += ADDRESS_TIMELOCK_SECONDS + 1;
+    });
+    s.client.execute_stakeholders();
+
+    let pre_balance = 1_000_000i128;
+    fund_treasury_via_fee(&s, pre_balance);
+
+    s.client.distribute_fees(&s.admin, &s.token);
+
+    let paid_a = TokenClient::new(&s.env, &s.token).balance(&a);
+    let paid_b = TokenClient::new(&s.env, &s.token).balance(&b);
+    let paid_c = TokenClient::new(&s.env, &s.token).balance(&c);
+    let remaining = s.client.token_balance(&s.token);
+
+    // Conservation: nothing is created or destroyed by the split.
+    assert_eq!(paid_a + paid_b + paid_c + remaining, pre_balance);
+    // The uneven shares must actually leave a nonzero dust remainder for
+    // this test to be meaningful.
+    assert!(remaining > 0, "expected a nonzero floor-division remainder");
+}
+
+// ── Issue #1110: withdraw_fees returns InsufficientBalance, not a transfer panic ──
+
+/// Requesting more than the treasury's custodied `token` balance must be
+/// rejected with `TreasuryError::InsufficientBalance` by `withdraw_fees`'s
+/// own balance check, before the token transfer is ever attempted — not
+/// surface as a panic from `token::Client::transfer`.
+#[test]
+fn withdraw_fees_rejects_amount_above_balance_with_insufficient_balance_error() {
+    let s = setup();
+    let funded = 1_000i128;
+    fund_treasury_via_fee(&s, funded);
+
+    let recipient = Address::generate(&s.env);
+    let err = s
+        .client
+        .try_withdraw_fees(&s.admin, &s.token, &recipient, &(funded + 1))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InsufficientBalance);
+
+    // State and recipient balance are untouched by the rejected call.
+    assert_eq!(s.client.token_balance(&s.token), funded);
+    assert_eq!(balance(&s.env, &s.token, &recipient), 0);
 }
 }

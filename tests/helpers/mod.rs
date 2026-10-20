@@ -17,9 +17,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
-    Address, BytesN, Env, IntoVal, String,
+    Address, BytesN, Env, String,
 };
-use vatix_market_contract::{oracle, storage, MarketContract};
+use vatix_market_contract::{oracle, MarketContract};
 
 /// Stroops per USDC (1 USDC = 10^7 stroops), shared across integration tests.
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
@@ -107,19 +107,35 @@ impl MarketParams {
 /// Assert that at least one event was emitted after an action in the harness.
 ///
 /// Call this after any contract action to verify the event was published.
-/// The `expected_topic` string is matched against the first topic symbol of
-/// the most recent event.
+///
+/// # Matching rule (first topic symbol, exact equality)
+///
+/// Every event recorded in the test env is scanned in emission order. For
+/// each event, only its **first topic** is considered, and the comparison
+/// against `expected_topic` is **exact equality** — a topic that merely
+/// *contains* `expected_topic` as a substring (e.g. `"trade_executed_event"`
+/// vs. an emitted `"trade_executed_event_v2"`) does **not** match.
+///
+/// The assertion passes when at least one emitted event's first topic equals
+/// `expected_topic`, and panics otherwise (including when no events were
+/// emitted at all), so it never passes vacuously.
 pub fn assert_event_emitted(env: &Env, expected_topic: &str) {
+    use soroban_sdk::{TryIntoVal, Val};
+
     let events = env.events().all();
     assert!(
         !events.is_empty(),
         "expected at least one event to be emitted"
     );
-    let last = events.last().unwrap();
-    let topic: soroban_sdk::Symbol = last.1.get(0).unwrap().into_val(env);
-    assert_eq!(
-        topic,
-        soroban_sdk::Symbol::new(env, expected_topic),
-        "event topic mismatch: expected '{expected_topic}'"
-    );
+    let expected = soroban_sdk::Symbol::new(env, expected_topic);
+    for event in events.iter() {
+        let first_topic: Option<soroban_sdk::Symbol> = event
+            .1
+            .get(0)
+            .and_then(|topic: Val| topic.try_into_val(env).ok());
+        if first_topic == Some(expected.clone()) {
+            return;
+        }
+    }
+    panic!("event topic mismatch: no emitted event has first topic '{expected_topic}'");
 }

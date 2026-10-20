@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal, getPosition } from "@/lib/contract-client";
 import { TxResult } from "@/components/TxResult";
 import { useToast } from "@/context/ToastContext";
 import { parseContractError } from "@/lib/errors";
+import { toStroops, fromStroops } from "@/lib/stroops";
 
 interface WithdrawFormProps {
   /**
@@ -25,9 +26,9 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [available, setAvailable] = useState<bigint | null>(null);
 
-  useEffect(() => {
+  const refreshAvailable = useCallback(() => {
     if (address && marketId && !isNaN(parseInt(marketId))) {
-      getPosition(parseInt(marketId), address)
+      return getPosition(parseInt(marketId), address)
         .then((pos) => {
           if (pos) {
             setAvailable(pos.totalDeposited - pos.lockedCollateral);
@@ -38,8 +39,13 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
         .catch(console.error);
     } else {
       setAvailable(null);
+      return Promise.resolve();
     }
   }, [address, marketId]);
+
+  useEffect(() => {
+    void refreshAvailable();
+  }, [refreshAvailable]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,11 +64,20 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
     setTxHash(null);
 
     try {
-      // Convert amount to stroops (1 token = 10^7 stroops for USDC-like tokens)
-      const amountInStroopsStr = Math.floor(parseFloat(amount) * 10_000_000).toString();
-      
-      if (available !== null && BigInt(amountInStroopsStr) > available) {
-        const availableTokens = Number(available) / 10_000_000;
+      // Convert amount to stroops using BigInt-safe math so precision isn't
+      // lost for large i128-range amounts (#1104).
+      let amountInStroops: bigint;
+      try {
+        amountInStroops = toStroops(amount);
+      } catch {
+        setError("Enter a valid amount.");
+        setIsLoading(false);
+        return;
+      }
+      const amountInStroopsStr = amountInStroops.toString();
+
+      if (available !== null && amountInStroops > available) {
+        const availableTokens = fromStroops(available);
         setError(`Amount exceeds available collateral (${availableTokens})`);
         setIsLoading(false);
         return;
@@ -85,6 +100,11 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
 
       setTxHash(result.hash);
       setAmount("");
+
+      // Refetch this form's own `available` balance so it reflects the
+      // withdrawal immediately, rather than staying stale until marketId
+      // or address changes (#1101).
+      void refreshAvailable();
 
       // Notify parent so it can refetch the position and reflect the updated
       // on-chain state without requiring a full page reload (#591).

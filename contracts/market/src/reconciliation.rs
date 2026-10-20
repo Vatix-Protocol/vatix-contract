@@ -40,7 +40,8 @@ use crate::events;
 use crate::storage;
 use crate::types::Position;
 use soroban_sdk::{contracttype, Address, BytesN, Env};
-use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient};
+use vatix_outcome_token_contract::types::TokenKind as OutcomeTokenKind;
+use vatix_outcome_token_contract::OutcomeTokenContractClient;
 
 /// Snapshot comparing a user's `Position` shares against their `OutcomeToken`
 /// balances for the same market.
@@ -60,8 +61,8 @@ fn load_token_balances(env: &Env, market_id: u32, user: &Address) -> Option<(i12
     let outcome_token_address = storage::get_outcome_token_contract(env)?;
     let token_client = OutcomeTokenContractClient::new(env, &outcome_token_address);
     Some((
-        token_client.balance(&market_id, user, &TokenKind::Yes),
-        token_client.balance(&market_id, user, &TokenKind::No),
+        token_client.balance(&market_id, user, &OutcomeTokenKind::Yes),
+        token_client.balance(&market_id, user, &OutcomeTokenKind::No),
     ))
 }
 
@@ -174,15 +175,15 @@ pub fn reconcile_position_tokens(
     let no_delta = parity.no_shares - parity.no_token_balance;
 
     if yes_delta > 0 {
-        token_client.mint(&market_id, user, &TokenKind::Yes, &yes_delta);
+        token_client.mint(&market_id, user, &OutcomeTokenKind::Yes, &yes_delta);
     } else if yes_delta < 0 {
-        token_client.burn(&market_id, user, &TokenKind::Yes, &(-yes_delta));
+        token_client.burn(&market_id, user, &OutcomeTokenKind::Yes, &(-yes_delta));
     }
 
     if no_delta > 0 {
-        token_client.mint(&market_id, user, &TokenKind::No, &no_delta);
+        token_client.mint(&market_id, user, &OutcomeTokenKind::No, &no_delta);
     } else if no_delta < 0 {
-        token_client.burn(&market_id, user, &TokenKind::No, &(-no_delta));
+        token_client.burn(&market_id, user, &OutcomeTokenKind::No, &(-no_delta));
     }
 
     events::emit_position_tokens_reconciled(env, market_id, user, admin, yes_delta, no_delta);
@@ -194,13 +195,9 @@ pub fn reconcile_position_tokens(
 mod tests {
     use super::*;
     use crate::storage;
-    use crate::{MarketContract, MarketContractClient};
-    use ed25519_dalek::SigningKey;
-    use soroban_sdk::testutils::Address as TestAddress;
-    use soroban_sdk::{token::StellarAssetClient, BytesN, String};
+    use soroban_sdk::testutils::{Address as TestAddress, Events as TestEvents};
+    use soroban_sdk::{BytesN, String};
     use vatix_outcome_token_contract::{OutcomeTokenContract, OutcomeTokenContractClient};
-
-    const STROOPS_PER_USDC: i128 = 10_000_000;
 
     /// Issue #1067: the vacuous-parity branch is the default state for any
     /// market deployed before `set_outcome_token_contract` is called — with
@@ -289,23 +286,192 @@ mod tests {
         assert_eq!(parity.no_shares, 50);
     }
 
-    /// A replayed reconciliation request (same `correlation_id`) must be
-    /// rejected with `ReconciliationAlreadyApplied` and must not move tokens.
+    /// Register a live outcome-token contract and point this market at it.
+    ///
+    /// Returns the client; the caller then writes `Position` rows via
+    /// `storage::set_position` to build settled/divergent shapes (#1061).
+    fn setup_outcome_token<'a>(
+        env: &'a Env,
+        contract_id: &Address,
+        admin: &Address,
+    ) -> OutcomeTokenContractClient<'a> {
+        let ot_contract_id = env.register(OutcomeTokenContract, ());
+        let ot_client = OutcomeTokenContractClient::new(env, &ot_contract_id);
+        ot_client.initialize(
+            admin,
+            contract_id,
+            &String::from_str(env, "Vatix Outcome Token"),
+            &String::from_str(env, "VOT"),
+        );
+        env.as_contract(contract_id, || {
+            storage::set_outcome_token_contract(env, &ot_contract_id);
+        });
+        ot_client
+    }
+
+    /// #1061: settled position with zero token balances against a *live*
+    /// outcome-token ledger. The `Position` row is retained with non-zero
+    /// shares while settlement burned the tokens to zero; parity must report
+    /// matched via the carve-out (raw balances alone would mismatch).
     #[test]
-    fn test_reconcile_rejects_replayed_correlation_id() {
+    fn test_settled_position_with_live_zero_balances_reports_matched() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register(crate::MarketContract, ());
         let admin = <Address as TestAddress>::generate(&env);
         let user = <Address as TestAddress>::generate(&env);
-        let market_id = 1;
-        let correlation_id = BytesN::from_array(&env, &[7u8; 32]);
+        let market_id = 1u32;
 
+        setup_outcome_token(&env, &contract_id, &admin);
         env.as_contract(&contract_id, || {
-            storage::set_version(&env);
-            storage::set_reconciliation_record(&env, &correlation_id, market_id, &user);
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            position.is_settled = true;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+
+        let parity = env.as_contract(&contract_id, || {
+            get_position_token_parity(&env, market_id, &user).unwrap()
+        });
+        assert_eq!(parity.yes_token_balance, 0);
+        assert_eq!(parity.no_token_balance, 0);
+        assert_eq!(parity.yes_shares, 100);
+        assert_eq!(parity.no_shares, 50);
+        assert!(
+            parity.is_matched,
+            "settled position with zero live token balances must report matched"
+        );
+    }
+
+    /// #1061: reconciling the settled position above is a no-op — it emits
+    /// no `PositionTokensReconciled` event, performs no mint, and does not
+    /// consume the fresh `correlation_id`.
+    #[test]
+    fn test_reconcile_settled_position_is_noop_without_event_or_mint() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 1u32;
+        let correlation_id = BytesN::from_array(&env, &[11u8; 32]);
+
+        let ot_client = setup_outcome_token(&env, &contract_id, &admin);
+        env.as_contract(&contract_id, || {
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            position.is_settled = true;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+
+        let events_before = env.events().all().len();
+        let repaired = env.as_contract(&contract_id, || {
+            reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap()
+        });
+        assert!(repaired.is_matched);
+        assert_eq!(
+            env.events().all().len(),
+            events_before,
+            "settled-position reconcile must emit no event"
+        );
+        assert!(
+            env.as_contract(&contract_id, || {
+                storage::get_reconciliation_record(&env, &correlation_id)
+            })
+            .is_none(),
+            "no-op reconcile must not consume the correlation_id"
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            0,
+            "settled reconcile must not re-mint yes tokens"
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::No),
+            0,
+            "settled reconcile must not re-mint no tokens"
+        );
+    }
+
+    /// #1061: a genuinely divergent (non-settled) position reports
+    /// `is_matched: false`; a genuine repair consumes a fresh id (minting
+    /// the missing tokens and emitting the event); replaying that id then
+    /// fails closed with `ReconciliationAlreadyApplied` before any mint/burn.
+    #[test]
+    fn test_divergent_position_mismatched_and_replay_fails_before_mint() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 1u32;
+        let correlation_id = BytesN::from_array(&env, &[13u8; 32]);
+
+        let ot_client = setup_outcome_token(&env, &contract_id, &admin);
+        env.as_contract(&contract_id, || {
+            // Non-settled row holding 100/50 shares with zero on-chain token
+            // balances: genuine divergence.
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+
+        let parity = env.as_contract(&contract_id, || {
+            get_position_token_parity(&env, market_id, &user).unwrap()
+        });
+        assert!(
+            !parity.is_matched,
+            "non-settled divergent position must report is_matched == false"
+        );
+
+        // Genuine repair consumes the id: mints 100/50 and emits the event.
+        // The event count is sampled inside the contract frame: the test
+        // host resets the event buffer when a later top-level cross-contract
+        // read (the balance assertions below) completes.
+        let (repaired, emitted) = env.as_contract(&contract_id, || {
+            let events_before = env.events().all().len();
+            let parity =
+                reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap();
+            (parity, env.events().all().len() > events_before)
+        });
+        assert!(repaired.is_matched);
+        assert!(emitted, "genuine repair must emit PositionTokensReconciled");
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            100
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::No),
+            50
+        );
+
+        // Burn the repaired tokens out-of-band to force divergence again,
+        // then replay the same id: must fail closed before any mint/burn.
+        ot_client.burn(&market_id, &user, &OutcomeTokenKind::Yes, &100);
+        ot_client.burn(&market_id, &user, &OutcomeTokenKind::No, &50);
+        let yes_before = ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes);
+        let no_before = ot_client.balance(&market_id, &user, &OutcomeTokenKind::No);
+
+        let (err, emitted) = env.as_contract(&contract_id, || {
+            let events_before = env.events().all().len();
             let err = reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id)
                 .unwrap_err();
-            assert_eq!(err, ContractError::ReconciliationAlreadyApplied);
+            (err, env.events().all().len() > events_before)
         });
+        assert_eq!(err, ContractError::ReconciliationAlreadyApplied);
+        assert!(!emitted, "replay must emit no event");
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            yes_before,
+            "replay must not mint"
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::No),
+            no_before,
+            "replay must not mint/burn"
+        );
     }
 }

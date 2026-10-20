@@ -240,6 +240,30 @@ mod share_collateral_invariants {
                 "available={available} negative: deposited={deposited} locked={locked}");
         }
 
+        /// Boundary (#1107): `arb_valid_position`'s `slack` range includes 0,
+        /// so `locked == deposited` (zero available collateral) is a value
+        /// the strategy can produce, but random sampling rarely lands on it
+        /// exactly. Pin it deterministically so the zero-slack boundary is
+        /// always exercised: available must be exactly zero and the
+        /// invariant must still hold at the boundary itself.
+        #[test]
+        fn prop_zero_slack_boundary_is_covered(
+            (yes_shares, no_shares, price) in (
+                0i128..=1_000_000i128,
+                0i128..=1_000_000i128,
+                0i128..=10_000i128,
+            )
+        ) {
+            let locked = positions::calculate_locked_collateral(yes_shares, no_shares, price);
+            let deposited = locked; // zero slack: locked == deposited exactly
+            let available = deposited.saturating_sub(locked);
+
+            prop_assert_eq!(available, 0,
+                "zero-slack boundary violated: locked={locked} deposited={deposited}");
+            prop_assert!(locked <= deposited,
+                "locked={locked} > deposited={deposited} at zero-slack boundary");
+        }
+
         /// Invariant: after successful deposit, locked <= total_deposited
         #[test]
         fn prop_deposit_preserves_locked_invariant(
@@ -957,6 +981,33 @@ mod deposit_withdraw_sequences {
         );
         let p = h.position();
         assert_eq!((p.total_deposited, p.locked_collateral), (0, 0));
+    }
+
+    /// Deterministic coverage for invariant 10 (#1108): a waived user
+    /// withdrawing their entire available balance in one call succeeds, pays
+    /// no fee, and leaves the position/market/user balances exactly as the
+    /// model predicts — independent of the proptest-driven
+    /// `prop_waived_user_withdraws_full_available_fee_free` above, which only
+    /// samples this case randomly.
+    #[test]
+    fn waived_user_withdraws_full_available_balance_deterministic() {
+        let h = Harness::new(500, true, true);
+        let deposit = 250_000i128;
+        h.client.deposit_collateral(&h.user, &h.market_id, &deposit);
+        h.skip_cooldown();
+
+        // Full available balance, fee-free despite a non-zero fee_bps and a
+        // registered treasury, is withdrawable in a single call.
+        assert_eq!(h.try_withdraw(deposit), Ok(()));
+        assert_eq!(h.position().total_deposited, 0);
+        assert_eq!(h.token.balance(&h.user), USER_FUNDS);
+        assert_eq!(h.token.balance(&h.market_addr), 0);
+        // No fee was ever routed to the treasury for a waived user.
+        let treasury = h.treasury.as_ref().unwrap();
+        assert_eq!(h.token.balance(treasury), 0);
+        assert_eq!(TreasuryContractClient::new(&h.env, treasury).total_collected(), 0);
+        // Fully drained: even one stroop more now fails closed.
+        assert_eq!(h.try_withdraw(1), Err(ContractError::InsufficientCollateral));
     }
 
     /// Deterministic regression: repeated full round-trips at 100 % fee never

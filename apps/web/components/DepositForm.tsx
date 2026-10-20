@@ -10,9 +10,14 @@ import { parseContractError } from "@/lib/errors";
 interface DepositFormProps {
   /** Pre-select a market. When provided the market ID field is hidden. */
   marketId?: string;
+  /**
+   * Optional callback invoked after a successful deposit transaction.
+   * Use this to trigger a position refetch in the parent (e.g. PositionPanel).
+   */
+  onSuccess?: () => void;
 }
 
-export function DepositForm({ marketId: marketIdProp }: DepositFormProps) {
+export function DepositForm({ marketId: marketIdProp, onSuccess }: DepositFormProps) {
   const { address } = useWallet();
   const { showToast } = useToast();
   const [amount, setAmount] = useState("");
@@ -54,6 +59,10 @@ export function DepositForm({ marketId: marketIdProp }: DepositFormProps) {
 
       setTxHash(result.hash);
       setAmount("");
+
+      // Notify parent so it can refetch the position and reflect the
+      // updated on-chain state without requiring a full page reload (#1100).
+      onSuccess?.();
     } catch (err) {
       console.error("Deposit error:", err);
       const reason = parseContractError(err);
