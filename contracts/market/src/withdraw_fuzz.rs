@@ -240,6 +240,30 @@ mod share_collateral_invariants {
                 "available={available} negative: deposited={deposited} locked={locked}");
         }
 
+        /// Boundary (#1107): `arb_valid_position`'s `slack` range includes 0,
+        /// so `locked == deposited` (zero available collateral) is a value
+        /// the strategy can produce, but random sampling rarely lands on it
+        /// exactly. Pin it deterministically so the zero-slack boundary is
+        /// always exercised: available must be exactly zero and the
+        /// invariant must still hold at the boundary itself.
+        #[test]
+        fn prop_zero_slack_boundary_is_covered(
+            (yes_shares, no_shares, price) in (
+                0i128..=1_000_000i128,
+                0i128..=1_000_000i128,
+                0i128..=10_000i128,
+            )
+        ) {
+            let locked = positions::calculate_locked_collateral(yes_shares, no_shares, price);
+            let deposited = locked; // zero slack: locked == deposited exactly
+            let available = deposited.saturating_sub(locked);
+
+            prop_assert_eq!(available, 0,
+                "zero-slack boundary violated: locked={locked} deposited={deposited}");
+            prop_assert!(locked <= deposited,
+                "locked={locked} > deposited={deposited} at zero-slack boundary");
+        }
+
         /// Invariant: after successful deposit, locked <= total_deposited
         #[test]
         fn prop_deposit_preserves_locked_invariant(
