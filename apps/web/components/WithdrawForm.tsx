@@ -6,6 +6,7 @@ import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32T
 import { TxResult } from "@/components/TxResult";
 import { useToast } from "@/context/ToastContext";
 import { parseContractError } from "@/lib/errors";
+import { toStroops, fromStroops } from "@/lib/stroops";
 
 interface WithdrawFormProps {
   /**
@@ -58,11 +59,20 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
     setTxHash(null);
 
     try {
-      // Convert amount to stroops (1 token = 10^7 stroops for USDC-like tokens)
-      const amountInStroopsStr = Math.floor(parseFloat(amount) * 10_000_000).toString();
-      
-      if (available !== null && BigInt(amountInStroopsStr) > available) {
-        const availableTokens = Number(available) / 10_000_000;
+      // Convert amount to stroops using BigInt-safe math so precision isn't
+      // lost for large i128-range amounts (#1104).
+      let amountInStroops: bigint;
+      try {
+        amountInStroops = toStroops(amount);
+      } catch {
+        setError("Enter a valid amount.");
+        setIsLoading(false);
+        return;
+      }
+      const amountInStroopsStr = amountInStroops.toString();
+
+      if (available !== null && amountInStroops > available) {
+        const availableTokens = fromStroops(available);
         setError(`Amount exceeds available collateral (${availableTokens})`);
         setIsLoading(false);
         return;
