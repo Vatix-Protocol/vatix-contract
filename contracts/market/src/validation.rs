@@ -67,14 +67,38 @@ fn validate_question_format(question: &String) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Validates that `collateral_token` is a plausible Stellar Asset Contract
+/// (SAC) address rather than a user account (#1099).
+///
+/// Soroban addresses come in two flavors: user accounts (Ed25519 keys,
+/// "G…") and deployed contracts ("C…"), distinguished by
+/// `Address::executable()` (mirrors [`validate_admin_address`] /
+/// [`validate_fee_waiver_account`] above). A SAC is always a deployed
+/// contract, so a user account can never be a legitimate collateral token;
+/// rejecting it here closes the gap where `validate_market_creation` never
+/// checked the collateral token at all, letting a non-SAC address (e.g. a
+/// plain user account) be accepted at market creation.
+///
+/// # Errors
+/// - [`ContractError::InvalidToken`] – `collateral_token` is a user account,
+///   not a contract address.
+pub fn validate_collateral_token(collateral_token: &Address) -> Result<(), ContractError> {
+    if collateral_token.executable().is_none() {
+        return Err(ContractError::InvalidToken);
+    }
+    Ok(())
+}
+
 /// Validates market creation parameters
 pub fn validate_market_creation(
     question: &String,
     end_time: u64,
     current_time: u64,
+    collateral_token: &Address,
 ) -> Result<(), ContractError> {
     validate_question_format(question)?;
     validate_end_time(end_time, current_time)?;
+    validate_collateral_token(collateral_token)?;
     Ok(())
 }
 
@@ -419,59 +443,104 @@ mod tests {
 
     #[test]
     fn test_valid_market_creation() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Will it rain tomorrow?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Will it rain tomorrow?");
         let current_time = 1000;
         let end_time = current_time + 86400; // 1 day later
+        let collateral_token = env.register(crate::MarketContract, ());
 
-        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+        assert!(
+            validate_market_creation(&question, end_time, current_time, &collateral_token)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_empty_question_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "");
         let current_time = 1000;
         let end_time = current_time + 86400;
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidQuestion)
         );
     }
 
     #[test]
     fn test_long_question_fails() {
+        let env = soroban_sdk::Env::default();
         let long_str = "a".repeat(500);
-        let question = String::from_str(&soroban_sdk::Env::default(), &long_str);
+        let question = String::from_str(&env, &long_str);
         let current_time = 1000;
         let end_time = current_time + 86400;
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidQuestion)
         );
     }
 
     #[test]
     fn test_past_end_time_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
         let current_time = 1000;
         let end_time = current_time - 1; // In the past
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidTimestamp)
         );
     }
 
     #[test]
     fn test_far_future_end_time_fails() {
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
         let current_time = 1000;
         let end_time = current_time + 31_536_001; // More than 1 year
+        let collateral_token = env.register(crate::MarketContract, ());
 
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
             Err(ContractError::InvalidTimestamp)
+        );
+    }
+
+    #[test]
+    fn test_validate_collateral_token_contract_ok() {
+        let env = soroban_sdk::Env::default();
+        let collateral_token = env.register(crate::MarketContract, ());
+        assert!(validate_collateral_token(&collateral_token).is_ok());
+    }
+
+    #[test]
+    fn test_validate_collateral_token_user_account_fails() {
+        let env = soroban_sdk::Env::default();
+        let collateral_token = Address::generate(&env);
+        assert_eq!(
+            validate_collateral_token(&collateral_token),
+            Err(ContractError::InvalidToken)
+        );
+    }
+
+    #[test]
+    fn test_market_creation_rejects_non_sac_collateral_token() {
+        let env = soroban_sdk::Env::default();
+        let question = String::from_str(&env, "Valid question?");
+        let current_time = 1000;
+        let end_time = current_time + 86400;
+        // A plain user account is not a valid SAC collateral token (#1099).
+        let collateral_token = Address::generate(&env);
+
+        assert_eq!(
+            validate_market_creation(&question, end_time, current_time, &collateral_token),
+            Err(ContractError::InvalidToken)
         );
     }
 
