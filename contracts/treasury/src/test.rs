@@ -287,6 +287,35 @@ fn distribute_fees_rejects_when_no_stakeholders_configured() {
     assert_eq!(err, TreasuryError::NoStakeholdersConfigured);
 }
 
+/// Regression test (#1109): `collect_fee` must reject a zero or negative
+/// `fee_amount` with `InvalidAmount` *before* mutating any balance,
+/// cumulative-fee, or total-collected state. The check already exists ahead
+/// of all storage writes in `collect_fee` (see `contracts/treasury/src/lib.rs`);
+/// this test locks that ordering in so a future refactor cannot regress it.
+#[test]
+fn collect_fee_rejects_zero_and_negative_amounts_without_mutating_state() {
+    let s = setup();
+
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &0i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAmount);
+
+    let err = s
+        .client
+        .try_collect_fee(&s.market, &s.token, &1u32, &-1i128)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TreasuryError::InvalidAmount);
+
+    // No balance was recorded for the token by either rejected call.
+    assert_eq!(s.client.token_balance(&s.token), 0i128);
+    assert_eq!(s.client.get_cumulative_fees(&s.token), 0i128);
+    assert_eq!(s.client.total_collected(), 0i128);
+}
+
 /// A stakeholder list summing to exactly 10_000 is accepted, and once
 /// executed `distribute_fees` succeeds and pays out proportionally.
 #[test]

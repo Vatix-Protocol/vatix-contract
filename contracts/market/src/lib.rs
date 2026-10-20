@@ -287,6 +287,38 @@ impl MarketContract {
 mod storage_key_tests {
     use super::*;
 
+    /// Regression test (#1106): `Symbol::short` silently truncates any input
+    /// longer than 9 characters instead of erroring, so every `symbol()`
+    /// source string must stay within that limit or a key collision/data
+    /// loss bug could slip in unnoticed. This pins the exact strings used by
+    /// `symbol()` (kept in sync with the match arms above) so a future
+    /// variant with a longer string fails this test instead of silently
+    /// truncating on-chain.
+    #[test]
+    fn every_symbol_source_string_fits_symbol_short() {
+        const SYMBOL_SOURCES: [(&str, &str); 11] = [
+            ("Admin", "admin"),
+            ("Paused", "paused"),
+            ("MarketConfig", "mkt_cfg"),
+            ("LiquidityPool", "liq_pool"),
+            ("Position", "position"),
+            ("Settlement", "settle"),
+            ("FeeAccrued", "fee_acc"),
+            ("OraclePrice", "oracle"),
+            ("ReentrancyGuard", "reent"),
+            ("OutcomeToken", "out_tok"),
+            ("MintOnTradeSeen", "mot_seen"),
+        ];
+        for (name, source) in SYMBOL_SOURCES {
+            assert!(
+                source.len() <= 9,
+                "StorageKey::{name}'s symbol() source \"{source}\" is {} chars; \
+                 Symbol::short silently truncates anything over 9 chars",
+                source.len()
+            );
+        }
+    }
+
     #[test]
     fn all_storage_keys_covers_every_variant() {
         assert_eq!(
