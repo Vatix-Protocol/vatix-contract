@@ -85,7 +85,7 @@ export function PositionPanel({ marketId }: PositionPanelProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         {/* Attach the ref to the wrapper so we can scroll to the deposit form */}
         <div ref={depositFormRef}>
-          <DepositForm marketId={marketId} />
+          <DepositForm marketId={marketId} onSuccess={refresh} />
         </div>
         {/*
          * Pass `refresh` as `onSuccess` so the position panel refetches
