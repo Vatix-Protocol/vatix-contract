@@ -61,6 +61,15 @@ pub struct FeeCollected {
     pub new_cumulative_fees: i128,
 }
 
+/// # Argument order (Issue #1113)
+///
+/// `new_token_balance` and `new_cumulative_fees` are both plain `i128`
+/// values and are easy to swap by mistake at the call site. Pin the order:
+/// `(market_id, token, fee_amount, new_token_balance, new_cumulative_fees)`.
+/// `new_token_balance` is the custodied balance of `token` after this call;
+/// `new_cumulative_fees` is the all-time cumulative fee total for `token`.
+/// See `fee_collected_data_field_values_are_not_swapped` below, which fails
+/// if the two are ever transposed.
 pub fn emit_fee_collected(
     env: &Env,
     market_id: u32,
@@ -416,6 +425,48 @@ mod tests {
                 key
             );
         }
+    }
+
+    #[test]
+    fn fee_collected_data_field_values_are_not_swapped() {
+        // Regression test for Issue #1113: `new_token_balance` and
+        // `new_cumulative_fees` are both `i128` and sit next to each other in
+        // the argument list, which invites an accidental swap at the call
+        // site. Use distinct values so a transposition is caught.
+        let env = Env::default();
+        let contract_id = env.register(crate::TreasuryContract, ());
+        let token = Address::generate(&env);
+
+        let fee_amount: i128 = 7;
+        let new_token_balance: i128 = 123;
+        let new_cumulative_fees: i128 = 456;
+
+        env.as_contract(&contract_id, || {
+            emit_fee_collected(
+                &env,
+                1,
+                &token,
+                fee_amount,
+                new_token_balance,
+                new_cumulative_fees,
+            );
+        });
+
+        let all = env.events().all();
+        let (_, _topics, data) = all.last().expect("fee_collected published");
+        let map = Map::<Symbol, Val>::try_from_val(&env, &data).expect("data is a map");
+
+        let got_balance: i128 =
+            i128::try_from_val(&env, &map.get(Symbol::new(&env, "new_token_balance")).unwrap())
+                .unwrap();
+        let got_fees: i128 = i128::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "new_cumulative_fees")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(got_balance, new_token_balance, "new_token_balance swapped");
+        assert_eq!(got_fees, new_cumulative_fees, "new_cumulative_fees swapped");
     }
 
     #[test]
