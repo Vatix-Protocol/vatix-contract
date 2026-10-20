@@ -959,6 +959,33 @@ mod deposit_withdraw_sequences {
         assert_eq!((p.total_deposited, p.locked_collateral), (0, 0));
     }
 
+    /// Deterministic coverage for invariant 10 (#1108): a waived user
+    /// withdrawing their entire available balance in one call succeeds, pays
+    /// no fee, and leaves the position/market/user balances exactly as the
+    /// model predicts — independent of the proptest-driven
+    /// `prop_waived_user_withdraws_full_available_fee_free` above, which only
+    /// samples this case randomly.
+    #[test]
+    fn waived_user_withdraws_full_available_balance_deterministic() {
+        let h = Harness::new(500, true, true);
+        let deposit = 250_000i128;
+        h.client.deposit_collateral(&h.user, &h.market_id, &deposit);
+        h.skip_cooldown();
+
+        // Full available balance, fee-free despite a non-zero fee_bps and a
+        // registered treasury, is withdrawable in a single call.
+        assert_eq!(h.try_withdraw(deposit), Ok(()));
+        assert_eq!(h.position().total_deposited, 0);
+        assert_eq!(h.token.balance(&h.user), USER_FUNDS);
+        assert_eq!(h.token.balance(&h.market_addr), 0);
+        // No fee was ever routed to the treasury for a waived user.
+        let treasury = h.treasury.as_ref().unwrap();
+        assert_eq!(h.token.balance(treasury), 0);
+        assert_eq!(TreasuryContractClient::new(&h.env, treasury).total_collected(), 0);
+        // Fully drained: even one stroop more now fails closed.
+        assert_eq!(h.try_withdraw(1), Err(ContractError::InsufficientCollateral));
+    }
+
     /// Deterministic regression: repeated full round-trips at 100 % fee never
     /// push `total_deposited` below zero.
     #[test]
