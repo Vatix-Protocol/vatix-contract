@@ -277,6 +277,7 @@ pub fn verify_oracle_signature(
 /// - [`ContractError::UnauthorizedOracle`] if oracle adapters are enabled or
 ///   `oracle_pubkey` is the zero key.
 /// - [`ContractError::InvalidSignature`] if signature expired or ed25519 verification fails.
+#[allow(clippy::too_many_arguments)]
 pub fn verify_oracle_signature_v2(
     env: &Env,
     passphrase_hash: &BytesN<32>,
@@ -439,6 +440,7 @@ fn verify_via_reflector(
 ///
 /// Rejects a `passphrase_hash` for any other network before dispatching
 /// ([`require_current_network`], #898).
+#[allow(clippy::too_many_arguments)]
 pub fn verify_market_outcome_v2(
     env: &Env,
     passphrase_hash: &BytesN<32>,
@@ -558,7 +560,7 @@ pub fn verify_threshold_signatures(
     let message_opposite = construct_oracle_message(env, market_id, !outcome);
     let mut valid: u32 = 0;
 
-    let len = signers_len.min(signatures.len() as u32) as usize;
+    let len = signers_len.min(signatures.len()) as usize;
     for i in 0..len {
         let pubkey = signers.get(i as u32).unwrap();
         let sig = signatures.get(i as u32).unwrap();
@@ -583,6 +585,7 @@ pub fn verify_threshold_signatures(
 ///
 /// Subject to the same adapter-only lock and network binding as the
 /// single-signer V2 path (#898).
+#[allow(clippy::too_many_arguments)]
 pub fn verify_threshold_signatures_v2(
     env: &Env,
     passphrase_hash: &BytesN<32>,
@@ -626,7 +629,7 @@ pub fn verify_threshold_signatures_v2(
     );
     let mut valid: u32 = 0;
 
-    let len = signers_len.min(signatures.len() as u32) as usize;
+    let len = signers_len.min(signatures.len()) as usize;
     for i in 0..len {
         let pubkey = signers.get(i as u32).unwrap();
         let sig = signatures.get(i as u32).unwrap();
@@ -663,7 +666,6 @@ mod tests {
         testutils::{Address as _, BytesN as _, Ledger as _},
         Address, Env, String,
     };
-    use std::format;
 
     fn make_market(env: &Env, oracle_pubkey: BytesN<32>) -> Market {
         Market {
@@ -1052,7 +1054,6 @@ mod tests {
     /// Writes `test-vectors/oracle-message.json` at the workspace root.
     /// Run with `cargo test export_oracle_test_vector -- --nocapture`.
     #[test]
-    #[cfg(feature = "std")]
     fn export_oracle_test_vector() {
         use ed25519_dalek::{Signer, SigningKey};
 
@@ -1274,7 +1275,7 @@ mod threshold_tests {
         let id = env.register(crate::MarketContract, ());
         env.as_contract(&id, f)
     }
-    use soroban_sdk::{testutils::BytesN as _, Env, Vec};
+    use soroban_sdk::{Env, Vec};
 
     /// Generate a keypair and sign the oracle message for (market_id, outcome).
     fn sign(env: &Env, market_id: u32, outcome: bool) -> (BytesN<32>, BytesN<64>) {

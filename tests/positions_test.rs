@@ -104,7 +104,7 @@ fn buy_yes_convenience_function_works() {
     assert_eq!(position.locked_collateral, 60 * STROOPS_PER_USDC);
 
     // Verify event was emitted
-    assert_event_emitted(&env, "trade_executed_event");
+    assert_event_emitted(&env, "trade_executed");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn buy_no_convenience_function_works() {
     assert_eq!(position.no_shares, amount);
     assert_eq!(position.locked_collateral, 40 * STROOPS_PER_USDC);
 
-    assert_event_emitted(&env, "trade_executed_event");
+    assert_event_emitted(&env, "trade_executed");
 }
 
 #[test]

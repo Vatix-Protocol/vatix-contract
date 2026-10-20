@@ -218,6 +218,16 @@ pub enum ContractError {
     /// for any new privileged surface.
     WrongRole = 42,
 
+    /// Caller is not the stored admin — fee-waiver management is admin-only.
+    ///
+    /// Restored for the re-wired fee-waiver module (#1060). Placed at 43:
+    /// 41/42 are already taken (`AuthorizationExpired` / `WrongRole`) and
+    /// existing discriminants must never be renumbered.
+    NotAdmin = 43,
+
+    /// The fee-waiver list is at capacity ([`crate::storage::MAX_FEE_WAIVERS`]).
+    FeeWaiverCapReached = 44,
+
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///
@@ -257,6 +267,16 @@ pub enum ContractError {
     /// the effect. Concurrent or replayed submissions therefore cannot move
     /// funds twice.
     DuplicateRequest = 81,
+
+    /// A reconciliation request was replayed: its `correlation_id` was already
+    /// consumed by an earlier repair, so the request is rejected *before* any
+    /// token mint/burn (#1061).
+    ReconciliationAlreadyApplied = 83,
+
+    /// A position's stored shares diverged from its `OutcomeToken` balances
+    /// (outside the settled-position carve-out), so trading/settlement are
+    /// blocked until an admin-gated reconciliation repairs the pair (#1061).
+    PositionTokenMismatch = 84,
 
     /// A required external dependency (RPC/DB/Redis-style backend) is
     /// unavailable, so the write is rejected rather than partially applied.

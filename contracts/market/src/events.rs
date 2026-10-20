@@ -1720,8 +1720,8 @@ mod tests {
         let topic1: u32 = topics.get(1).unwrap().into_val(&env);
         assert_eq!(topic1, EVENT_VERSION);
 
-        let topic2: Address = topics.get(2).unwrap().into_val(&env);
-        assert_eq!(topic2, user);
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
 
         let topic3: Address = topics.get(3).unwrap().into_val(&env);
         assert_eq!(topic3, user);

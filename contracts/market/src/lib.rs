@@ -10,12 +10,27 @@
 //! `mint_on_trade` edge into the outcome-token contract. The edge is typed,
 //! authorized, idempotent, and fail-closed (see [`MintOnTradeEdge`]).
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+};
 
 // `types` is self-contained (only depends on `soroban_sdk`) and carries its
 // own `#[cfg(test)]` binding-stability/wasm-budget tests (#1012, #1013); wire
 // it in so `cargo test -p vatix-market-contract` actually exercises them.
 pub mod types;
+
+// Module graph restored incrementally (#1058, #1060, #1061): each module
+// below is compiled into the crate because at least one wired entrypoint or
+// wired module depends on it. The full pre-#1003 graph (positions, deposit,
+// settlement, withdraw, validation, withdraw_fuzz, oracle_adapter) stays
+// unwired — restoring that is tracked separately per #1138.
+pub mod error;
+pub mod events;
+pub mod fee_rate;
+pub mod fee_waiver;
+pub mod oracle;
+pub mod reconciliation;
+pub mod storage;
 
 /// Stable, collision-free storage key encodings for all persisted market state.
 ///
@@ -70,17 +85,17 @@ impl StorageKey {
     /// Stable symbol prefix for this key. Must never change once deployed.
     pub fn symbol(self) -> Symbol {
         match self {
-            StorageKey::Admin => Symbol::short("admin"),
-            StorageKey::Paused => Symbol::short("paused"),
-            StorageKey::MarketConfig => Symbol::short("mkt_cfg"),
-            StorageKey::LiquidityPool => Symbol::short("liq_pool"),
-            StorageKey::Position => Symbol::short("position"),
-            StorageKey::Settlement => Symbol::short("settle"),
-            StorageKey::FeeAccrued => Symbol::short("fee_acc"),
-            StorageKey::OraclePrice => Symbol::short("oracle"),
-            StorageKey::ReentrancyGuard => Symbol::short("reent"),
-            StorageKey::OutcomeToken => Symbol::short("out_tok"),
-            StorageKey::MintOnTradeSeen => Symbol::short("mot_seen"),
+            StorageKey::Admin => symbol_short!("admin"),
+            StorageKey::Paused => symbol_short!("paused"),
+            StorageKey::MarketConfig => symbol_short!("mkt_cfg"),
+            StorageKey::LiquidityPool => symbol_short!("liq_pool"),
+            StorageKey::Position => symbol_short!("position"),
+            StorageKey::Settlement => symbol_short!("settle"),
+            StorageKey::FeeAccrued => symbol_short!("fee_acc"),
+            StorageKey::OraclePrice => symbol_short!("oracle"),
+            StorageKey::ReentrancyGuard => symbol_short!("reent"),
+            StorageKey::OutcomeToken => symbol_short!("out_tok"),
+            StorageKey::MintOnTradeSeen => symbol_short!("mot_seen"),
         }
     }
 
@@ -181,7 +196,12 @@ impl MarketContract {
     }
 
     /// Write a typed storage key. Money-path writes fail closed when paused.
-    pub fn set_key(env: Env, caller: Address, key: StorageKey, value: u64) -> Result<(), StorageError> {
+    pub fn set_key(
+        env: Env,
+        caller: Address,
+        key: StorageKey,
+        value: u64,
+    ) -> Result<(), StorageError> {
         caller.require_auth();
         let admin: Address = env
             .storage()
@@ -200,7 +220,11 @@ impl MarketContract {
 
     /// Admin-only: configure the outcome-token contract for the mint-on-trade edge.
     /// Deny-by-default privileged surface; requires admin auth.
-    pub fn set_outcome_token(env: Env, caller: Address, outcome_token: Address) -> Result<(), StorageError> {
+    pub fn set_outcome_token(
+        env: Env,
+        caller: Address,
+        outcome_token: Address,
+    ) -> Result<(), StorageError> {
         caller.require_auth();
         let admin: Address = env
             .storage()
@@ -214,6 +238,34 @@ impl MarketContract {
             .instance()
             .set(&StorageKey::OutcomeToken.symbol(), &outcome_token);
         Ok(())
+    }
+
+    /// Initialize the contract with its admin (#1058).
+    ///
+    /// First call wins: stores `admin` under [`StorageKey::Admin`] and stamps
+    /// the storage version via [`crate::storage::set_version`]. A repeat call
+    /// fails closed with [`StorageError::Unauthorized`] so an initialized
+    /// admin can never be overwritten by re-initialization. This is the
+    /// contract's official initialization path used by the integration-test
+    /// harness (`tests/helpers`).
+    pub fn initialize(env: Env, admin: Address) -> Result<(), StorageError> {
+        if env.storage().instance().has(&StorageKey::Admin.symbol()) {
+            return Err(StorageError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin.symbol(), &admin);
+        crate::storage::set_version(&env);
+        Ok(())
+    }
+
+    /// Read-only view: whether `address` currently holds a fee waiver (#1060).
+    ///
+    /// Thin wrapper over [`crate::fee_waiver::has_fee_waiver`]. Performs no
+    /// auth — any client can query waiver status. Returns `false` for
+    /// addresses never added and for addresses whose waiver was removed.
+    pub fn get_fee_waiver(env: Env, address: Address) -> bool {
+        crate::fee_waiver::has_fee_waiver(&env, &address)
     }
 
     /// Whether the kill-switch is engaged. Defaults to paused (fail-closed) when
@@ -246,9 +298,9 @@ mod storage_key_tests {
 
     #[test]
     fn every_symbol_is_unique() {
-        for i in 0..ALL_STORAGE_KEYS.len() {
-            for j in (i + 1)..ALL_STORAGE_KEYS.len() {
-                let (a, b) = (ALL_STORAGE_KEYS[i], ALL_STORAGE_KEYS[j]);
+        for (i, a) in ALL_STORAGE_KEYS.iter().enumerate() {
+            for b in ALL_STORAGE_KEYS.iter().skip(i + 1) {
+                let (a, b) = (*a, *b);
                 assert_ne!(
                     a.symbol(),
                     b.symbol(),
@@ -262,11 +314,11 @@ mod storage_key_tests {
 
     #[test]
     fn every_name_is_non_empty_and_unique() {
-        for i in 0..ALL_STORAGE_KEYS.len() {
-            let name_i = ALL_STORAGE_KEYS[i].name();
+        for (i, key_i) in ALL_STORAGE_KEYS.iter().enumerate() {
+            let name_i = key_i.name();
             assert!(!name_i.is_empty(), "StorageKey::name() must not be empty");
-            for j in (i + 1)..ALL_STORAGE_KEYS.len() {
-                let name_j = ALL_STORAGE_KEYS[j].name();
+            for key_j in ALL_STORAGE_KEYS.iter().skip(i + 1) {
+                let name_j = key_j.name();
                 assert_ne!(name_i, name_j, "duplicate StorageKey name: {}", name_i);
             }
         }
