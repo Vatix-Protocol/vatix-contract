@@ -15,3 +15,9 @@ soroban-sdk = { workspace = true }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 ed25519-dalek = "2.2.0"
 rand = "0.8"
+
+proptest = "1"
+
+[[test]]
+name = "proptest_locked_invariant"
+path = "../../tests/proptest_locked_invariant.rs"

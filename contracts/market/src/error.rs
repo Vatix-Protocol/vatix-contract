@@ -1,6 +1,6 @@
 use soroban_sdk::contracterror;
 
-/// Error codes
+/// Error codes. Discriminants are part of the public ABI and must not be renumbered.
 ///
 /// Errors are grouped by category with reserved number ranges:
 /// - Market Errors: 1-9
@@ -91,4 +91,39 @@ pub enum ContractError {
     // ========== Arithmetic Errors (60-69) ==========
     /// Arithmetic operation overflowed
     ArithmeticOverflow = 60,
+}
+
+#[cfg(test)]
+mod abi_tests {
+    use super::ContractError::*;
+
+    #[test]
+    fn error_discriminants_are_abi_stable() {
+        for (variant, code) in [
+            (MarketNotFound, 1),
+            (MarketAlreadyResolved, 2),
+            (MarketNotResolved, 3),
+            (MarketExpired, 4),
+            (MarketNotActive, 5),
+            (InsufficientCollateral, 10),
+            (NoCollateralToWithdraw, 11),
+            (WithdrawalExceedsUnlockedCollateral, 12),
+            (PositionAlreadySettled, 13),
+            (NoPositionFound, 14),
+            (InvalidShareAmount, 15),
+            (InvalidSignature, 20),
+            (UnauthorizedOracle, 21),
+            (InvalidOutcome, 22),
+            (InvalidPrice, 30),
+            (InvalidQuantity, 31),
+            (InvalidTimestamp, 32),
+            (InvalidQuestion, 33),
+            (Unauthorized, 40),
+            (NotAdmin, 41),
+            (TokenTransferFailed, 50),
+            (ArithmeticOverflow, 60),
+        ] {
+            assert_eq!(variant as u32, code);
+        }
+    }
 }

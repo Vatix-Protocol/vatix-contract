@@ -11,27 +11,33 @@ pub const STROOPS_PER_USDC: i128 = 10_000_000;
 /// - Net YES  => lock net_yes * price
 /// - Net NO   => lock net_no * (1 - price)
 /// - Hedged   => lock 0
-pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_price: i128) -> i128 {
-    if yes_shares == no_shares {
-        return 0;
+///
+/// Shares must be nonnegative and price must be in 0..=10_000 basis points.
+/// Returns `ArithmeticOverflow` if the intermediate product cannot fit in i128.
+pub fn calculate_locked_collateral(
+    yes_shares: i128,
+    no_shares: i128,
+    market_price: i128,
+) -> Result<i128, ContractError> {
+    if yes_shares < 0 || no_shares < 0 {
+        return Err(ContractError::InvalidShareAmount);
     }
-
-    if yes_shares > no_shares {
-        let net_yes = yes_shares - no_shares;
-        net_yes
-            .checked_mul(market_price)
-            .unwrap()
-            .checked_div(BASIS_POINTS)
-            .unwrap()
+    if !(0..=BASIS_POINTS).contains(&market_price) {
+        return Err(ContractError::InvalidPrice);
+    }
+    if yes_shares >= no_shares {
+        scale_by_bps(yes_shares - no_shares, market_price)
     } else {
-        let net_no = no_shares - yes_shares;
-        let inverse_price = BASIS_POINTS - market_price;
-        net_no
-            .checked_mul(inverse_price)
-            .unwrap()
-            .checked_div(BASIS_POINTS)
-            .unwrap()
+        scale_by_bps(no_shares - yes_shares, BASIS_POINTS - market_price)
     }
+}
+
+/// Reject intermediate multiplication overflow rather than capping collateral.
+fn scale_by_bps(amount: i128, price_bps: i128) -> Result<i128, ContractError> {
+    amount
+        .checked_mul(price_bps)
+        .and_then(|value| value.checked_div(BASIS_POINTS))
+        .ok_or(ContractError::ArithmeticOverflow)
 }
 
 /// Validate whether a proposed position change is allowed
@@ -40,8 +46,14 @@ pub fn validate_position_change(
     yes_delta: i128,
     no_delta: i128,
 ) -> Result<(), ContractError> {
-    let new_yes = current_position.yes_shares + yes_delta;
-    let new_no = current_position.no_shares + no_delta;
+    let new_yes = current_position
+        .yes_shares
+        .checked_add(yes_delta)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let new_no = current_position
+        .no_shares
+        .checked_add(no_delta)
+        .ok_or(ContractError::ArithmeticOverflow)?;
 
     if new_yes < 0 || new_no < 0 {
         return Err(ContractError::InvalidShareAmount);
@@ -108,7 +120,7 @@ pub fn update_position(
 
     // 4. Recalculate locked collateral
     let new_locked =
-        calculate_locked_collateral(position.yes_shares, position.no_shares, market_price);
+        calculate_locked_collateral(position.yes_shares, position.no_shares, market_price)?;
     position.locked_collateral = new_locked;
 
     // 5. Persist
@@ -150,24 +162,24 @@ mod tests {
     #[test]
     fn test_calculate_locked_collateral_net_yes() {
         let locked = calculate_locked_collateral(100 * STROOPS_PER_USDC, 0, 6000);
-        assert_eq!(locked, 60 * STROOPS_PER_USDC);
+        assert_eq!(locked, Ok(60 * STROOPS_PER_USDC));
 
         let locked =
             calculate_locked_collateral(100 * STROOPS_PER_USDC, 30 * STROOPS_PER_USDC, 5000);
-        assert_eq!(locked, 35 * STROOPS_PER_USDC);
+        assert_eq!(locked, Ok(35 * STROOPS_PER_USDC));
     }
 
     #[test]
     fn test_calculate_locked_collateral_net_no() {
         let locked = calculate_locked_collateral(0, 100 * STROOPS_PER_USDC, 6000);
-        assert_eq!(locked, 40 * STROOPS_PER_USDC);
+        assert_eq!(locked, Ok(40 * STROOPS_PER_USDC));
     }
 
     #[test]
     fn test_calculate_locked_collateral_hedged() {
         let locked =
             calculate_locked_collateral(100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000);
-        assert_eq!(locked, 0);
+        assert_eq!(locked, Ok(0));
     }
 
     #[test]
@@ -264,5 +276,82 @@ mod tests {
         assert_eq!(pos.yes_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(pos.no_shares, 30 * STROOPS_PER_USDC);
         assert_eq!(pos.locked_collateral, 42 * STROOPS_PER_USDC);
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[test]
+    fn collateral_boundaries() {
+        for (yes, no, price, expected) in [
+            (100, 100, 5_000, 0),
+            (100, 0, 0, 0),
+            (0, 100, 10_000, 0),
+            (100, 0, 10_000, 100),
+            (0, 100, 0, 100),
+        ] {
+            assert_eq!(calculate_locked_collateral(yes, no, price), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn multiplication_overflow_boundary() {
+        let boundary = i128::MAX / BASIS_POINTS;
+        assert_eq!(scale_by_bps(boundary, BASIS_POINTS), Ok(boundary));
+        assert_eq!(
+            scale_by_bps(boundary + 1, BASIS_POINTS),
+            Err(ContractError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            calculate_locked_collateral(i128::MAX, 0, 10_000),
+            Err(ContractError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            calculate_locked_collateral(0, i128::MAX, 0),
+            Err(ContractError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            calculate_locked_collateral(i128::MAX, 0, 1),
+            Ok(i128::MAX / BASIS_POINTS)
+        );
+    }
+
+    #[test]
+    fn invalid_inputs_are_rejected_even_when_hedged() {
+        assert_eq!(
+            calculate_locked_collateral(-1, -1, 5000),
+            Err(ContractError::InvalidShareAmount)
+        );
+        for price in [-1, 10_001] {
+            assert_eq!(
+                calculate_locked_collateral(100, 100, price),
+                Err(ContractError::InvalidPrice)
+            );
+        }
+    }
+
+    #[test]
+    fn failed_update_preserves_position() {
+        use soroban_sdk::testutils::Address as _;
+        let env = Env::default();
+        let contract = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+        env.as_contract(&contract, || {
+            let original = update_position(&env, 1, &user, 100, 0, 5000).unwrap();
+            assert_eq!(
+                update_position(&env, 1, &user, i128::MAX, 0, 5000).unwrap_err(),
+                ContractError::ArithmeticOverflow
+            );
+            assert_eq!(
+                update_position(&env, 1, &user, i128::MAX - 100, 0, 10_000).unwrap_err(),
+                ContractError::ArithmeticOverflow
+            );
+            let saved = crate::storage::get_position(&env, 1, &user).unwrap();
+            assert_eq!(saved.yes_shares, original.yes_shares);
+            assert_eq!(saved.no_shares, original.no_shares);
+            assert_eq!(saved.locked_collateral, original.locked_collateral);
+        });
     }
 }
