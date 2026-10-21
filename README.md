@@ -625,3 +625,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1089 -->
 - #1089: Settlement eligibility rejects non-`Resolved` market statuses (including `Canceled`). Enforced by `validate_settlement_eligibility` in `contracts/market/src/settlement.rs` (returns `ContractError::MarketNotResolved` unless `market.status == MarketStatus::Resolved`), and covered by `test_validate_settlement_not_resolved` and `test_validate_settlement_rejects_canceled_market` in the same file.
+
+<!-- handsoff-issue-1088 -->
+- #1088: `calculate_payout` always returns 0 for the losing side of a position. `contracts/market/src/settlement.rs::calculate_payout` returns `position.yes_shares` when the outcome is YES and `position.no_shares` when it is NO, so the non-winning share field (left at 0 for a one-sided position) naturally yields a zero payout; covered directly by `test_losing_shares_pay_zero` in the same file.
