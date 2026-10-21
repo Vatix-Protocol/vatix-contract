@@ -63,6 +63,12 @@ pub const ORACLE_PREIMAGE_LEN: usize = ORACLE_DOMAIN_SEPARATOR.len() + 4 + 1;
 pub const ORACLE_PREIMAGE_LEN_V2: usize =
     ORACLE_DOMAIN_SEPARATOR_V2.len() + 32 + 4 + 1 + 8 + 4;
 
+// Compile-time pins (#1065): the preimage lengths are bound to the documented
+// field widths, so changing the layout without updating these constants is a
+// deliberate, reviewed, compile-breaking change.
+const _: () = assert!(ORACLE_PREIMAGE_LEN == 20);
+const _: () = assert!(ORACLE_PREIMAGE_LEN_V2 == 64);
+
 /// Construct the legacy V1 message that the oracle signs.
 ///
 /// Message format: `keccak256(domain_separator || market_id_be || outcome_byte)`
@@ -1622,5 +1628,39 @@ mod adapter_fallback_tests {
             }).unwrap_err();
             assert_eq!(result, ContractError::UnauthorizedOracle);
         });
+    }
+
+    /// #1065: the V2 preimage builder produces exactly
+    /// [`ORACLE_PREIMAGE_LEN_V2`] bytes whose first 15 bytes equal the
+    /// `ORACLE_DOMAIN_SEPARATOR_V2` tag (#1065).
+    #[test]
+    fn test_build_oracle_preimage_v2_has_documented_width() {
+        let env = Env::default();
+        let passphrase_hash = BytesN::from_array(&env, &[0x99u8; 32]);
+        let market_id = 7u32;
+        let outcome = true;
+        let valid_until = 1_700_000_000u64;
+        let epoch = 3u32;
+
+        let preimage = build_oracle_preimage_v2(
+            &env,
+            &passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            epoch,
+        );
+
+        assert_eq!(
+            preimage.len() as usize,
+            ORACLE_PREIMAGE_LEN_V2,
+            "V2 preimage must be exactly ORACLE_PREIMAGE_LEN_V2 bytes"
+        );
+        let leading = preimage.slice(0..ORACLE_DOMAIN_SEPARATOR_V2.len() as u32);
+        assert_eq!(
+            leading,
+            Bytes::from_slice(&env, ORACLE_DOMAIN_SEPARATOR_V2),
+            "V2 preimage must lead with ORACLE_DOMAIN_SEPARATOR_V2"
+        );
     }
 }
