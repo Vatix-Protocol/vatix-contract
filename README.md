@@ -622,3 +622,15 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1042 -->
 - #1042: Market contract: oracle_adapter has no test asserting the disabled-adapter path fails closed
+
+<!-- handsoff-issue-1089 -->
+- #1089: Settlement eligibility rejects non-`Resolved` market statuses (including `Canceled`). Enforced by `validate_settlement_eligibility` in `contracts/market/src/settlement.rs` (returns `ContractError::MarketNotResolved` unless `market.status == MarketStatus::Resolved`), and covered by `test_validate_settlement_not_resolved` and `test_validate_settlement_rejects_canceled_market` in the same file.
+
+<!-- handsoff-issue-1088 -->
+- #1088: `calculate_payout` always returns 0 for the losing side of a position. `contracts/market/src/settlement.rs::calculate_payout` returns `position.yes_shares` when the outcome is YES and `position.no_shares` when it is NO, so the non-winning share field (left at 0 for a one-sided position) naturally yields a zero payout; covered directly by `test_losing_shares_pay_zero` in the same file.
+
+<!-- handsoff-issue-1087 -->
+- #1087: `compute_settlement`'s no-winner refund path. In `contracts/market/src/settlement.rs::compute_settlement`, when a market is `Resolved` but `market.result` is `None`, the position is refunded its full deposited collateral instead of running the win/lose payout calculation. Covered by `test_execute_settlement_no_winner_refunds_deposited` and `test_settle_position_refunds_collateral_for_no_winner` in the same file.
+
+<!-- handsoff-issue-1086 -->
+- #1086: `validate_payout` is wired into the settlement path, not dead code. `contracts/market/src/settlement.rs::compute_settlement` calls `validate_payout(payout)?` at line 109 (immediately after computing `payout`), rejecting any negative payout before a position is marked settled. Directly unit-tested by `test_validate_payout_valid` and `test_validate_payout_invalid` in the same file.
