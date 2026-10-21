@@ -1,3 +1,7 @@
+//! Storage keys use Soroban's typed tuple encoding, preserving the complete
+//! market ID and address without truncation. Keep these tags and tuple shapes
+//! stable: they identify existing on-chain data.
+
 use crate::types::{Market, Position};
 use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
@@ -173,5 +177,85 @@ mod test {
             assert_eq!(saved_position.yes_shares, 100);
             assert_eq!(saved_position.market_id, market_id);
         });
+    }
+}
+
+#[cfg(test)]
+mod key_regressions {
+    use super::*;
+    use soroban_sdk::{
+        xdr::{ContractId, FromXdr, Hash, ScAddress, ToXdr},
+        TryFromVal,
+    };
+
+    #[test]
+    fn full_address_and_market_id_are_preserved() {
+        let env = Env::default();
+        let contract = env.register(crate::MarketContract, ());
+        let mut payload = [42u8; 32];
+        let a =
+            Address::try_from_val(&env, &ScAddress::Contract(ContractId(Hash(payload)))).unwrap();
+        payload[31] = 43;
+        let b =
+            Address::try_from_val(&env, &ScAddress::Contract(ContractId(Hash(payload)))).unwrap();
+        let key_a = (POSITIONS_KEY, 1u32, a.clone());
+        let key_b = (POSITIONS_KEY, 1u32, b.clone());
+        let encoded_a = key_a.clone().to_xdr(&env);
+        let encoded_b = key_b.clone().to_xdr(&env);
+        assert_ne!(encoded_a, encoded_b);
+        assert_eq!(
+            <(Symbol, u32, Address)>::from_xdr(&env, &encoded_a).unwrap(),
+            key_a
+        );
+        assert_eq!(
+            <(Symbol, u32, Address)>::from_xdr(&env, &encoded_b).unwrap(),
+            key_b
+        );
+        env.as_contract(&contract, || {
+            let position = Position {
+                market_id: 1,
+                user: a.clone(),
+                yes_shares: 100,
+                no_shares: 0,
+                locked_collateral: 60,
+                is_settled: false,
+            };
+            set_position(&env, 1, &a, &position);
+            assert_eq!(get_position(&env, 1, &a).unwrap().yes_shares, 100);
+            assert!(get_position(&env, 1, &b).is_none());
+            let mut other_position = position.clone();
+            other_position.user = b.clone();
+            other_position.yes_shares = 200;
+            set_position(&env, 1, &b, &other_position);
+            assert_eq!(get_position(&env, 1, &a).unwrap().yes_shares, 100);
+            assert_eq!(get_position(&env, 1, &b).unwrap().yes_shares, 200);
+            assert!(get_position(&env, 2, &a).is_none());
+        });
+    }
+
+    #[test]
+    fn all_key_shapes_round_trip_and_tags_are_distinct() {
+        let env = Env::default();
+        let market_key = (MARKETS_KEY, u32::MAX);
+        let encoded = market_key.clone().to_xdr(&env);
+        assert_eq!(
+            <(Symbol, u32)>::from_xdr(&env, &encoded).unwrap(),
+            market_key
+        );
+        let tags = [
+            MARKETS_KEY,
+            POSITIONS_KEY,
+            ADMIN_KEY,
+            COUNTER_KEY,
+            TREASURY_KEY,
+            FEE_BPS_KEY,
+        ];
+        for (index, tag) in tags.iter().enumerate() {
+            let encoded = tag.to_xdr(&env);
+            assert_eq!(Symbol::from_xdr(&env, &encoded).unwrap(), *tag);
+            for other in &tags[index + 1..] {
+                assert_ne!(tag, other);
+            }
+        }
     }
 }
