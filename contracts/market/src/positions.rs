@@ -19,14 +19,6 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
-    /// Caller is not the position owner nor an approved operator
-    Unauthorized = 4,
-    /// Transfer/merge request id has already been processed (replay)
-    DuplicateRequest = 5,
-    /// Source and destination positions belong to different markets
-    MarketMismatch = 6,
-    /// Transfer/merge would leave the source position settled or invalid
-    InvalidPositionState = 7,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -413,17 +405,18 @@ pub fn update_position(
         .map_err(|_| PositionError::InvalidMarketPrice)?;
 
     // 1. Load or initialize position
-    let mut position = crate::storage::get_position(env, market_id, user)
-        .unwrap_or_else(|_| None)
-        .unwrap_or_else(|| Position {
-            market_id,
-            user: user.clone(),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        });
+    let mut position =
+        crate::storage::get_position(env, market_id, user)
+            .unwrap_or_else(|_| None)
+            .unwrap_or_else(|| Position {
+                market_id,
+                user: user.clone(),
+                yes_shares: 0,
+                no_shares: 0,
+                locked_collateral: 0,
+                total_deposited: 0,
+                is_settled: false,
+            });
 
     // 2. Validate deltas
     let side_yes = position_limit_exceeded_side(&position, yes_delta, no_delta);
@@ -442,7 +435,8 @@ pub fn update_position(
     position.locked_collateral = new_locked;
 
     // 5. Persist
-    crate::storage::set_position(env, market_id, user, &position).unwrap_or_default();
+    crate::storage::set_position(env, market_id, user, &position)
+        .unwrap_or_default();
 
     // 6. Emit position_updated event
     emit_position_updated(
@@ -675,10 +669,16 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "position_updated"));
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_updated")
+        );
 
         let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic1, soroban_sdk::Symbol::new(&env, "trade_executed"));
+        assert_eq!(
+            topic1,
+            soroban_sdk::Symbol::new(&env, "trade_executed")
+        );
     }
 
     #[test]
@@ -752,25 +752,11 @@ mod tests {
         });
 
         let switched = env.as_contract(&contract_id, || {
-            update_position(
-                &env,
-                market_id,
-                &user,
-                -100 * STROOPS_PER_USDC,
-                100 * STROOPS_PER_USDC,
-                6000,
-            )
-            .unwrap()
+            update_position(&env, market_id, &user, -100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000).unwrap()
         });
 
-        assert_eq!(
-            initial.yes_shares + initial.no_shares,
-            100 * STROOPS_PER_USDC
-        );
-        assert_eq!(
-            switched.yes_shares + switched.no_shares,
-            100 * STROOPS_PER_USDC
-        );
+        assert_eq!(initial.yes_shares + initial.no_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(switched.yes_shares + switched.no_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(switched.yes_shares, 0);
         assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
     }

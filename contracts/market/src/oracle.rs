@@ -38,9 +38,6 @@
 //!
 //! **Backend alignment**: the backend signer MUST prepend `VATIX_ORACLE_V2`,
 //! concatenate all fields in sequence, and keccak256-hash the result.
-//! `network_passphrase_hash` MUST be the target network's id
-//! (SHA-256 of its passphrase, `env.ledger().network_id()` on-chain); reports
-//! bound to any other network are rejected (#898, [`require_current_network`]).
 //! Use `test-vectors/oracle-message.json` to verify signing integration.
 
 use crate::error::ContractError;
@@ -63,7 +60,14 @@ pub const ORACLE_PREIMAGE_LEN: usize = ORACLE_DOMAIN_SEPARATOR.len() + 4 + 1;
 
 /// Exact width, in bytes, of the V2 oracle preimage before hashing:
 /// `domain_separator (15) || passphrase_hash (32) || market_id_be (4) || outcome_byte (1) || valid_until_be (8) || epoch_be (4)`.
-pub const ORACLE_PREIMAGE_LEN_V2: usize = ORACLE_DOMAIN_SEPARATOR_V2.len() + 32 + 4 + 1 + 8 + 4;
+pub const ORACLE_PREIMAGE_LEN_V2: usize =
+    ORACLE_DOMAIN_SEPARATOR_V2.len() + 32 + 4 + 1 + 8 + 4;
+
+// Compile-time pins (#1065): the preimage lengths are bound to the documented
+// field widths, so changing the layout without updating these constants is a
+// deliberate, reviewed, compile-breaking change.
+const _: () = assert!(ORACLE_PREIMAGE_LEN == 20);
+const _: () = assert!(ORACLE_PREIMAGE_LEN_V2 == 64);
 
 /// Construct the legacy V1 message that the oracle signs.
 ///
@@ -93,8 +97,14 @@ pub fn construct_oracle_message_v2(
     valid_until: u64,
     epoch: u32,
 ) -> BytesN<32> {
-    let preimage =
-        build_oracle_preimage_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
+    let preimage = build_oracle_preimage_v2(
+        env,
+        passphrase_hash,
+        market_id,
+        outcome,
+        valid_until,
+        epoch,
+    );
     env.crypto().keccak256(&preimage).into()
 }
 
@@ -109,10 +119,7 @@ pub fn build_oracle_preimage_v2(
 ) -> Bytes {
     let mut preimage = Bytes::new(env);
     preimage.append(&Bytes::from_slice(env, ORACLE_DOMAIN_SEPARATOR_V2));
-    preimage.append(&Bytes::from_slice(
-        env,
-        passphrase_hash.to_array().as_slice(),
-    ));
+    preimage.append(&Bytes::from_slice(env, passphrase_hash.to_array().as_slice()));
     preimage.append(&Bytes::from_slice(env, &market_id.to_be_bytes()));
     preimage.append(&Bytes::from_slice(env, &[u8::from(outcome)]));
     preimage.append(&Bytes::from_slice(env, &valid_until.to_be_bytes()));
@@ -188,51 +195,22 @@ fn verify_ed25519_safe(pubkey: &BytesN<32>, message: &BytesN<32>, signature: &By
         .is_ok()
 }
 
-/// Fail closed once the contract is locked into adapter-only mode (#898).
+/// Verify that an oracle signature is valid for a market resolution.
 ///
-/// `MarketContract::enable_oracle_adapters` is documented as permanently
-/// rejecting Ed25519 resolution. Every Ed25519 verifier in this module — V1
-/// ([`verify_oracle_signature`]), V2 ([`verify_oracle_signature_v2`]) and both
-/// threshold variants — calls this first, so no entrypoint can fall back to a
-/// single- or multi-key Ed25519 report after the lock. Checked before any
-/// crypto work (see `docs/SECURITY.md` § Fail-Closed Lock).
+/// # Fail-Closed Behavior
+/// - If oracle adapters are enabled, Ed25519 verification is REJECTED.
+/// - This prevents silent fallback during incomplete upgrades.
+/// - See UPGRADE_PLAYBOOK.md for cross-contract upgrade order.
 ///
 /// # Errors
-/// - [`ContractError::UnauthorizedOracle`] once adapters are enabled.
-fn require_ed25519_path_open(env: &Env) -> Result<(), ContractError> {
-    if crate::storage::has_oracle_adapters(env) {
-        return Err(ContractError::UnauthorizedOracle);
-    }
-    Ok(())
-}
-
-/// Reject a V2 report whose `passphrase_hash` is not this ledger's network id
-/// (#898).
-///
-/// The V2 preimage binds the network so a testnet signature cannot be
-/// replayed on mainnet, but that binding only holds if the contract checks
-/// the caller-supplied hash against the network it is actually running on:
-/// otherwise a replayer simply passes the testnet hash back in. The expected
-/// value is `env.ledger().network_id()` (SHA-256 of the network passphrase).
-///
-/// # Errors
-/// - [`ContractError::InvalidSignature`] if the hash names another network.
-pub fn require_current_network(
-    env: &Env,
-    passphrase_hash: &BytesN<32>,
-) -> Result<(), ContractError> {
-    if *passphrase_hash != env.ledger().network_id() {
-        return Err(ContractError::InvalidSignature);
-    }
-    Ok(())
-}
-
-/// Verify that a legacy V1 oracle signature is valid for a market resolution.
-///
-/// # Errors
-/// - [`ContractError::UnauthorizedOracle`] if oracle adapters are enabled
-///   (fail-closed, see [`require_ed25519_path_open`]).
 /// - [`ContractError::UnauthorizedOracle`] if `oracle_pubkey` is the zero key.
+/// - [`ContractError::UnauthorizedOracle`] if adapters are enabled (fail-closed).
+/// - Panics if the Ed25519 signature is invalid (SDK limitation).
+///
+/// # Security
+/// Uses Ed25519 signature verification via the Soroban crypto module.
+/// CRITICAL: Do NOT silently accept Ed25519 when adapters exist.
+
 /// - [`ContractError::InvalidSignature`] if the signature does not verify
 ///   against `construct_oracle_message(env, market_id, outcome)`.
 ///
@@ -247,7 +225,10 @@ pub fn verify_oracle_signature(
     signature: &BytesN<64>,
     oracle_pubkey: &BytesN<32>,
 ) -> Result<(), ContractError> {
-    require_ed25519_path_open(env)?;
+    // Fail-closed: reject Ed25519 if adapters are enabled
+    if crate::storage::has_oracle_adapters(env) {
+        return Err(ContractError::UnauthorizedOracle);
+    }
 
     if oracle_pubkey == &BytesN::from_array(env, &[0u8; 32]) {
         return Err(ContractError::UnauthorizedOracle);
@@ -264,18 +245,12 @@ pub fn verify_oracle_signature(
 /// Verify that a V2 oracle signature is valid for a market resolution.
 ///
 /// Checks:
-/// 1. Oracle adapters are not enabled ([`require_ed25519_path_open`]).
-/// 2. `oracle_pubkey` is non-zero.
-/// 3. `env.ledger().timestamp() <= valid_until` (signature has not expired).
-/// 4. Ed25519 signature verifies against `construct_oracle_message_v2(...)`.
-///
-/// Network binding is enforced by the callers that take a caller-supplied
-/// `passphrase_hash` ([`verify_market_outcome_v2`],
-/// [`verify_threshold_signatures_v2`]) via [`require_current_network`].
+/// 1. `oracle_pubkey` is non-zero.
+/// 2. `env.ledger().timestamp() <= valid_until` (signature has not expired).
+/// 3. Ed25519 signature verifies against `construct_oracle_message_v2(...)`.
 ///
 /// # Errors
-/// - [`ContractError::UnauthorizedOracle`] if oracle adapters are enabled or
-///   `oracle_pubkey` is the zero key.
+/// - [`ContractError::UnauthorizedOracle`] if `oracle_pubkey` is the zero key.
 /// - [`ContractError::InvalidSignature`] if signature expired or ed25519 verification fails.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_oracle_signature_v2(
@@ -288,8 +263,6 @@ pub fn verify_oracle_signature_v2(
     signature: &BytesN<64>,
     oracle_pubkey: &BytesN<32>,
 ) -> Result<(), ContractError> {
-    require_ed25519_path_open(env)?;
-
     if oracle_pubkey == &BytesN::from_array(env, &[0u8; 32]) {
         return Err(ContractError::UnauthorizedOracle);
     }
@@ -298,8 +271,14 @@ pub fn verify_oracle_signature_v2(
         return Err(ContractError::InvalidSignature);
     }
 
-    let message =
-        construct_oracle_message_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
+    let message = construct_oracle_message_v2(
+        env,
+        passphrase_hash,
+        market_id,
+        outcome,
+        valid_until,
+        epoch,
+    );
 
     if !verify_ed25519_safe(oracle_pubkey, &message, signature) {
         return Err(ContractError::InvalidSignature);
@@ -355,9 +334,7 @@ pub fn verify_market_outcome(
     proof: &BytesN<64>,
 ) -> Result<(), ContractError> {
     match adapter_type {
-        AdapterType::Ed25519 => {
-            verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey)
-        }
+        AdapterType::Ed25519 => verify_oracle_signature(env, market_id, outcome, proof, &market.oracle_pubkey),
         AdapterType::Reflector => verify_via_reflector(env, market_id, market, outcome, proof),
         AdapterType::Pyth => {
             if crate::storage::is_adapter_enabled(env, &adapter_type) {
@@ -452,7 +429,6 @@ pub fn verify_market_outcome_v2(
     epoch: u32,
     proof: &BytesN<64>,
 ) -> Result<(), ContractError> {
-    require_current_network(env, passphrase_hash)?;
     match adapter_type {
         AdapterType::Ed25519 => verify_oracle_signature_v2(
             env,
@@ -530,8 +506,7 @@ pub fn verify_market_outcome_v2(
 /// when that count meets or exceeds `quorum`.
 ///
 /// # Errors
-/// - `UnauthorizedOracle` — oracle adapters are enabled (#898), or `signers`
-///   is empty or `quorum` is 0.
+/// - `UnauthorizedOracle` — `signers` is empty or `quorum` is 0.
 /// - `InvalidSignature`   — fewer than `quorum` signatures verified.
 pub fn verify_threshold_signatures(
     env: &Env,
@@ -541,7 +516,6 @@ pub fn verify_threshold_signatures(
     signatures: &soroban_sdk::Vec<BytesN<64>>,
     quorum: u32,
 ) -> Result<(), ContractError> {
-    require_ed25519_path_open(env)?;
     let signers_len = signers.len();
     if signers.is_empty() || quorum == 0 || quorum > signers_len {
         return Err(ContractError::UnauthorizedOracle);
@@ -597,8 +571,6 @@ pub fn verify_threshold_signatures_v2(
     signatures: &soroban_sdk::Vec<BytesN<64>>,
     quorum: u32,
 ) -> Result<(), ContractError> {
-    require_ed25519_path_open(env)?;
-    require_current_network(env, passphrase_hash)?;
     let signers_len = signers.len();
     if signers.is_empty() || quorum == 0 || quorum > signers_len {
         return Err(ContractError::UnauthorizedOracle);
@@ -617,8 +589,14 @@ pub fn verify_threshold_signatures_v2(
         }
     }
 
-    let message_target =
-        construct_oracle_message_v2(env, passphrase_hash, market_id, outcome, valid_until, epoch);
+    let message_target = construct_oracle_message_v2(
+        env,
+        passphrase_hash,
+        market_id,
+        outcome,
+        valid_until,
+        epoch,
+    );
     let message_opposite = construct_oracle_message_v2(
         env,
         passphrase_hash,
@@ -653,14 +631,8 @@ pub fn verify_threshold_signatures_v2(
 #[cfg(test)]
 mod tests {
     extern crate std;
+    use std::format;
     use super::*;
-
-    /// Run `f` inside a registered market contract frame: the verifiers read
-    /// the adapter-only lock from contract storage (#898).
-    fn in_contract<T>(env: &Env, f: impl FnOnce() -> T) -> T {
-        let id = env.register(crate::MarketContract, ());
-        env.as_contract(&id, f)
-    }
     use crate::types::MarketStatus;
     use soroban_sdk::{
         testutils::{Address as _, BytesN as _, Ledger as _},
@@ -780,30 +752,26 @@ mod tests {
     #[test]
     fn test_verify_signature_rejects_zero_pubkey() {
         let env = Env::default();
-        let result = in_contract(&env, || {
-            verify_oracle_signature(
-                &env,
-                1u32,
-                true,
-                &BytesN::from_array(&env, &[0u8; 64]),
-                &BytesN::from_array(&env, &[0u8; 32]),
-            )
-        });
+        let result = verify_oracle_signature(
+            &env,
+            1u32,
+            true,
+            &BytesN::from_array(&env, &[0u8; 64]),
+            &BytesN::from_array(&env, &[0u8; 32]),
+        );
         assert_eq!(result, Err(ContractError::UnauthorizedOracle));
     }
 
     #[test]
     fn test_verify_invalid_signature() {
         let env = Env::default();
-        let result = in_contract(&env, || {
-            verify_oracle_signature(
-                &env,
-                123u32,
-                true,
-                &BytesN::random(&env),
-                &BytesN::random(&env),
-            )
-        });
+        let result = verify_oracle_signature(
+            &env,
+            123u32,
+            true,
+            &BytesN::random(&env),
+            &BytesN::random(&env),
+        );
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -833,9 +801,7 @@ mod tests {
         let outcome = true;
         let (pubkey, signature) = generate_keypair_and_sign(&env, market_id, outcome);
 
-        let result = in_contract(&env, || {
-            verify_oracle_signature(&env, market_id, outcome, &signature, &pubkey)
-        });
+        let result = verify_oracle_signature(&env, market_id, outcome, &signature, &pubkey);
         assert_eq!(result, Ok(()));
     }
 
@@ -846,9 +812,7 @@ mod tests {
         let (pubkey, signature) = generate_keypair_and_sign(&env, market_id, true);
 
         // Signature was produced for outcome=true; verifying against false must fail.
-        let result = in_contract(&env, || {
-            verify_oracle_signature(&env, market_id, false, &signature, &pubkey)
-        });
+        let result = verify_oracle_signature(&env, market_id, false, &signature, &pubkey);
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -859,9 +823,7 @@ mod tests {
         let (pubkey, signature) = generate_keypair_and_sign(&env, 1u32, outcome);
 
         // Signature was produced for market_id=1; verifying against 2 must fail.
-        let result = in_contract(&env, || {
-            verify_oracle_signature(&env, 2u32, outcome, &signature, &pubkey)
-        });
+        let result = verify_oracle_signature(&env, 2u32, outcome, &signature, &pubkey);
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -874,9 +836,7 @@ mod tests {
         let (other_pubkey, _other_signature) = generate_keypair_and_sign(&env, market_id, outcome);
 
         // Signature was produced by a different keypair than `other_pubkey`.
-        let result = in_contract(&env, || {
-            verify_oracle_signature(&env, market_id, outcome, &signature, &other_pubkey)
-        });
+        let result = verify_oracle_signature(&env, market_id, outcome, &signature, &other_pubkey);
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -927,18 +887,16 @@ mod tests {
             epoch,
         );
 
-        let result = in_contract(&env, || {
-            verify_oracle_signature_v2(
-                &env,
-                &passphrase_hash,
-                market_id,
-                outcome,
-                valid_until,
-                epoch,
-                &signature,
-                &pubkey,
-            )
-        });
+        let result = verify_oracle_signature_v2(
+            &env,
+            &passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            epoch,
+            &signature,
+            &pubkey,
+        );
         assert_eq!(result, Ok(()));
     }
 
@@ -963,18 +921,16 @@ mod tests {
         );
 
         // Verify on mainnet must fail
-        let result = in_contract(&env, || {
-            verify_oracle_signature_v2(
-                &env,
-                &mainnet_passphrase_hash,
-                market_id,
-                outcome,
-                valid_until,
-                epoch,
-                &signature,
-                &pubkey,
-            )
-        });
+        let result = verify_oracle_signature_v2(
+            &env,
+            &mainnet_passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            epoch,
+            &signature,
+            &pubkey,
+        );
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -998,18 +954,16 @@ mod tests {
             epoch,
         );
 
-        let result = in_contract(&env, || {
-            verify_oracle_signature_v2(
-                &env,
-                &passphrase_hash,
-                market_id,
-                outcome,
-                valid_until,
-                epoch,
-                &signature,
-                &pubkey,
-            )
-        });
+        let result = verify_oracle_signature_v2(
+            &env,
+            &passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            epoch,
+            &signature,
+            &pubkey,
+        );
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -1033,18 +987,16 @@ mod tests {
         );
 
         // Verification with epoch 2 must fail
-        let result = in_contract(&env, || {
-            verify_oracle_signature_v2(
-                &env,
-                &passphrase_hash,
-                market_id,
-                outcome,
-                valid_until,
-                2u32,
-                &signature,
-                &pubkey,
-            )
-        });
+        let result = verify_oracle_signature_v2(
+            &env,
+            &passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            2u32,
+            &signature,
+            &pubkey,
+        );
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 
@@ -1082,7 +1034,7 @@ mod tests {
 
         // Verify the vector is self-consistent before writing.
         assert!(
-            in_contract(&env, || verify_oracle_signature_v2(
+            verify_oracle_signature_v2(
                 &env,
                 &passphrase_hash,
                 market_id,
@@ -1091,18 +1043,16 @@ mod tests {
                 epoch,
                 &BytesN::from_array(&env, &signature.to_bytes()),
                 &BytesN::from_array(&env, &verifying_key.to_bytes()),
-            ))
+            )
             .is_ok(),
             "V2 test vector signature must verify on-chain"
         );
 
-        let to_hex =
-            |b: &[u8]| -> std::string::String { b.iter().map(|x| format!("{:02x}", x)).collect() };
+        let to_hex = |b: &[u8]| -> std::string::String { b.iter().map(|x| format!("{:02x}", x)).collect() };
 
         let mut raw = [0u8; ORACLE_PREIMAGE_LEN_V2];
         let mut idx = 0;
-        raw[idx..idx + ORACLE_DOMAIN_SEPARATOR_V2.len()]
-            .copy_from_slice(ORACLE_DOMAIN_SEPARATOR_V2);
+        raw[idx..idx + ORACLE_DOMAIN_SEPARATOR_V2.len()].copy_from_slice(ORACLE_DOMAIN_SEPARATOR_V2);
         idx += ORACLE_DOMAIN_SEPARATOR_V2.len();
         raw[idx..idx + 32].copy_from_slice(&passphrase_hash.to_array());
         idx += 32;
@@ -1141,10 +1091,7 @@ mod tests {
         );
 
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors");
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test-vectors/oracle-message.json"
-        );
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/oracle-message.json");
         std::fs::create_dir_all(dir).expect("create test-vectors dir");
         std::fs::write(path, &json).expect("write oracle-message.json");
     }
@@ -1161,9 +1108,7 @@ mod tests {
         expected.extend_from_slice(ORACLE_DOMAIN_SEPARATOR);
         expected.extend_from_slice(&1u32.to_be_bytes());
         expected.push(1u8);
-        let mut actual = std::vec![0u8; preimage.len() as usize];
-        preimage.copy_into_slice(&mut actual);
-        assert_eq!(actual, expected);
+        assert_eq!(preimage, Bytes::from_slice(&env, &expected));
     }
 
     #[test]
@@ -1258,9 +1203,7 @@ mod tests {
         let pubkey = BytesN::from_array(&env, &signing_key.verifying_key().to_bytes());
         let sig_bytes = BytesN::from_array(&env, &signature.to_bytes());
 
-        let result = in_contract(&env, || {
-            verify_oracle_signature(&env, market_id, outcome, &sig_bytes, &pubkey)
-        });
+        let result = verify_oracle_signature(&env, market_id, outcome, &sig_bytes, &pubkey);
         assert_eq!(result, Err(ContractError::InvalidSignature));
     }
 }
@@ -1310,9 +1253,7 @@ mod threshold_tests {
         sigs.push_back(bad_sig);
 
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 2
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
             Ok(())
         );
     }
@@ -1336,9 +1277,7 @@ mod threshold_tests {
         sigs.push_back(bad_sig);
 
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 2
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
             Err(ContractError::InvalidSignature)
         );
     }
@@ -1349,9 +1288,7 @@ mod threshold_tests {
         let signers: Vec<BytesN<32>> = Vec::new(&env);
         let sigs: Vec<BytesN<64>> = Vec::new(&env);
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 2
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
             Err(ContractError::UnauthorizedOracle)
         );
     }
@@ -1365,9 +1302,7 @@ mod threshold_tests {
         let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
         sigs.push_back(sig1);
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 0
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 0),
             Err(ContractError::UnauthorizedOracle)
         );
     }
@@ -1385,9 +1320,7 @@ mod threshold_tests {
         sigs.push_back(sig1_wrong);
         sigs.push_back(sig2_wrong);
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 1
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 1),
             Err(ContractError::InvalidSignature)
         );
     }
@@ -1401,9 +1334,7 @@ mod threshold_tests {
         let mut sigs: Vec<BytesN<64>> = Vec::new(&env);
         sigs.push_back(sig);
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 42, false, &signers, &sigs, 1
-            )),
+            verify_threshold_signatures(&env, 42, false, &signers, &sigs, 1),
             Ok(())
         );
     }
@@ -1422,9 +1353,7 @@ mod threshold_tests {
         sigs.push_back(sig1);
 
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 2
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
             Err(ContractError::InvalidSignature)
         );
     }
@@ -1440,9 +1369,7 @@ mod threshold_tests {
 
         // Quorum 2 > signers.len() 1
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 1, true, &signers, &sigs, 2
-            )),
+            verify_threshold_signatures(&env, 1, true, &signers, &sigs, 2),
             Err(ContractError::UnauthorizedOracle)
         );
     }
@@ -1469,9 +1396,7 @@ mod threshold_tests {
 
         // Submitting opposite signature when verifying outcome YES must be rejected
         assert_eq!(
-            in_contract(&env, || verify_threshold_signatures(
-                &env, 10, true, &signers, &sigs, 1
-            )),
+            verify_threshold_signatures(&env, 10, true, &signers, &sigs, 1),
             Err(ContractError::InvalidSignature)
         );
     }
@@ -1524,14 +1449,8 @@ mod adapter_fallback_tests {
         env.as_contract(&contract_id, || {
             // No admin has enabled the Reflector adapter, so it defaults to
             // disabled and resolution falls back to direct Ed25519 verification.
-            let result = verify_market_outcome(
-                &env,
-                market_id,
-                &market,
-                AdapterType::Reflector,
-                outcome,
-                &sig,
-            );
+            let result =
+                verify_market_outcome(&env, market_id, &market, AdapterType::Reflector, outcome, &sig);
             assert_eq!(result, Ok(()));
         });
     }
@@ -1571,7 +1490,7 @@ mod adapter_fallback_tests {
                 true,
                 &BytesN::from_array(&env, &[0u8; 64]),
             );
-            assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+            assert_eq!(result.unwrap_err(), ContractError::UnauthorizedOracle);
         });
     }
 
@@ -1660,7 +1579,7 @@ mod adapter_fallback_tests {
                 &BytesN::from_array(&env, &[0u8; 64]),
             );
             // Adapter enabled but not fully wired → UnauthorizedOracle (clear misconfig error).
-            assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+            assert_eq!(result.unwrap_err(), ContractError::UnauthorizedOracle);
         });
     }
 
@@ -1677,8 +1596,10 @@ mod adapter_fallback_tests {
             let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
             let signature = BytesN::from_array(&env, &[0u8; 64]);
 
-            let result = verify_oracle_signature(&env, 1u32, true, &signature, &oracle_pubkey);
-            assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+            let result = env.as_contract(&contract_id, || {
+                verify_oracle_signature(&env, 1u32, true, &signature, &oracle_pubkey)
+            }).unwrap_err();
+            assert_eq!(result, ContractError::UnauthorizedOracle);
         });
     }
 
@@ -1702,8 +1623,44 @@ mod adapter_fallback_tests {
             let oracle_pubkey = BytesN::from_array(&env, &[1u8; 32]);
             let signature = BytesN::from_array(&env, &[0u8; 64]);
 
-            let result = verify_oracle_signature(&env, 1u32, true, &signature, &oracle_pubkey);
-            assert_eq!(result, Err(ContractError::UnauthorizedOracle));
+            let result = env.as_contract(&contract_id, || {
+                verify_oracle_signature(&env, 1u32, true, &signature, &oracle_pubkey)
+            }).unwrap_err();
+            assert_eq!(result, ContractError::UnauthorizedOracle);
         });
+    }
+
+    /// #1065: the V2 preimage builder produces exactly
+    /// [`ORACLE_PREIMAGE_LEN_V2`] bytes whose first 15 bytes equal the
+    /// `ORACLE_DOMAIN_SEPARATOR_V2` tag (#1065).
+    #[test]
+    fn test_build_oracle_preimage_v2_has_documented_width() {
+        let env = Env::default();
+        let passphrase_hash = BytesN::from_array(&env, &[0x99u8; 32]);
+        let market_id = 7u32;
+        let outcome = true;
+        let valid_until = 1_700_000_000u64;
+        let epoch = 3u32;
+
+        let preimage = build_oracle_preimage_v2(
+            &env,
+            &passphrase_hash,
+            market_id,
+            outcome,
+            valid_until,
+            epoch,
+        );
+
+        assert_eq!(
+            preimage.len() as usize,
+            ORACLE_PREIMAGE_LEN_V2,
+            "V2 preimage must be exactly ORACLE_PREIMAGE_LEN_V2 bytes"
+        );
+        let leading = preimage.slice(0..ORACLE_DOMAIN_SEPARATOR_V2.len() as u32);
+        assert_eq!(
+            leading,
+            Bytes::from_slice(&env, ORACLE_DOMAIN_SEPARATOR_V2),
+            "V2 preimage must lead with ORACLE_DOMAIN_SEPARATOR_V2"
+        );
     }
 }

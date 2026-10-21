@@ -297,3 +297,92 @@ pub enum ContractError {
     /// equal the sum of locked positions plus treasury).
     ConservationViolation = 90,
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::ContractError;
+    use std::vec::Vec;
+
+    /// The seven stable market error codes are part of the public ABI and must
+    /// keep their exact numeric values (#1063).
+    #[test]
+    fn stable_market_error_codes_keep_their_exact_values() {
+        assert_eq!(ContractError::MarketNotFound as u32, 1);
+        assert_eq!(ContractError::MarketAlreadyResolved as u32, 2);
+        assert_eq!(ContractError::MarketNotResolved as u32, 3);
+        assert_eq!(ContractError::MarketExpired as u32, 4);
+        assert_eq!(ContractError::MarketNotActive as u32, 5);
+        assert_eq!(ContractError::MarketClosedToDeposits as u32, 6);
+        assert_eq!(ContractError::WithdrawCooldownActive as u32, 7);
+    }
+
+    /// `(line index, low, high)` for each `// ========== Name (a-b) ==========`
+    /// decade header in this file.
+    fn decade_sections() -> Vec<(usize, u32, u32)> {
+        let mut sections = Vec::new();
+        for (idx, line) in include_str!("error.rs").lines().enumerate() {
+            if !line.trim_start().starts_with("// ==========") {
+                continue;
+            }
+            let (open, close) = match (line.find('('), line.find(')')) {
+                (Some(open), Some(close)) if close > open => (open, close),
+                _ => continue,
+            };
+            let range = &line[open + 1..close];
+            if let Some((low, high)) = range.split_once('-') {
+                if let (Ok(low), Ok(high)) =
+                    (low.trim().parse::<u32>(), high.trim().parse::<u32>())
+                {
+                    sections.push((idx, low, high));
+                }
+            }
+        }
+        sections
+    }
+
+    /// Every variant's discriminant must lie inside the reserved range of the
+    /// decade header it is declared under (#1063).
+    #[test]
+    fn every_variant_falls_inside_its_documented_decade() {
+        let sections = decade_sections();
+        assert!(
+            !sections.is_empty(),
+            "no decade headers found in error.rs — the range-table doc comment \
+             must precede the variants"
+        );
+
+        let mut checked = 0u32;
+        for (idx, line) in include_str!("error.rs").lines().enumerate() {
+            let rest = match line.strip_prefix("    ") {
+                Some(rest) if rest.starts_with(char::is_uppercase) => rest,
+                _ => continue,
+            };
+            let (name, tail) = match rest.split_once(" = ") {
+                Some(pair) => pair,
+                None => continue,
+            };
+            let number = match tail.strip_suffix(",").unwrap_or("").trim().parse::<u32>() {
+                Ok(number) => number,
+                Err(_) => continue,
+            };
+            let (low, high) = sections
+                .iter()
+                .rev()
+                .find(|(header_idx, _, _)| *header_idx < idx)
+                .map(|(_, low, high)| (*low, *high))
+                .unwrap_or_else(|| panic!("{name} is declared outside any decade header"));
+            assert!(
+                number >= low && number <= high,
+                "{name} = {number} is outside its documented decade {low}-{high}"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked,
+            47,
+            "expected all 47 ContractError variants to be parsed, only checked {checked}"
+        );
+    }
+}

@@ -112,6 +112,14 @@ pub fn remove_fee_waiver(
         return Err(ContractError::NotAdmin);
     }
 
+    // No-op fast path (#1062): removing an absent address requires no Vec
+    // allocation, no storage rewrite, and no `FeeWaiverRemoved` event — return
+    // early before touching the list. (The add-side cap check in
+    // `add_fee_waiver` is unaffected; only removal short-circuits here.)
+    if !has_fee_waiver(env, waiver_address) {
+        return Ok(());
+    }
+
     let waivers = storage::get_fee_waivers(env);
     let mut new_waivers = soroban_sdk::Vec::new(env);
     let mut found = false;
@@ -182,7 +190,10 @@ pub fn effective_fee_rate_bps(env: &Env, account: &Address) -> u32 {
 mod tests {
     use super::*;
     use crate::storage;
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _},
+        Address, Env,
+    };
 
     pub(super) fn setup(env: &Env) -> (Address, Address) {
         let contract_id = env.register(crate::MarketContract, ());
@@ -390,6 +401,102 @@ mod tests {
         let rate = env.as_contract(&contract_id, || effective_fee_rate_bps(&env, &account));
         assert_eq!(rate, 0, "unset fee rate must deny-by-default to zero");
     }
+
+    /// #1062 (1): removing an absent address is a no-op — it emits no
+    /// `FeeWaiverRemoved` event and leaves the list (and storage) unchanged.
+    #[test]
+    fn remove_absent_fee_waiver_is_a_noop() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+
+        let kept = Address::generate(&env);
+        let absent = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &kept).expect("setup add should succeed");
+        });
+        // Drain the setup `fee_waiver_added` event before the removal.
+        assert_eq!(env.events().all().len(), 1, "setup add must emit one event");
+
+        env.as_contract(&contract_id, || {
+            remove_fee_waiver(&env, &admin, &absent).expect("absent remove must not error");
+        });
+
+        // No event is emitted for the no-op path.
+        assert_eq!(
+            env.events().all().len(),
+            0,
+            "removing an absent address must emit no event"
+        );
+
+        // The waiver list is unchanged (no storage rewrite).
+        let waivers = env.as_contract(&contract_id, || storage::get_fee_waivers(&env));
+        assert_eq!(waivers.len(), 1, "absent remove must not rewrite storage");
+        assert_eq!(waivers.get(0).unwrap(), kept);
+    }
+
+    /// #1062 (2): removing a present address removes exactly one entry and
+    /// emits `FeeWaiverRemoved`.
+    #[test]
+    fn remove_present_fee_waiver_emits_removed_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+
+        let waiver = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waiver).expect("setup add should succeed");
+        });
+        assert_eq!(env.events().all().len(), 1, "setup add must emit one event");
+
+        env.as_contract(&contract_id, || {
+            remove_fee_waiver(&env, &admin, &waiver).expect("present remove must succeed");
+        });
+
+        // Exactly one `FeeWaiverRemoved` event is emitted.
+        assert_eq!(
+            env.events().all().len(),
+            1,
+            "removing a present address must emit an event"
+        );
+
+        // The entry is removed from the list.
+        let waivers = env.as_contract(&contract_id, || storage::get_fee_waivers(&env));
+        assert_eq!(waivers.len(), 0, "present remove must empty the list");
+        let is_waiver = env.as_contract(&contract_id, || has_fee_waiver(&env, &waiver));
+        assert!(!is_waiver);
+    }
+
+    /// #1062 (3): removing the same address twice is a no-op the second time.
+    #[test]
+    fn remove_fee_waiver_twice_is_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+
+        let waiver = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waiver).expect("setup add should succeed");
+        });
+        env.as_contract(&contract_id, || {
+            remove_fee_waiver(&env, &admin, &waiver).expect("first remove must succeed");
+        });
+        assert_eq!(env.events().all().len(), 1, "first remove must emit one event");
+
+        env.as_contract(&contract_id, || {
+            remove_fee_waiver(&env, &admin, &waiver).expect("second remove must not error");
+        });
+
+        // The second removal of an absent address emits no event.
+        assert_eq!(
+            env.events().all().len(),
+            0,
+            "the second removal must emit no event"
+        );
+        let is_waiver = env.as_contract(&contract_id, || has_fee_waiver(&env, &waiver));
+        assert!(!is_waiver);
+    }
+
 }
 
 #[cfg(test)]

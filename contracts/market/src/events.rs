@@ -8,27 +8,49 @@
 //!
 //! | Struct                   | Topic symbol                        |
 //! |--------------------------|-------------------------------------|
-//! | `ContractInitialized`    | `contract_initialized`              |
-//! | `MarketCreated`          | `market_created`                    |
-//! | `CollateralDeposited`    | `collateral_deposited`              |
-//! | `CollateralWithdrawn`    | `collateral_withdrawn`              |
-//! | `LargeWithdraw`          | `large_withdraw`                    |
-//! | `WithdrawEdgeCase`       | `withdraw_edge_case`                |
-//! | `MarketResolved`         | `market_resolved`                   |
-//! | `MarketCanceled`         | `market_canceled`                   |
-//! | `MarketVoided`           | `market_voided`                     |
-//! | `MarketReopened`         | `market_reopened`                   |
-//! | `PositionSettled`        | `position_settled`                  |
-//! | `PositionUpdated`        | `position_updated`                  |
-//! | `PositionLimitExceeded`  | `position_limit_exceeded`           |
-//! | `OracleSignatureVerified`| `oracle_signature_verified`         |
-//! | `FeeCalculated`          | `fee_calculated`                    |
-//! | `TreasurySet`            | `treasury_set`                      |
-//! | `AdminTransferProposed`  | `admin_transfer_proposed`           |
-//! | `AdminTransferAccepted`  | `admin_transfer_accepted`           |
-//! | `AdminTransferCanceled`  | `admin_transfer_canceled`           |
-//! | `PositionTokenMismatchDetected` | `position_token_mismatch_detected` |
-//! | `PositionTokensReconciled`      | `position_tokens_reconciled`       |
+//! | `ContractInitialized`             | `contract_initialized`               |
+//! | `EmergencyPauseToggled`           | `emergency_pause_toggled`            |
+//! | `EmergencyModeChanged`            | `emergency_mode_changed`             |
+//! | `MarketCreated`                   | `market_created`                     |
+//! | `CollateralDeposited`             | `collateral_deposited`               |
+//! | `CollateralWithdrawn`             | `collateral_withdrawn`               |
+//! | `LargeWithdraw`                   | `large_withdraw`                     |
+//! | `WithdrawEdgeCase`                | `withdraw_edge_case`                 |
+//! | `MarketClosedToDeposits`          | `market_closed_to_deposits`          |
+//! | `MarketResolved`                  | `market_resolved`                    |
+//! | `OracleAdaptersEnabledEvent`      | `oracle_adapters_enabled_event`      |
+//! | `MarketCanceled`                  | `market_canceled`                    |
+//! | `MarketVoided`                    | `market_voided`                      |
+//! | `MarketReopened`                  | `market_reopened`                    |
+//! | `PositionLimitExceededEvent`      | `position_limit_exceeded_event`      |
+//! | `PositionUpdated`                 | `position_updated`                   |
+//! | `TradeExecuted`                   | `trade_executed`                     |
+//! | `ValidationFailed`                | `validation_failed`                  |
+//! | `PositionSettled`                 | `position_settled`                   |
+//! | `PositionsBatchSettled`           | `positions_batch_settled`            |
+//! | `OracleSignatureVerified`         | `oracle_signature_verified`          |
+//! | `FeeCalculated`                   | `fee_calculated`                     |
+//! | `FeeRetainedNoTreasury`           | `fee_retained_no_treasury`           |
+//! | `AdminTransferProposed`           | `admin_transfer_proposed`            |
+//! | `AdminTransferAccepted`           | `admin_transfer_accepted`            |
+//! | `AdminTransferCanceled`           | `admin_transfer_canceled`            |
+//! | `MarketOracleUpdated`             | `market_oracle_updated`              |
+//! | `TreasurySet`                     | `treasury_set`                       |
+//! | `FeeRateChangeProposed`           | `fee_rate_change_proposed`           |
+//! | `FeeRateChangeExecuted`           | `fee_rate_change_executed`           |
+//! | `AdminRenounceProposed`           | `admin_renounce_proposed`            |
+//! | `AdminRenounced`                  | `admin_renounced`                    |
+//! | `OracleAdapterConfigured`         | `oracle_adapter_configured`          |
+//! | `FeeWaiverAdded`                  | `fee_waiver_added`                   |
+//! | `FeeWaiverRemoved`                | `fee_waiver_removed`                 |
+//! | `TreasuryProposed`                | `treasury_proposed`                  |
+//! | `OutcomeTokenProposed`            | `outcome_token_proposed`             |
+//! | `OutcomeTokenSet`                 | `outcome_token_set`                  |
+//! | `ResolutionProposed`              | `resolution_proposed`                |
+//! | `ResolutionSet`                   | `resolution_set`                     |
+//! | `MarketOracleProposed`            | `market_oracle_proposed`             |
+//! | `PositionTokenMismatchDetected`   | `position_token_mismatch_detected`   |
+//! | `PositionTokensReconciled`        | `position_tokens_reconciled`         |
 //!
 //! # Event schema versioning (Issue #500)
 //!
@@ -42,6 +64,10 @@ use soroban_sdk::{contractevent, Address, BytesN, Env, String, Vec};
 /// Schema version stamped into every event's topics. Bump when an event's
 /// topic/data shape changes in a way consumers need to distinguish.
 pub const EVENT_VERSION: u32 = 1;
+
+// Compile-time pin (#1064): indexers key on `EVENT_VERSION` in the topic
+// stream, so bumping it must be a deliberate, reviewed change.
+const _: () = assert!(EVENT_VERSION == 1);
 
 #[contractevent]
 #[derive(Clone, Debug)]
