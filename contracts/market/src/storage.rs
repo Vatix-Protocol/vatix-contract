@@ -1,31 +1,66 @@
-//! Typed storage keys for the market contract.
-//!
-//! Every persisted entry in the market contract MUST be addressed through a
-//! [`StorageKey`] variant. The enum is the single source of truth for the
-//! on-chain key layout and is validated by the automated reviewer checklist in
-//! `tests/storage_key_checklist.rs`.
-//!
-//! Invariants (see `contracts/market/STORAGE_MIGRATION_GUIDE.md`):
-//! * Keys are collision-free: each variant maps to a unique byte encoding.
-//! * Keys are stable: existing encodings MUST NOT change without a migration.
-//! * Unknown/legacy keys are denied by default (fail-closed).
+use crate::error::ContractError;
+use crate::types::{EmergencyMode, Market, PendingFeeRateChange, Position};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Vec};
 
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol};
+// --- Storage Keys ---
+// IMPORTANT: Storage versioning is critical for upgrade safety. When adding new
+// keys, increment the version and ensure migrations are handled. See UPGRADE_PLAYBOOK.md.
+// This contract supports oracle adapters (post-MVP). When adapters are enabled,
+// Ed25519 fallback is DISABLED to enforce fail-closed security model.
 
-/// Stable error codes surfaced by storage accessors.
+/// Bump this constant whenever the storage layout changes in a breaking way.
+/// `initialize()` writes this value; every storage accessor asserts it.
 ///
-/// These are part of the public ABI: do not renumber existing variants.
-pub const ERR_UNKNOWN_STORAGE_KEY: u32 = 9001;
-pub const ERR_STORAGE_KEY_MISMATCH: u32 = 9002;
-pub const ERR_STORAGE_KEY_UNDOCUMENTED: u32 = 9003;
-
-/// Typed, collision-free storage keys for the market contract.
+/// # Migration Guide
 ///
-/// Variants are grouped by domain (market, position, settlement, fee, oracle).
-/// Adding a variant requires updating `STORAGE_MIGRATION_GUIDE.md` and the
-/// reviewer checklist test, otherwise CI fails closed.
+/// ## Version 6
+///
+/// (see `crate::migration::v6` for the full step-by-step procedure for this
+/// upgrade; the general procedure below still applies for the core transition)
+/// # Migration Guide
+///
+/// **IMPORTANT:** See `STORAGE_MIGRATION_GUIDE.md` for comprehensive documentation
+/// on when and how to bump this version, including:
+/// - When to increment the version
+/// - Step-by-step migration procedures for testnet and mainnet
+/// - Testing strategies
+/// - Rollback and recovery procedures
+/// - Common pitfalls and how to avoid them
+///
+/// # Quick Reference
+///
+/// ## Always bump version when:
+/// - Adding/removing fields in storage types (Market, Position, etc.)
+/// - Changing field types or semantics
+/// - Adding new StorageKey variants
+/// - Changing how existing data is computed or interpreted
+///
+/// ## Migration procedure (testnet):
+/// 1. Increment `STORAGE_VERSION` in this file
+/// 2. Document the change in `MIGRATION.md`
+/// 3. Build the contract: `stellar contract build`
+/// 4. Deploy: `stellar contract deploy --wasm <path> --network testnet`
+/// 5. Initialize: `stellar contract invoke ... -- initialize --admin <addr>`
+/// 6. Verify old deployment returns `UpgradeRequired` error
+///
+/// ## Current version: 6
+///
+/// ### Version history:
+/// - **v6:** Added `CollateralBalance(Address)` and
+///   `TotalLockedCollateral(Address)` — the protocol-wide, user-scoped
+///   collateral ledger introduced by ADR-002 (issue #685). See
+///   `docs/adr-002-protocol-wide-collateral.md`.
+/// - **v5:** Added `EmergencyMode` storage for coordinated emergency mode (#662)
+/// - **v4:** Added per-adapter-type `AdapterEnabled` flag for the Reflector/Pyth
+///   Ed25519 fallback path (#488)
+/// - **v3:** Added Treasury, Outcome Token, Resolution Contract, Threshold Signers
+/// - **v2:** Fixed locked_collateral semantics (#262)
+/// - **v1:** Initial storage layout
+///
+/// See `STORAGE_MIGRATION_GUIDE.md` and `MIGRATION.md` for detailed history.
+pub const STORAGE_VERSION: u32 = 6;
+
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
     // --- Market ---
     /// Global market configuration (admin, collateral, flags).
@@ -145,51 +180,1080 @@ impl StorageKey {
             _ => Err(ERR_UNKNOWN_STORAGE_KEY),
         }
     }
+    Ok(())
+}
 
-    /// Human-readable name used by the reviewer checklist and logs.
-    ///
-    /// MUST match the variant name exactly; the checklist test asserts this.
-    pub fn name(&self) -> &'static str {
-        match self {
-            StorageKey::MarketConfig => "MarketConfig",
-            StorageKey::MarketInfo(_) => "MarketInfo",
-            StorageKey::MarketOpenInterest(_) => "MarketOpenInterest",
-            StorageKey::MarketPaused(_) => "MarketPaused",
-            StorageKey::Position(_, _) => "Position",
-            StorageKey::PositionIndex(_) => "PositionIndex",
-            StorageKey::PositionCollateral(_, _) => "PositionCollateral",
-            StorageKey::Settlement(_) => "Settlement",
-            StorageKey::SettlementNonce(_) => "SettlementNonce",
-            StorageKey::SettlementReceipt(_) => "SettlementReceipt",
-            StorageKey::FeeAccrued(_) => "FeeAccrued",
-            StorageKey::FeeConfig => "FeeConfig",
-            StorageKey::OraclePrice(_) => "OraclePrice",
-            StorageKey::OracleTimestamp(_) => "OracleTimestamp",
+// --- Market Storage ---
+
+pub fn get_market(env: &Env, market_id: u32) -> Result<Option<Market>, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .get(&StorageKey::Market(market_id)))
+}
+
+pub fn set_market(env: &Env, market_id: u32, market: &Market) -> Result<(), ContractError> {
+    assert_version(env)?;
+    crate::validation::validate_outcome_count(market.outcome_count)?;
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Market(market_id), market);
+    Ok(())
+}
+
+pub fn has_market(env: &Env, market_id: u32) -> Result<bool, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .has(&StorageKey::Market(market_id)))
+}
+
+// --- Position Storage ---
+
+pub fn get_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+) -> Result<Option<Position>, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .get(&StorageKey::Position(market_id, user.clone())))
+}
+
+pub fn set_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    position: &Position,
+) -> Result<(), ContractError> {
+    assert_version(env)?;
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Position(market_id, user.clone()), position);
+    Ok(())
+}
+
+pub fn has_position(env: &Env, market_id: u32, user: &Address) -> Result<bool, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .has(&StorageKey::Position(market_id, user.clone())))
+}
+
+// --- Protocol-wide Collateral (ADR-002, Issue #685) ---
+
+/// Return `user`'s protocol-wide collateral balance (the sum of everything
+/// they have deposited across every market via `deposit_collateral`).
+/// Defaults to `0` when the user has never deposited.
+pub fn get_collateral_balance(env: &Env, user: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::CollateralBalance(user.clone()))
+        .unwrap_or(0)
+}
+
+/// Set `user`'s protocol-wide collateral balance.
+pub fn set_collateral_balance(env: &Env, user: &Address, balance: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::CollateralBalance(user.clone()), &balance);
+}
+
+/// Return the aggregate `locked_collateral` across every market for `user`.
+/// Defaults to `0` when the user has no open positions.
+pub fn get_total_locked_collateral(env: &Env, user: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::TotalLockedCollateral(user.clone()))
+        .unwrap_or(0)
+}
+
+/// Set the aggregate `locked_collateral` across every market for `user`.
+pub fn set_total_locked_collateral(env: &Env, user: &Address, locked: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::TotalLockedCollateral(user.clone()), &locked);
+}
+
+// --- Market Participants (Issue #495 / Issue #768) ---
+
+/// Maximum allowed participants per market to bound storage and execution limits (#768).
+pub const MAX_MARKET_PARTICIPANTS: u32 = 1000;
+
+/// Return the ordered list of every address that has ever held a position
+/// in `market_id`. Empty if the market has no positions yet.
+pub fn get_market_participants(env: &Env, market_id: u32) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::MarketParticipants(market_id))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Record `user` as a participant of `market_id` if not already tracked and
+/// under the storage limit (`MAX_MARKET_PARTICIPANTS`).
+/// Idempotent — safe to call on every position update.
+pub fn add_market_participant(env: &Env, market_id: u32, user: &Address) {
+    let mut participants = get_market_participants(env, market_id);
+    if !participants.iter().any(|p| &p == user) {
+        if participants.len() < MAX_MARKET_PARTICIPANTS {
+            participants.push_back(user.clone());
+            env.storage()
+                .persistent()
+                .set(&StorageKey::MarketParticipants(market_id), &participants);
         }
     }
 }
 
-/// Read a typed key, failing closed on unknown/legacy encodings.
-pub fn read<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
-    env: &Env,
-    key: &StorageKey,
-) -> Result<Option<T>, u32> {
-    let raw = key.encode(env);
-    // Round-trip decode to guarantee the key is well-formed before touching state.
-    StorageKey::decode(env, &raw)?;
-    Ok(env.storage().persistent().get(&raw))
+/// Number of distinct addresses that have ever held a position in `market_id`.
+pub fn get_market_participant_count(env: &Env, market_id: u32) -> u32 {
+    get_market_participants(env, market_id).len()
 }
 
-/// Write a typed key, failing closed on unknown/legacy encodings.
-pub fn write<T: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
+// --- Admin Storage ---
+
+pub fn get_admin(env: &Env) -> Result<Address, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .get(&StorageKey::Admin)
+        .expect("Admin not set"))
+}
+
+pub fn set_admin(env: &Env, admin: &Address) {
+    env.storage().persistent().set(&StorageKey::Admin, admin);
+}
+
+pub fn has_admin(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Admin)
+}
+
+pub fn get_pending_admin(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::PendingAdmin)
+}
+
+pub fn set_pending_admin(env: &Env, admin: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingAdmin, admin);
+}
+
+pub fn clear_pending_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::PendingAdmin);
+}
+
+// --- Market Counter ---
+
+pub fn get_next_market_id(env: &Env) -> Result<u32, ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .get(&StorageKey::MarketCounter)
+        .unwrap_or(0))
+}
+
+pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
+    let next_id = get_next_market_id(env)? + 1;
+    env.storage()
+        .persistent()
+        .set(&StorageKey::MarketCounter, &next_id);
+    Ok(next_id)
+}
+
+// --- Treasury Storage ---
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().persistent().get(&StorageKey::Treasury)
+}
+
+/// Register (or replace) the treasury contract address for protocol fee routing.
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::Treasury, treasury);
+}
+
+pub fn has_treasury(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::Treasury)
+}
+
+pub fn get_pending_treasury(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage().persistent().get(&StorageKey::PendingTreasury)
+}
+
+pub fn set_pending_treasury(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingTreasury, pending);
+}
+
+pub fn clear_pending_treasury(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingTreasury);
+}
+
+// --- Outcome Token Storage ---
+
+pub fn get_outcome_token_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::OutcomeTokenContract)
+}
+
+pub fn set_outcome_token_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OutcomeTokenContract, contract);
+}
+
+pub fn get_pending_outcome_token_contract(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::PendingOutcomeToken)
+}
+
+pub fn set_pending_outcome_token_contract(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingOutcomeToken, pending);
+}
+
+pub fn clear_pending_outcome_token_contract(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingOutcomeToken);
+}
+
+// --- Deposit Timestamp Storage (issue #413) ---
+
+pub fn get_last_deposit_time(env: &Env, market_id: u32, user: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::LastDepositTime(market_id, user.clone()))
+}
+
+pub fn set_last_deposit_time(env: &Env, market_id: u32, user: &Address, timestamp: u64) {
+    env.storage().persistent().set(
+        &StorageKey::LastDepositTime(market_id, user.clone()),
+        &timestamp,
+    );
+}
+
+// --- Pending Renounce Storage (issue #414) ---
+
+pub fn has_pending_renounce(env: &Env) -> bool {
+    env.storage().persistent().has(&StorageKey::PendingRenounce)
+}
+
+pub fn set_pending_renounce(env: &Env) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingRenounce, &true);
+}
+
+pub fn clear_pending_renounce(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingRenounce);
+}
+
+pub fn clear_admin(env: &Env) {
+    env.storage().persistent().remove(&StorageKey::Admin);
+}
+
+// --- Fee Config Storage ---
+
+pub fn get_fee_rate_bps(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeRateBps)
+        .unwrap_or(DEFAULT_FEE_RATE_BPS)
+}
+
+pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeRateBps, &fee_rate_bps);
+}
+
+// --- Pending Fee Rate Change / Timelock (Issue #496) ---
+
+pub fn get_pending_fee_rate_change(env: &Env) -> Option<PendingFeeRateChange> {
+    env.storage().persistent().get(&StorageKey::PendingFeeRate)
+}
+
+pub fn set_pending_fee_rate_change(env: &Env, pending: &PendingFeeRateChange) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingFeeRate, pending);
+}
+
+pub fn clear_pending_fee_rate_change(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingFeeRate);
+}
+
+// --- Pause Storage ---
+
+/// Check whether the contract is in a paused state.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::Paused)
+        .unwrap_or(false)
+}
+
+/// Pause or unpause the contract (emergency halt).
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().persistent().set(&StorageKey::Paused, &paused);
+}
+
+// --- Emergency Mode (Issue #662) ---
+
+/// Return the current coordinated emergency mode. Defaults to `Normal` when
+/// unset (freshly initialized contract has never had the mode changed).
+pub fn get_emergency_mode(env: &Env) -> EmergencyMode {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::EmergencyMode)
+        .unwrap_or(EmergencyMode::Normal)
+}
+
+/// Set the coordinated emergency mode. Only the admin may call this (enforced
+/// in `lib.rs`).
+pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::EmergencyMode, mode);
+}
+
+// --- Oracle Adapter Enabled Flag (#488) ---
+
+pub fn get_pending_market_oracle(
     env: &Env,
-    key: &StorageKey,
-    value: &T,
-) -> Result<(), u32> {
-    let raw = key.encode(env);
-    StorageKey::decode(env, &raw)?;
-    env.storage().persistent().set(&raw, value);
-    Ok(())
+    market_id: u32,
+) -> Option<crate::types::PendingBytesNChange> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::PendingMarketOracle(market_id))
+}
+
+pub fn set_pending_market_oracle(
+    env: &Env,
+    market_id: u32,
+    pending: &crate::types::PendingBytesNChange,
+) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingMarketOracle(market_id), pending);
+}
+
+pub fn clear_pending_market_oracle(env: &Env, market_id: u32) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingMarketOracle(market_id));
+}
+
+/// Whether the given adapter type is live for resolution.
+///
+/// Defaults to `false` (disabled) when never explicitly configured, which is
+/// the correct default today since the Reflector/Pyth on-chain integration is
+/// not yet wired into `resolve_market` (tracked under #139). While disabled,
+/// callers fall back to direct Ed25519 verification — see
+/// [`crate::oracle::verify_market_outcome`].
+pub fn is_adapter_enabled(env: &Env, adapter_type: &crate::types::AdapterType) -> bool {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::AdapterEnabled(adapter_type.clone()))
+        .unwrap_or(false)
+}
+
+/// Enable or disable the given adapter type (admin-gated in `lib.rs`).
+pub fn set_adapter_enabled(env: &Env, adapter_type: &crate::types::AdapterType, enabled: bool) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::AdapterEnabled(adapter_type.clone()), &enabled);
+}
+
+// --- Per-market Adapter Config (#681) ---
+
+/// Fetch the stored Reflector/Pyth adapter config for `market_id`, if any.
+///
+/// Returns `None` when the admin has not configured an adapter for this
+/// market yet — callers should fall back to Ed25519 verification rather than
+/// treating this as an error (see `oracle::verify_market_outcome`).
+pub fn get_market_adapter_config(
+    env: &Env,
+    market_id: u32,
+) -> Option<crate::types::MarketAdapterConfig> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::MarketAdapterConfig(market_id))
+}
+
+/// Set (or replace) the Reflector/Pyth adapter config for `market_id`
+/// (admin-gated in `lib.rs`).
+pub fn set_market_adapter_config(
+    env: &Env,
+    market_id: u32,
+    config: &crate::types::MarketAdapterConfig,
+) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::MarketAdapterConfig(market_id), config);
+}
+
+// --- Deposit Reentrancy Lock (Issue #501) ---
+
+/// Check whether the deposit reentrancy lock is currently held.
+pub fn is_deposit_locked(env: &Env) -> bool {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::DepositLock)
+        .unwrap_or(false)
+}
+
+/// Acquire or release the deposit reentrancy lock.
+pub fn set_deposit_locked(env: &Env, locked: bool) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::DepositLock, &locked);
+}
+
+// --- Resolution Contract Storage ---
+
+pub fn get_resolution_contract(env: &Env) -> Option<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::ResolutionContract)
+}
+
+pub fn set_resolution_contract(env: &Env, contract: &Address) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::ResolutionContract, contract);
+}
+
+pub fn get_pending_resolution_contract(env: &Env) -> Option<crate::types::PendingAddressChange> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::PendingResolution)
+}
+
+pub fn set_pending_resolution_contract(env: &Env, pending: &crate::types::PendingAddressChange) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingResolution, pending);
+}
+
+pub fn clear_pending_resolution_contract(env: &Env) {
+    env.storage()
+        .persistent()
+        .remove(&StorageKey::PendingResolution);
+}
+
+// --- Fee Waiver Storage (Issue #483) ---
+
+/// Default withdrawal fee rate in basis points (50 bps = 0.5%).
+pub const DEFAULT_FEE_RATE_BPS: i128 = 50;
+
+/// Maximum withdrawal fee rate in basis points (10_000 bps = 100%).
+pub const MAX_FEE_RATE_BPS: i128 = 10_000;
+
+/// Return the list of addresses currently exempt from withdrawal fees.
+pub fn get_fee_waivers(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeWaivers)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Store the full fee waiver list (replaces the previous list).
+pub fn set_fee_waivers(env: &Env, waivers: &Vec<Address>) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeWaivers, waivers);
+}
+
+/// Return whether `account` is currently on the fee waiver list.
+pub fn is_fee_waived(env: &Env, account: &Address) -> bool {
+    let waivers = get_fee_waivers(env);
+    waivers.contains(account)
+}
+
+/// Add `account` to the fee waiver list (idempotent).
+pub fn add_fee_waiver(env: &Env, account: &Address) {
+    let mut waivers = get_fee_waivers(env);
+    if !waivers.contains(account) {
+        waivers.push_back(account.clone());
+        set_fee_waivers(env, &waivers);
+    }
+}
+
+/// Remove `account` from the fee waiver list (no-op if not present).
+pub fn remove_fee_waiver(env: &Env, account: &Address) {
+    let waivers = get_fee_waivers(env);
+    let mut new_waivers = Vec::new(env);
+    for w in waivers.iter() {
+        if &w != account {
+            new_waivers.push_back(w);
+        }
+    }
+    set_fee_waivers(env, &new_waivers);
+}
+
+// --- Fee Cap Storage ---
+
+/// Hard upper bound on the fee rate (defaults to `MAX_FEE_RATE_BPS` when unset).
+pub fn get_fee_cap_bps(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::FeeCap)
+        .unwrap_or(MAX_FEE_RATE_BPS)
+}
+
+/// Set the hard upper bound on the fee rate (admin-gated in `lib.rs`).
+pub fn set_fee_cap_bps(env: &Env, cap_bps: i128) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::FeeCap, &cap_bps);
+}
+
+/// Alias for `get_all_market_ids` used by `list_markets`.
+pub fn get_market_ids(env: &Env) -> Vec<u32> {
+    get_all_market_ids(env)
+}
+
+/// Append `market_id` to the global ordered market-ID list.
+///
+/// Used by off-chain indexers that iterate over all markets via
+/// `get_all_market_ids`. The list is append-only; market IDs are never
+/// removed so the ordering matches creation order.
+pub fn append_market_id(env: &Env, market_id: u32) {
+    let mut ids: Vec<u32> = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::MarketIds)
+        .unwrap_or_else(|| Vec::new(env));
+    ids.push_back(market_id);
+    env.storage().persistent().set(&StorageKey::MarketIds, &ids);
+}
+
+/// Return the ordered list of all market IDs ever created.
+pub fn get_all_market_ids(env: &Env) -> Vec<u32> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::MarketIds)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+// --- Oracle Adapter Support ---
+// CRITICAL: When oracle adapters are enabled (non-empty), Ed25519 fallback MUST be disabled.
+// This enforces a fail-closed security model. See ADR-002 in docs/.
+
+/// Check if any oracle adapters are registered.
+/// If true, Ed25519 signature verification should not be used as fallback.
+pub fn has_oracle_adapters(env: &Env) -> bool {
+    env.storage()
+        .persistent()
+        .has(&StorageKey::OracleAdapters)
+}
+
+/// Register that oracle adapters are enabled for this market contract.
+/// This disables Ed25519 fallback (fail-closed).
+pub fn enable_oracle_adapters(env: &Env) {
+    env.storage()
+        .persistent()
+        .set(&StorageKey::OracleAdapters, &true);
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::types::{AdapterType, MarketStatus};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::String;
+
+    fn init_versioned(env: &Env, contract_id: &Address) {
+        env.as_contract(contract_id, || set_version(env));
+    }
+
+    #[test]
+    fn test_wrong_version_returns_upgrade_required() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &0u32);
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    #[test]
+    fn test_missing_version_returns_upgrade_required() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    /// Lightweight CI guard: `STORAGE_MIGRATION_GUIDE.md` must document the
+    /// current `STORAGE_VERSION` with a `### Version {N} (Current)` heading,
+    /// and exactly one entry may be marked current.
+    ///
+    /// Storage version bump checklist (do this whenever `STORAGE_VERSION` in
+    /// this file is incremented):
+    /// 1. Add a new `### Version {N} (Current)` section to
+    ///    `STORAGE_MIGRATION_GUIDE.md`'s "Version History", describing what
+    ///    changed, the migration path, and whether it's breaking.
+    /// 2. Demote the previous `(Current)` entry to a plain `### Version {N}`
+    ///    heading (no `(Current)` suffix).
+    /// 3. Update the version history comment block above `STORAGE_VERSION`
+    ///    in this file to match.
+    /// 4. Re-run this test — bumping the constant without touching the guide
+    ///    fails the build here, before it fails in review.
+    #[test]
+    fn test_storage_version_documented_in_migration_guide() {
+        extern crate std;
+        use std::format;
+
+        const GUIDE: &str = include_str!("../STORAGE_MIGRATION_GUIDE.md");
+
+        let current_heading = format!("### Version {} (Current)", STORAGE_VERSION);
+        assert!(
+            GUIDE.contains(current_heading.as_str()),
+            "STORAGE_MIGRATION_GUIDE.md is missing a '{}' heading — document \
+             the breaking change and demote the previous (Current) entry \
+             whenever STORAGE_VERSION is bumped",
+            current_heading
+        );
+
+        // A stale duplicate "(Current)" marker left behind from a prior bump
+        // would otherwise let the check above pass without the guide
+        // actually being updated for the new version.
+        let current_count = GUIDE.matches("(Current)").count();
+        assert_eq!(
+            current_count, 1,
+            "exactly one Version History entry should be marked (Current); found {}",
+            current_count
+        );
+    }
+
+    #[test]
+    fn test_admin_storage() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert!(!has_admin(&env));
+            set_admin(&env, &admin);
+            assert!(has_admin(&env));
+            assert_eq!(get_admin(&env).unwrap(), admin);
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_defaults_to_50() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_fee_rate_bps(&env),
+                DEFAULT_FEE_RATE_BPS,
+                "fee rate must default to 50 bps"
+            );
+        });
+    }
+
+    #[test]
+    fn test_fee_rate_bps_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            set_fee_rate_bps(&env, 100);
+            assert_eq!(get_fee_rate_bps(&env), 100);
+
+            set_fee_rate_bps(&env, 0);
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            set_fee_rate_bps(&env, MAX_FEE_RATE_BPS);
+            assert_eq!(get_fee_rate_bps(&env), MAX_FEE_RATE_BPS);
+        });
+    }
+
+    #[test]
+    fn test_market_id_counter() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_next_market_id(&env).unwrap(), 0);
+            assert_eq!(increment_market_id(&env).unwrap(), 1);
+            assert_eq!(increment_market_id(&env).unwrap(), 2);
+        });
+    }
+
+    #[test]
+    fn test_market_storage_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        let market_id = 1u32;
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Will it rain?"),
+            end_time: 1000,
+            oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token: Address::generate(&env),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+        env.as_contract(&contract_id, || {
+            assert!(!has_market(&env, market_id).unwrap());
+            set_market(&env, market_id, &market).unwrap();
+            assert!(has_market(&env, market_id).unwrap());
+            let saved = get_market(&env, market_id).unwrap().unwrap();
+            assert_eq!(saved.id, market.id);
+        });
+    }
+
+    #[test]
+    fn test_threshold_signers_default_empty() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_threshold_signers(&env).len(), 0);
+            assert_eq!(get_threshold_quorum(&env), 0);
+        });
+    }
+
+    #[test]
+    fn test_threshold_signers_round_trip() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let collateral_token = Address::generate(&env);
+        let market_id = 7u32;
+
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Storage layout test question?"),
+            end_time: 9_999_999_999u64,
+            oracle_pubkey: BytesN::from_array(&env, &[0xABu8; 32]),
+            status: crate::types::MarketStatus::Active,
+            result: Some(true),
+            creator: admin.clone(),
+            created_at: 1_000_000u64,
+            collateral_token: collateral_token.clone(),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 250,
+            no_shares: 75,
+            locked_collateral: 325,
+            total_deposited: 400,
+            is_settled: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            set_admin(&env, &admin);
+            increment_market_id(&env).unwrap();
+
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            assert_eq!(get_next_market_id(&env).unwrap(), 1);
+
+            assert!(!has_market(&env, market_id).unwrap());
+            set_market(&env, market_id, &market).unwrap();
+            assert!(has_market(&env, market_id).unwrap());
+
+            assert_eq!(get_admin(&env).unwrap(), admin);
+            assert_eq!(get_next_market_id(&env).unwrap(), 1);
+
+            let m = get_market(&env, market_id).unwrap().unwrap();
+            assert_eq!(m.id, market.id);
+            assert_eq!(m.question, market.question);
+            assert_eq!(m.end_time, market.end_time);
+            assert_eq!(m.oracle_pubkey, market.oracle_pubkey);
+            assert_eq!(m.result, market.result);
+            assert_eq!(m.creator, market.creator);
+            assert_eq!(m.created_at, market.created_at);
+            assert_eq!(m.collateral_token, market.collateral_token);
+
+            assert!(!has_position(&env, market_id, &user).unwrap());
+            set_position(&env, market_id, &user, &position).unwrap();
+            assert!(has_position(&env, market_id, &user).unwrap());
+
+            let other_user = Address::generate(&env);
+            assert!(!has_position(&env, market_id, &other_user).unwrap());
+
+            let p = get_position(&env, market_id, &user).unwrap().unwrap();
+            assert_eq!(p.market_id, position.market_id);
+            assert_eq!(p.user, position.user);
+            assert_eq!(p.yes_shares, position.yes_shares);
+            assert_eq!(p.no_shares, position.no_shares);
+            assert_eq!(p.locked_collateral, position.locked_collateral);
+            assert_eq!(p.total_deposited, position.total_deposited);
+            assert_eq!(p.is_settled, position.is_settled);
+
+            let m2 = get_market(&env, market_id).unwrap().unwrap();
+            assert_eq!(m2.id, market.id);
+        });
+    }
+
+    #[test]
+    fn migration_missing_version_blocks_storage() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+            assert!(matches!(
+                get_market(&env, 1),
+                Err(ContractError::UpgradeRequired)
+            ));
+            assert_eq!(
+                get_position(&env, 1, &user),
+                Err(ContractError::UpgradeRequired)
+            );
+        });
+    }
+
+    #[test]
+    fn migration_after_set_version_storage_is_accessible() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let collateral_token = Address::generate(&env);
+
+        let market = Market {
+            id: 1,
+            question: String::from_str(&env, "post-migration market?"),
+            end_time: 9_000_000,
+            oracle_pubkey: BytesN::from_array(&env, &[0u8; 32]),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token,
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            set_version(&env);
+            assert_eq!(assert_version(&env), Ok(()));
+
+            set_market(&env, 1, &market).unwrap();
+            let m = get_market(&env, 1).unwrap().unwrap();
+            assert_eq!(m.id, 1);
+        });
+    }
+
+    #[test]
+    fn migration_future_version_is_rejected() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::StorageVersion, &(STORAGE_VERSION + 1));
+            assert_eq!(assert_version(&env), Err(ContractError::UpgradeRequired));
+        });
+    }
+
+    // ── Treasury storage helpers ──────────────────────────────────────────────
+
+    #[test]
+    fn test_treasury_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let treasury = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert!(!has_treasury(&env));
+            assert_eq!(get_treasury(&env), None);
+
+            set_treasury(&env, &treasury);
+            assert!(has_treasury(&env));
+            assert_eq!(get_treasury(&env), Some(treasury.clone()));
+        });
+    }
+
+    // ── Resolution contract storage helpers ───────────────────────────────────
+
+    #[test]
+    fn test_resolution_contract_storage_set_and_get() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let resolution = Address::generate(&env);
+        init_versioned(&env, &contract_id);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_resolution_contract(&env), None);
+
+            set_resolution_contract(&env, &resolution);
+            assert_eq!(get_resolution_contract(&env), Some(resolution.clone()));
+        });
+    }
+
+    // ── Pause storage helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_defaults_to_false() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            assert!(!is_paused(&env), "fresh contract should not be paused");
+        });
+    }
+
+    #[test]
+    fn test_pause_can_be_set_and_cleared() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    #[test]
+    fn test_pause_toggle_returns_to_unpaused() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        init_versioned(&env, &contract_id);
+        env.as_contract(&contract_id, || {
+            set_paused(&env, true);
+            assert!(is_paused(&env));
+            set_paused(&env, true);
+            assert!(is_paused(&env), "pausing again should stay paused");
+            set_paused(&env, false);
+            assert!(!is_paused(&env));
+        });
+    }
+
+    /// Canary test for issue #764 — ensures that the four modules whose
+    /// dead-code suppression is required only due to `#[contractimpl]` macro
+    /// hiding call-sites (`positions`, `settlement`, `storage`, `validation`)
+    /// use the scoped `#[cfg_attr(not(test), allow(dead_code))]` form rather
+    /// than a blanket `#[allow(dead_code)]`.
+    ///
+    /// A blanket `#[allow(dead_code)]` on any of these modules would silently
+    /// hide genuinely unused admin entrypoints or storage helpers during
+    /// non-audit code reviews.  This test fails immediately if the pattern
+    /// regresses back to the unscoped form, catching it in `cargo test`
+    /// before it reaches a review or audit.
+    ///
+    /// HOW THIS WORKS:
+    ///   - `include_str!` embeds the raw source of `lib.rs` at compile time.
+    ///   - We assert that the string `#[allow(dead_code)]` does not appear as
+    ///     a standalone module-level attribute on the four guarded modules
+    ///     (by confirming the *only* dead_code attributes for those modules
+    ///     are the cfg_attr-scoped variants).
+    ///   - A false positive here means someone deliberately removed the
+    ///     cfg_attr wrapper — that needs an explicit, documented reason.
+    #[test]
+    fn test_no_bare_module_level_allow_dead_code_on_guarded_modules() {
+        extern crate std;
+        use std::string::ToString;
+
+        const LIB_SRC: &str = include_str!("lib.rs");
+
+        // The four modules that must use cfg_attr instead of a bare allow.
+        // Each entry is (module_name, explanatory_substring) — the second
+        // field confirms the cfg_attr annotation is present and correctly
+        // references the module.
+        let guarded = [
+            "positions",
+            "settlement",
+            "storage",
+            "validation",
+        ];
+
+        for module in guarded {
+            // Confirm the scoped cfg_attr form IS present.
+            let cfg_attr_form = "#[cfg_attr(not(test), allow(dead_code))]";
+            assert!(
+                LIB_SRC.contains(cfg_attr_form),
+                "lib.rs is missing the scoped '{}' attribute — \
+                 at least one of the guarded modules ({}) requires it; \
+                 do not replace it with a bare #[allow(dead_code)] (#764)",
+                cfg_attr_form,
+                module
+            );
+
+            // Confirm there is no bare `#[allow(dead_code)]` immediately
+            // followed (within 3 lines) by `mod {module}`.  We scan each
+            // line window rather than the whole file so we only flag the
+            // attribute when it directly precedes the module declaration.
+            let lines: std::vec::Vec<&str> = LIB_SRC.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                // Check if this line is a bare (non-cfg_attr) dead_code allow
+                let trimmed = line.trim();
+                if trimmed == "#[allow(dead_code)]" {
+                    // Look ahead up to 3 lines for the module declaration
+                    let window_end = (i + 4).min(lines.len());
+                    for ahead in &lines[i + 1..window_end] {
+                        let ahead_trimmed = ahead.trim();
+                        let mod_decl = std::format!("mod {};", module);
+                        let pub_mod_decl = std::format!("pub mod {};", module);
+                        if ahead_trimmed == mod_decl || ahead_trimmed == pub_mod_decl {
+                            panic!(
+                                "lib.rs has a bare #[allow(dead_code)] on `mod {}` \
+                                 (line {}). Replace it with \
+                                 `#[cfg_attr(not(test), allow(dead_code))]` \
+                                 to scope the suppression to non-test builds only. \
+                                 See issue #764.",
+                                module,
+                                i + 1
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

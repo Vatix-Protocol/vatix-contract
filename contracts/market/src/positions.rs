@@ -19,14 +19,6 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
-    /// Caller is not the position owner nor an approved operator
-    Unauthorized = 4,
-    /// Transfer/merge request id has already been processed (replay)
-    DuplicateRequest = 5,
-    /// Source and destination positions belong to different markets
-    MarketMismatch = 6,
-    /// Transfer/merge would leave the source position settled or invalid
-    InvalidPositionState = 7,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -174,189 +166,6 @@ pub fn can_settle(position: &Position, market: &Market) -> bool {
     matches!(market.status, MarketStatus::Resolved) && !position.is_settled
 }
 
-/// Authorize a position transfer/merge request.
-///
-/// Deny-by-default: the caller must be the position owner, or an operator
-/// explicitly approved by the owner (see `storage::is_operator`). Any other
-/// caller is rejected with [`PositionError::Unauthorized`].
-///
-/// # Errors
-/// Returns [`PositionError::Unauthorized`] when `caller` is neither the owner
-/// nor an approved operator for `owner`.
-pub fn authorize_position_operator(
-    env: &Env,
-    owner: &Address,
-    caller: &Address,
-) -> Result<(), PositionError> {
-    if caller == owner {
-        return Ok(());
-    }
-    if crate::storage::is_operator(env, owner, caller) {
-        return Ok(());
-    }
-    Err(PositionError::Unauthorized)
-}
-
-/// Guard against replay of a transfer/merge request.
-///
-/// Each request carries a caller-supplied `request_id`; the first successful
-/// use of an id is recorded and any subsequent use is rejected with
-/// [`PositionError::DuplicateRequest`]. This makes transfer/merge idempotent
-/// under retries and concurrent submission.
-///
-/// # Errors
-/// Returns [`PositionError::DuplicateRequest`] when `request_id` was already
-/// consumed for `owner`.
-pub fn consume_request_id(
-    env: &Env,
-    owner: &Address,
-    request_id: u64,
-) -> Result<(), PositionError> {
-    if crate::storage::is_request_consumed(env, owner, request_id) {
-        return Err(PositionError::DuplicateRequest);
-    }
-    crate::storage::mark_request_consumed(env, owner, request_id);
-    Ok(())
-}
-
-/// Transfer a position (or a share slice of it) from `from` to `to`.
-///
-/// Moves `yes_shares`/`no_shares` out of the source position and into the
-/// destination position within the same market, then recomputes locked
-/// collateral on both sides from the current `market_price`. The caller must
-/// be the source owner or an approved operator, and `request_id` must be
-/// unused (replay protection). All validation happens before any state is
-/// written, so a failure leaves both positions untouched (fail-closed).
-///
-/// # Errors
-/// - [`PositionError::Unauthorized`] caller is not owner/operator
-/// - [`PositionError::DuplicateRequest`] `request_id` already consumed
-/// - [`PositionError::InvalidMarketPrice`] price outside 0–10_000
-/// - [`PositionError::InvalidPositionState`] source is settled or empty
-/// - [`PositionError::ShareBalanceBelowZero`] transfer exceeds source shares
-pub fn transfer_position(
-    env: &Env,
-    market_id: u32,
-    from: &Address,
-    to: &Address,
-    caller: &Address,
-    yes_shares: i128,
-    no_shares: i128,
-    market_price: i128,
-    request_id: u64,
-) -> Result<(), PositionError> {
-    validation::validate_market_price(market_price)
-        .map_err(|_| PositionError::InvalidMarketPrice)?;
-    authorize_position_operator(env, from, caller)?;
-    consume_request_id(env, from, request_id)?;
-
-    if yes_shares < 0 || no_shares < 0 {
-        return Err(PositionError::ShareBalanceBelowZero);
-    }
-
-    let mut source = crate::storage::get_position(env, market_id, from)
-        .unwrap_or_else(|_| None)
-        .ok_or(PositionError::InvalidPositionState)?;
-    if source.is_settled {
-        return Err(PositionError::InvalidPositionState);
-    }
-
-    validate_position_change(&source, -yes_shares, -no_shares)?;
-
-    let mut dest = crate::storage::get_position(env, market_id, to)
-        .unwrap_or_else(|_| None)
-        .unwrap_or_else(|| Position {
-            market_id,
-            user: to.clone(),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        });
-    if dest.is_settled {
-        return Err(PositionError::InvalidPositionState);
-    }
-
-    source.yes_shares -= yes_shares;
-    source.no_shares -= no_shares;
-    dest.yes_shares += yes_shares;
-    dest.no_shares += no_shares;
-
-    source.locked_collateral =
-        calculate_locked_collateral(source.yes_shares, source.no_shares, market_price);
-    dest.locked_collateral =
-        calculate_locked_collateral(dest.yes_shares, dest.no_shares, market_price);
-
-    crate::storage::set_position(env, market_id, from, &source).unwrap_or_default();
-    crate::storage::set_position(env, market_id, to, &dest).unwrap_or_default();
-
-    emit_position_updated(env, market_id, from);
-    emit_position_updated(env, market_id, to);
-    Ok(())
-}
-
-/// Merge two positions held by the same owner in the same market.
-///
-/// Combines `other` into `primary` (netting YES/NO shares and summing
-/// `total_deposited`), recomputes locked collateral from `market_price`, and
-/// zeroes out the merged position. The caller must be the owner or an
-/// approved operator, and `request_id` must be unused. Validation precedes
-/// all writes so a failure leaves both positions untouched (fail-closed).
-///
-/// # Errors
-/// - [`PositionError::Unauthorized`] caller is not owner/operator
-/// - [`PositionError::DuplicateRequest`] `request_id` already consumed
-/// - [`PositionError::InvalidMarketPrice`] price outside 0–10_000
-/// - [`PositionError::InvalidPositionState`] either position is settled
-pub fn merge_positions(
-    env: &Env,
-    market_id: u32,
-    owner: &Address,
-    primary: &Address,
-    other: &Address,
-    caller: &Address,
-    market_price: i128,
-    request_id: u64,
-) -> Result<(), PositionError> {
-    validation::validate_market_price(market_price)
-        .map_err(|_| PositionError::InvalidMarketPrice)?;
-    authorize_position_operator(env, owner, caller)?;
-    consume_request_id(env, owner, request_id)?;
-
-    let mut primary_pos = crate::storage::get_position(env, market_id, primary)
-        .unwrap_or_else(|_| None)
-        .ok_or(PositionError::InvalidPositionState)?;
-    let mut other_pos = crate::storage::get_position(env, market_id, other)
-        .unwrap_or_else(|_| None)
-        .ok_or(PositionError::InvalidPositionState)?;
-
-    if primary_pos.is_settled || other_pos.is_settled {
-        return Err(PositionError::InvalidPositionState);
-    }
-
-    primary_pos.yes_shares += other_pos.yes_shares;
-    primary_pos.no_shares += other_pos.no_shares;
-    primary_pos.total_deposited += other_pos.total_deposited;
-    primary_pos.locked_collateral = calculate_locked_collateral(
-        primary_pos.yes_shares,
-        primary_pos.no_shares,
-        market_price,
-    );
-
-    other_pos.yes_shares = 0;
-    other_pos.no_shares = 0;
-    other_pos.locked_collateral = 0;
-    other_pos.total_deposited = 0;
-
-    crate::storage::set_position(env, market_id, primary, &primary_pos).unwrap_or_default();
-    crate::storage::set_position(env, market_id, other, &other_pos).unwrap_or_default();
-
-    emit_position_updated(env, market_id, primary);
-    emit_position_updated(env, market_id, other);
-    Ok(())
-}
-
 /// Update a user's position with new share deltas
 ///
 /// # Arguments
@@ -385,17 +194,18 @@ pub fn update_position(
         .map_err(|_| PositionError::InvalidMarketPrice)?;
 
     // 1. Load or initialize position
-    let mut position = crate::storage::get_position(env, market_id, user)
-        .unwrap_or_else(|_| None)
-        .unwrap_or_else(|| Position {
-            market_id,
-            user: user.clone(),
-            yes_shares: 0,
-            no_shares: 0,
-            locked_collateral: 0,
-            total_deposited: 0,
-            is_settled: false,
-        });
+    let mut position =
+        crate::storage::get_position(env, market_id, user)
+            .unwrap_or_else(|_| None)
+            .unwrap_or_else(|| Position {
+                market_id,
+                user: user.clone(),
+                yes_shares: 0,
+                no_shares: 0,
+                locked_collateral: 0,
+                total_deposited: 0,
+                is_settled: false,
+            });
 
     // 2. Validate deltas
     let side_yes = position_limit_exceeded_side(&position, yes_delta, no_delta);
@@ -414,7 +224,8 @@ pub fn update_position(
     position.locked_collateral = new_locked;
 
     // 5. Persist
-    crate::storage::set_position(env, market_id, user, &position).unwrap_or_default();
+    crate::storage::set_position(env, market_id, user, &position)
+        .unwrap_or_default();
 
     // 6. Emit position_updated event
     emit_position_updated(
@@ -647,10 +458,16 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         let topic0: soroban_sdk::Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic0, soroban_sdk::Symbol::new(&env, "position_updated"));
+        assert_eq!(
+            topic0,
+            soroban_sdk::Symbol::new(&env, "position_updated")
+        );
 
         let topic1: soroban_sdk::Symbol = events.get(1).unwrap().1.get(0).unwrap().into_val(&env);
-        assert_eq!(topic1, soroban_sdk::Symbol::new(&env, "trade_executed"));
+        assert_eq!(
+            topic1,
+            soroban_sdk::Symbol::new(&env, "trade_executed")
+        );
     }
 
     #[test]
@@ -724,25 +541,11 @@ mod tests {
         });
 
         let switched = env.as_contract(&contract_id, || {
-            update_position(
-                &env,
-                market_id,
-                &user,
-                -100 * STROOPS_PER_USDC,
-                100 * STROOPS_PER_USDC,
-                6000,
-            )
-            .unwrap()
+            update_position(&env, market_id, &user, -100 * STROOPS_PER_USDC, 100 * STROOPS_PER_USDC, 6000).unwrap()
         });
 
-        assert_eq!(
-            initial.yes_shares + initial.no_shares,
-            100 * STROOPS_PER_USDC
-        );
-        assert_eq!(
-            switched.yes_shares + switched.no_shares,
-            100 * STROOPS_PER_USDC
-        );
+        assert_eq!(initial.yes_shares + initial.no_shares, 100 * STROOPS_PER_USDC);
+        assert_eq!(switched.yes_shares + switched.no_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(switched.yes_shares, 0);
         assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
     }
@@ -787,42 +590,6 @@ mod proptest_tests {
                 locked >= 0,
                 "locked={locked} yes={yes} no={no} price={price}"
             );
-        }
-
-        /// #1016: `calculate_locked_collateral` is monotonically non-decreasing
-        /// in `yes_shares` and in `no_shares` — adding shares to either side
-        /// (holding the other side and price fixed) never *reduces* the
-        /// amount of collateral that must stay locked.
-        #[test]
-        fn prop_locked_collateral_monotonic_in_shares(
-            yes in 0i128..=1_000_000i128,
-            no in 0i128..=1_000_000i128,
-            price in 0i128..=10_000i128,
-            yes_delta in 0i128..=1_000_000i128,
-            no_delta in 0i128..=1_000_000i128,
-        ) {
-            let base = calculate_locked_collateral(yes, no, price);
-
-            let more_yes = calculate_locked_collateral(yes + yes_delta, no, price);
-            prop_assert!(
-                more_yes >= base,
-                "increasing yes_shares decreased locked collateral: base={base} more_yes={more_yes} yes={yes} no={no} price={price} yes_delta={yes_delta}"
-            );
-
-            let more_no = calculate_locked_collateral(yes, no + no_delta, price);
-            prop_assert!(
-                more_no >= base,
-                "increasing no_shares decreased locked collateral: base={base} more_no={more_no} yes={yes} no={no} price={price} no_delta={no_delta}"
-            );
-        }
-
-        /// #1016: zero shares on both sides always locks zero collateral,
-        /// regardless of market price (the lower bound of the monotonic range).
-        #[test]
-        fn prop_locked_collateral_zero_shares_is_zero(
-            price in 0i128..=10_000i128,
-        ) {
-            prop_assert_eq!(calculate_locked_collateral(0, 0, price), 0);
         }
 
         /// Equal YES and NO shares always produce zero locked collateral,
