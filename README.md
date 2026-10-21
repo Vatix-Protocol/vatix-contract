@@ -622,3 +622,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1042 -->
 - #1042: Market contract: oracle_adapter has no test asserting the disabled-adapter path fails closed
+
+<!-- handsoff-issue-1089 -->
+- #1089: Settlement eligibility rejects non-`Resolved` market statuses (including `Canceled`). Enforced by `validate_settlement_eligibility` in `contracts/market/src/settlement.rs` (returns `ContractError::MarketNotResolved` unless `market.status == MarketStatus::Resolved`), and covered by `test_validate_settlement_not_resolved` and `test_validate_settlement_rejects_canceled_market` in the same file.
