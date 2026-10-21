@@ -7,6 +7,12 @@ interface MarketCardProps {
 }
 
 export function MarketCard({ market, loading = false }: MarketCardProps) {
+  // The indexer can omit or corrupt this display field. Keep valid labels
+  // unchanged while preventing an invalid date from leaking into the card.
+  const endsAt = typeof market.endsAt === "string" &&
+    market.endsAt.trim() !== "" && Number.isFinite(Date.parse(market.endsAt))
+    ? market.endsAt
+    : "Unknown";
   const yesPct = Math.round(market.yesPrice * 100);
 
   return (
@@ -25,7 +31,7 @@ export function MarketCard({ market, loading = false }: MarketCardProps) {
             </span>
             <span className="hidden sm:inline mx-1">·</span>
             <span className="block sm:inline">
-              ends {market.endsAt}
+              ends {endsAt}
             </span>
             {market.closedToDeposits && (
               <StatusBadge

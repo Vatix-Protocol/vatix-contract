@@ -121,7 +121,7 @@ pub fn validate_metadata_uri(metadata_uri: &Option<String>) -> Result<(), Contra
         while offset < len {
             let chunk_len = core::cmp::min(SCRATCH_LEN, len - offset);
             let chunk = &mut buf[..chunk_len];
-            uri.slice(offset as u32..(offset + chunk_len) as u32)
+            uri.to_bytes().slice(offset as u32..(offset + chunk_len) as u32)
                 .copy_into_slice(chunk);
             if !chunk.iter().all(u8::is_ascii_graphic) {
                 return Err(ContractError::InvalidMetadataUri);
@@ -346,10 +346,10 @@ pub fn calculate_fee(amount: i128, fee_rate_bps: i128) -> Result<i128, ContractE
 /// Guard: reject operations when the contract has not been initialized.
 ///
 /// # Errors
-/// - [`ContractError::NotInitialized`] – the contract has no admin set.
+/// - [`ContractError::Unauthorized`] – the contract has no admin set.
 pub fn require_initialized(env: &Env) -> Result<(), ContractError> {
     if !crate::storage::has_admin(env) {
-        return Err(ContractError::NotInitialized);
+        return Err(ContractError::Unauthorized);
     }
     Ok(())
 }
@@ -431,7 +431,7 @@ pub fn validate_fee_waiver_account(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN};
+    use soroban_sdk::{testutils::Address as _, Address};
 
     #[test]
     fn test_valid_market_creation() {
@@ -708,8 +708,10 @@ mod tests {
         // itself is still accepted (inclusive upper bound).
         let end_time = current_time + 31_536_000;
 
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
-        assert!(validate_market_creation(&question, end_time, current_time).is_ok());
+        let env = Env::default();
+        let token = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let question = String::from_str(&env, "Valid question?");
+        assert!(validate_market_creation(&question, end_time, current_time, &token).is_ok());
     }
 
     #[test]
@@ -717,9 +719,11 @@ mod tests {
         let current_time = 1000;
         let end_time = current_time + 31_536_000 + 1;
 
-        let question = String::from_str(&soroban_sdk::Env::default(), "Valid question?");
+        let env = Env::default();
+        let token = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let question = String::from_str(&env, "Valid question?");
         assert_eq!(
-            validate_market_creation(&question, end_time, current_time),
+            validate_market_creation(&question, end_time, current_time, &token),
             Err(ContractError::InvalidTimestamp)
         );
     }
@@ -816,7 +820,7 @@ mod tests {
         env.as_contract(&contract_id, || {
             assert_eq!(
                 require_initialized(&env),
-                Err(ContractError::NotInitialized)
+                Err(ContractError::Unauthorized)
             );
         });
     }

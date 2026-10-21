@@ -228,6 +228,13 @@ pub enum ContractError {
     /// The fee-waiver list is at capacity ([`crate::storage::MAX_FEE_WAIVERS`]).
     FeeWaiverCapReached = 44,
 
+    /// Money-path invocation while paused.
+    ContractPaused = 46,
+    /// The current emergency mode disallows this operation.
+    EmergencyModeActive = 47,
+    /// A deposit attempted to reenter while its lock was held.
+    ReentrantCall = 48,
+
     // ========== Token Errors (50-59) ==========
     /// Token transfer failed.
     ///

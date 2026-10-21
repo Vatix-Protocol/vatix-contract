@@ -233,6 +233,82 @@ mod tests {
         }
     }
 
+    // Call the implementation directly: a failed contract invocation would roll
+    // storage back and could conceal a missing Drop unlock.
+    fn assert_rejected_deposit_unlocks(case: &str, expected: ContractError) {
+        use soroban_sdk::testutils::Ledger;
+        let env = setup_env();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&user, &1_000_000_000);
+        let mut market = create_test_market(&env, 1, &token);
+        match case {
+            "resolved" => market.status = MarketStatus::Resolved,
+            "canceled" => market.status = MarketStatus::Canceled,
+            "closed" => market.closed_to_deposits = true,
+            "expired" => env.ledger().set_timestamp(market.end_time),
+            _ => (),
+        }
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, 1, &market).unwrap();
+            let id = if case == "unknown" { 99 } else { 1 };
+            let amount = if case == "zero" { 0 } else { 10_000_000 };
+            assert_eq!(
+                deposit_collateral(env.clone(), user.clone(), id, amount),
+                Err(expected)
+            );
+            assert!(!storage::is_deposit_locked(&env));
+        });
+        env.as_contract(&contract_id, || {
+            // Restore an eligible market and prove a new deposit can acquire
+            // the same lock after every rejection.
+            market.status = MarketStatus::Active;
+            market.closed_to_deposits = false;
+            market.end_time = env.ledger().timestamp() + 1000;
+            storage::set_market(&env, 1, &market).unwrap();
+            assert_eq!(
+                deposit_collateral(env.clone(), user.clone(), 1, 10_000_000),
+                Ok(())
+            );
+            assert!(!storage::is_deposit_locked(&env));
+        });
+    }
+
+    #[test]
+    fn rejected_zero_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("zero", ContractError::InvalidQuantity);
+    }
+
+    #[test]
+    fn rejected_unknown_market_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("unknown", ContractError::MarketNotFound);
+    }
+
+    #[test]
+    fn rejected_resolved_market_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("resolved", ContractError::MarketNotActive);
+    }
+
+    #[test]
+    fn rejected_canceled_market_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("canceled", ContractError::MarketNotActive);
+    }
+
+    #[test]
+    fn rejected_closed_market_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("closed", ContractError::MarketClosedToDeposits);
+    }
+
+    #[test]
+    fn rejected_expired_market_deposit_unlocks() {
+        assert_rejected_deposit_unlocks("expired", ContractError::MarketExpired);
+    }
+
     #[test]
     fn test_deposit_validates_zero_amount() {
         let env = setup_env();
@@ -529,12 +605,12 @@ mod tests {
             soroban_sdk::Symbol::new(&env, "collateral_deposited")
         );
 
-        // Topic 1 = user
-        let topic1: Address = last.1.get(1).unwrap().into_val(&env);
+        // Topic 1 is the event version; topic 2 is the user.
+        let topic1: Address = last.1.get(2).unwrap().into_val(&env);
         assert_eq!(topic1, user);
 
-        // Topic 2 = market_id
-        let topic2: u32 = last.1.get(2).unwrap().into_val(&env);
+        // Topic 3 = market_id
+        let topic2: u32 = last.1.get(3).unwrap().into_val(&env);
         assert_eq!(topic2, market_id);
 
         // Data: amount and new_total
@@ -714,7 +790,9 @@ mod tests {
         let env = setup_env();
         let user = Address::generate(&env);
         let market_id = 1;
-        let collateral_token = Address::generate(&env);
+        let collateral_token = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
         let contract_id = env.register(crate::MarketContract, ());
 
         let market = create_test_market(&env, market_id, &collateral_token);
@@ -724,10 +802,9 @@ mod tests {
         });
         env.mock_all_auths();
 
-        // MAX / 2 is the cap — amounts strictly above it are rejected.
-        // This value passes the quantity check but the token transfer will
-        // fail (no real balance). The key is no panic from overflow.
+        // Fund a real token so the boundary exercises the complete path.
         let at_cap = i128::MAX / 2;
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &at_cap);
         let result = env.as_contract(&contract_id, || {
             deposit_collateral(env.clone(), user.clone(), market_id, at_cap)
         });

@@ -10,6 +10,10 @@
 //! `mint_on_trade` edge into the outcome-token contract. The edge is typed,
 //! authorized, idempotent, and fail-closed (see [`MintOnTradeEdge`]).
 
+use crate::error::ContractError;
+use crate::types::{MarketStatus, Position};
+use vatix_outcome_token_contract::{types::TokenKind, OutcomeTokenContractClient};
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
 };
@@ -21,16 +25,19 @@ pub mod types;
 
 // Module graph restored incrementally (#1058, #1060, #1061): each module
 // below is compiled into the crate because at least one wired entrypoint or
-// wired module depends on it. The full pre-#1003 graph (positions, deposit,
-// settlement, withdraw, validation, withdraw_fuzz, oracle_adapter) stays
-// unwired — restoring that is tracked separately per #1138.
+// wired module depends on it. The deposit/trade/withdraw graph is included
+// for the executable money-path regressions (#1080, #1081).
+pub mod deposit;
 pub mod error;
 pub mod events;
 pub mod fee_rate;
 pub mod fee_waiver;
 pub mod oracle;
+pub mod positions;
 pub mod reconciliation;
 pub mod storage;
+pub mod validation;
+pub mod withdraw;
 
 /// Stable, collision-free storage key encodings for all persisted market state.
 ///
@@ -266,6 +273,174 @@ impl MarketContract {
     /// addresses never added and for addresses whose waiver was removed.
     pub fn get_fee_waiver(env: Env, address: Address) -> bool {
         crate::fee_waiver::has_fee_waiver(&env, &address)
+    }
+
+    /// Configure the token ledger used by positions and reconciliation.
+    pub fn set_outcome_token_contract(
+        env: Env,
+        admin: Address,
+        token: Address,
+    ) -> Result<(), error::ContractError> {
+        admin.require_auth();
+        validation::require_initialized(&env)?;
+        if admin != storage::get_admin(&env) {
+            return Err(error::ContractError::Unauthorized);
+        }
+        storage::set_outcome_token_contract(&env, &token);
+        Ok(())
+    }
+
+    pub fn deposit_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        deposit::deposit_collateral(env, user, market_id, amount)
+    }
+
+    pub fn withdraw_unused_collateral(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        withdraw::withdraw_unused_collateral(env, user, market_id, amount)
+    }
+
+    pub fn update_position(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        yes_delta: i128,
+        no_delta: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        // Emergency mode: trading is blocked unless mode is Normal
+        validation::require_emergency_mode_allows(&env, &[crate::types::EmergencyMode::Normal])?;
+        // 1. Authorization
+        user.require_auth();
+
+        // 2. Validate market state: must exist, be Active, and not be expired
+        let mut market =
+            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status != MarketStatus::Active {
+            return Err(ContractError::MarketNotActive);
+        }
+        if env.ledger().timestamp() >= market.end_time {
+            return Err(ContractError::MarketExpired);
+        }
+
+        // 3. Validate the market price up front for a clear ContractError
+        validation::validate_market_price(market_price)?;
+
+        // 4. Enforce that deposited collateral covers any increase in the lock,
+        //    and that a market closed to deposits cannot be used to open new
+        //    exposure. Trades that keep the lock flat or reduce it (selling /
+        //    closing out an existing position) are always allowed, even when
+        //    closed_to_deposits is set, since they reduce risk rather than add
+        //    it — only opening/increasing a position is "last-minute" new
+        //    exposure. Negative-share deltas are left for
+        //    positions::update_position to reject (it also emits a
+        //    PositionLimitExceeded event).
+        let existing_position = storage::get_position(&env, market_id, &user)?;
+        let position = existing_position
+            .clone()
+            .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
+        let new_yes = position.yes_shares + yes_delta;
+        let new_no = position.no_shares + no_delta;
+        let locked_elsewhere = if new_yes >= 0 && new_no >= 0 {
+            let prospective_locked =
+                positions::calculate_locked_collateral(new_yes, new_no, market_price);
+            let lock_increased = prospective_locked > position.locked_collateral;
+            if lock_increased && market.closed_to_deposits {
+                return Err(ContractError::MarketClosedToDeposits);
+            }
+            // Protocol-wide collateral check (ADR-002, issue #685): collateral
+            // is a single balance per user shared across every market
+            // (`storage::CollateralBalance`) rather than siloed per market.
+            // A trade is only rejected here when it would *increase* this
+            // market's lock beyond what the user's balance can cover once
+            // collateral already locked in every *other* market
+            // (`storage::TotalLockedCollateral` minus this market's current
+            // lock) is accounted for.
+            let locked_elsewhere = storage::get_total_locked_collateral(&env, &user)
+                .saturating_sub(position.locked_collateral);
+            if lock_increased {
+                let protocol_balance = storage::get_collateral_balance(&env, &user);
+                if positions::check_protocol_collateral(
+                    prospective_locked,
+                    protocol_balance,
+                    locked_elsewhere,
+                )
+                .is_err()
+                {
+                    return Err(ContractError::InsufficientCollateral);
+                }
+            }
+            Some(locked_elsewhere)
+        } else {
+            None
+        };
+
+        reconciliation::assert_position_token_parity(&env, market_id, &user)?;
+
+        // 5. Apply the share deltas (persists the position and emits an event)
+        let result =
+            positions::update_position(&env, market_id, &user, yes_delta, no_delta, market_price)
+                .map_err(|e| match e {
+                positions::PositionError::ShareBalanceBelowZero => {
+                    ContractError::InvalidShareAmount
+                }
+                positions::PositionError::InvalidMarketPrice => ContractError::InvalidPrice,
+                positions::PositionError::InsufficientProtocolCollateral => {
+                    ContractError::InsufficientCollateral
+                }
+                _ => ContractError::InvalidShareAmount,
+            })?;
+
+        if let Some(locked_elsewhere) = locked_elsewhere {
+            // Keep the protocol-wide aggregate in sync only after the actual
+            // position update succeeds, so failed trades cannot corrupt the
+            // global lock accounting for this user.
+            let next_total_locked = locked_elsewhere.saturating_add(result.locked_collateral);
+            storage::set_total_locked_collateral(&env, &user, next_total_locked);
+        }
+
+        // 5a. Track first-time participants so the market can later be
+        //     settled page-by-page via `settle_positions_page` (Issue #495)
+        //     without requiring an off-chain index of every trader.
+        if existing_position.is_none() {
+            storage::add_market_participant(&env, market_id, &user);
+        }
+
+        // 5b. Mint or burn outcome tokens for the updated position.
+        if let Some(outcome_token_address) = storage::get_outcome_token_contract(&env) {
+            let token_client = OutcomeTokenContractClient::new(&env, &outcome_token_address);
+            if yes_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::Yes, &yes_delta);
+            } else if yes_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::Yes, &(-yes_delta));
+            }
+
+            if no_delta > 0 {
+                token_client.mint(&market_id, &user, &TokenKind::No, &no_delta);
+            } else if no_delta < 0 {
+                token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta));
+            }
+        }
+
+        // 6. Persist the updated price so withdraw and other callers see it
+        market.price_bps = market_price;
+        storage::set_market(&env, market_id, &market)?;
+
+        Ok(result)
     }
 
     /// Whether the kill-switch is engaged. Defaults to paused (fail-closed) when
