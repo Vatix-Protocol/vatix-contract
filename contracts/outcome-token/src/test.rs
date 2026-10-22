@@ -449,3 +449,47 @@ fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
     let result = client.try_cancel_market_contract(&admin);
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
 }
+
+// ── Issue #1126: uninitialized reads return NotInitialized ─────────────────
+
+/// `name()`, `symbol()`, and `get_config()` on a never-initialized deployment
+/// must return the typed [`ContractError::NotInitialized`] — not
+/// `Unauthorized` and not a host panic — so indexers can distinguish
+/// "not initialized" from "caller rejected".
+#[test]
+fn uninitialized_metadata_reads_return_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_name(), Err(Ok(ContractError::NotInitialized)));
+    assert_eq!(client.try_symbol(), Err(Ok(ContractError::NotInitialized)));
+    assert_eq!(
+        client.try_get_config(),
+        Err(Ok(ContractError::NotInitialized))
+    );
+}
+
+/// `set_metadata` on a never-initialized deployment must fail closed before
+/// any auth or state touch (version guard fires first), so an untrusted
+/// caller can never probe or bypass metadata policy pre-init.
+#[test]
+fn uninitialized_set_metadata_fails_closed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let result = client.try_set_metadata(
+        &attacker,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    // No version was ever written, so the storage-version guard fires before
+    // the not-initialized check; with a config present, the same caller gets
+    // Unauthorized (covered by `non_admin_cannot_update_metadata` and
+    // `wrong_admin_cannot_update_metadata`).
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+}
