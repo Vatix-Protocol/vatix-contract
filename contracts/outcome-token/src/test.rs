@@ -493,3 +493,52 @@ fn uninitialized_set_metadata_fails_closed() {
     // `wrong_admin_cannot_update_metadata`).
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
 }
+
+// ── Issue #1127: storage-version guard coverage ─────────────────────────────
+
+/// `initialize` must persist the current storage version.
+#[test]
+fn initialize_persists_storage_version() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+
+    let version: Option<u32> = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&crate::storage::StorageKey::StorageVersion)
+    });
+    assert_eq!(version, Some(crate::storage::STORAGE_VERSION));
+}
+
+/// A mismatched on-chain version must make `set_metadata` fail closed with
+/// `UpgradeRequired` without mutating name/symbol.
+#[test]
+fn set_metadata_fails_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    let original_name = client.name();
+    let original_symbol = client.symbol();
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+
+    // Fail-closed: rejected updates must not partially apply. Restore the
+    // version (plain `name()`/`symbol()` fail closed while it is stale) and
+    // confirm the metadata is untouched.
+    env.as_contract(&client.address, || {
+        crate::storage::set_version(&env);
+    });
+    assert_eq!(client.name(), original_name);
+    assert_eq!(client.symbol(), original_symbol);
+}
