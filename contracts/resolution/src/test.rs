@@ -2363,6 +2363,92 @@ fn bond_slashed_event_does_not_itself_enforce_split_invariant() {
     assert_ne!(reward + burned + treasury_cut, total);
 }
 
+/// #1122: `emit_bond_slashed` takes four adjacent `i128` amounts and two
+/// adjacent `Address`es, so a call site that transposes `reward`/`burned`
+/// (or `loser`/`winner`) still compiles and silently misattributes the bond
+/// split in every indexer consuming `BondSlashed`. This test pins the exact
+/// field-for-field mapping with four pairwise-distinct amounts and two
+/// distinct addresses, so any transposition fails the suite.
+#[test]
+fn bond_slashed_event_maps_each_argument_to_its_own_field() {
+    let env = Env::default();
+    let contract_id = env.register(ResolutionContract, ());
+    set_time(&env, 1234);
+    let loser = Address::generate(&env);
+    let winner = Address::generate(&env);
+    assert_ne!(loser, winner, "loser and winner must differ to catch a swap");
+
+    // Four pairwise-distinct amounts so a transposed argument maps to a
+    // visibly wrong field below instead of an identical value.
+    let (total, reward, burned, treasury_cut) = (1000i128, 600i128, 250i128, 150i128);
+    assert!(
+        total != reward
+            && total != burned
+            && total != treasury_cut
+            && reward != burned
+            && reward != treasury_cut
+            && burned != treasury_cut,
+        "amount fixtures must stay pairwise-distinct to catch a transposition"
+    );
+
+    env.as_contract(&contract_id, || {
+        crate::events::emit_bond_slashed(
+            &env,
+            7u32,
+            9u32,
+            &loser,
+            &winner,
+            total,
+            reward,
+            burned,
+            treasury_cut,
+        );
+    });
+
+    let (topics, data) = find_event(&env, "bond_slashed");
+    let id_topic: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(id_topic, 7u32);
+    let market_topic: u32 = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(market_topic, 9u32);
+
+    let got_loser: Address = data.get(Symbol::new(&env, "loser")).unwrap().into_val(&env);
+    assert_eq!(got_loser, loser, "loser field must carry the loser argument");
+    let got_winner: Address = data
+        .get(Symbol::new(&env, "winner"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_winner, winner,
+        "winner field must carry the winner argument"
+    );
+    let got_total: i128 = data.get(Symbol::new(&env, "total")).unwrap().into_val(&env);
+    assert_eq!(got_total, total, "total field must carry the total argument");
+    let got_reward: i128 = data
+        .get(Symbol::new(&env, "reward"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_reward, reward,
+        "reward field must carry the reward argument"
+    );
+    let got_burned: i128 = data
+        .get(Symbol::new(&env, "burned"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_burned, burned,
+        "burned field must carry the burned argument"
+    );
+    let got_treasury_cut: i128 = data
+        .get(Symbol::new(&env, "treasury_cut"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_treasury_cut, treasury_cut,
+        "treasury_cut field must carry the treasury_cut argument"
+    );
+}
+
 /// `void_market` refunds every recorded challenger in full, emitting
 /// `BondRefunded` with `candidate_id`/`market_id` topics and the
 /// `recipient`/`amount`/`refunded_at` payload.

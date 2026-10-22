@@ -14,7 +14,9 @@ mod helpers;
 
 use helpers::assert_event_emitted;
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
-use vatix_market_contract::{storage, MarketContract, MarketContractClient};
+use vatix_market_contract::{
+    error::ContractError, storage, MarketContract, MarketContractClient,
+};
 
 const STROOPS_PER_USDC: i128 = 10_000_000;
 
@@ -124,10 +126,37 @@ fn market_participants_vec_storage_limits_test() {
         client.deposit_collateral(&user, &market_id, &deposit);
     }
 
+    // Fill the participant list exactly to the storage bound via the same
+    // helper the contract uses, so the cap assertion below exercises the
+    // real bound rather than a hardcoded copy of the number.
     env.as_contract(&contract_id, || {
-        let count = storage::get_market_participant_count(&env, market_id);
-        assert_eq!(count, 25);
-        assert!(count <= storage::MAX_MARKET_PARTICIPANTS);
+        for _ in 25u32..storage::MAX_MARKET_PARTICIPANTS {
+            storage::add_market_participant(&env, market_id, &Address::generate(&env))
+                .unwrap();
+        }
+        assert_eq!(
+            storage::get_market_participant_count(&env, market_id),
+            storage::MAX_MARKET_PARTICIPANTS,
+            "participant list must fill exactly to MAX_MARKET_PARTICIPANTS"
+        );
+    });
+
+    // One more distinct participant must be rejected with the typed cap
+    // error — not a panic, and not a silent vec growth past the bound.
+    let latecomer = Address::generate(&env);
+    StellarAssetClient::new(&env, &collateral_token).mint(&latecomer, &deposit);
+    assert_eq!(
+        client.try_deposit_collateral(&latecomer, &market_id, &deposit),
+        Err(Ok(ContractError::BatchTooLarge)),
+        "participant N+1 must fail with the typed cap error"
+    );
+
+    env.as_contract(&contract_id, || {
+        assert_eq!(
+            storage::get_market_participant_count(&env, market_id),
+            storage::MAX_MARKET_PARTICIPANTS,
+            "rejected participant must not grow the vec past the cap"
+        );
     });
 
     let budget = env.cost_estimate().budget();

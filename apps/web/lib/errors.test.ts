@@ -10,7 +10,9 @@ import {
   MONEY_PATH_ENTRYPOINTS,
   assertAuthorized,
   ContractCallError,
+  ContractErrorCode,
 } from "./contracts";
+import { ContractError } from "./contract-client";
 import * as marketClient from "./contracts/market";
 import * as outcomeTokenClient from "./contracts/outcome-token";
 
@@ -113,4 +115,62 @@ test("assertAuthorized throws ContractCallError for a real privileged entrypoint
     () => assertAuthorized(privileged, "user"),
     (err: unknown) => err instanceof ContractCallError
   );
+});
+
+// #1124: `contracts/index.ts` is the single canonical home of the web error
+// taxonomy; `contract-client.ts` must re-export it rather than declare a
+// divergent copy. Every code string ever produced by either module must
+// survive the merge with unchanged values so UI/telemetry branches keep
+// working.
+test("ContractErrorCode is a single merged taxonomy covering both original lists", () => {
+  const values = new Set(Object.values(ContractErrorCode));
+  // Original `contracts/index.ts` codes.
+  const indexCodes = [
+    "CONTRACT_UNAUTHORIZED",
+    "CONTRACT_UNKNOWN_ENTRYPOINT",
+    "CONTRACT_INVALID_ARGUMENT",
+    "CONTRACT_DEPENDENCY_UNAVAILABLE",
+    "CONTRACT_DUPLICATE_REQUEST",
+    "CONTRACT_NETWORK_MISMATCH",
+    "CONTRACT_REJECTED",
+    "CONTRACT_UNKNOWN",
+  ];
+  // Original `contract-client.ts` codes.
+  const clientCodes = [
+    "CONTRACT_NOT_CONFIGURED",
+    "CONTRACT_UNAUTHORIZED",
+    "CONTRACT_WALLET_UNAVAILABLE",
+    "CONTRACT_SIGNING_REJECTED",
+    "CONTRACT_SIMULATION_FAILED",
+    "CONTRACT_SUBMISSION_FAILED",
+    "CONTRACT_TRANSACTION_FAILED",
+    "CONTRACT_DEPENDENCY_UNAVAILABLE",
+    "CONTRACT_INVALID_INPUT",
+  ];
+  for (const code of [...indexCodes, ...clientCodes]) {
+    assert.ok(values.has(code), `merged taxonomy is missing ${code}`);
+  }
+});
+
+test("contract-client re-exports the canonical codes and error class", async () => {
+  const client = await import("./contract-client");
+  assert.equal(
+    client.ContractErrorCode,
+    ContractErrorCode,
+    "contract-client must re-export the canonical ContractErrorCode"
+  );
+  assert.equal(
+    client.ContractCallError,
+    ContractCallError,
+    "contract-client must re-export the canonical ContractCallError"
+  );
+  const err = new client.ContractError(ContractErrorCode.UNKNOWN, "boom", {
+    correlationId: "cid-1",
+  });
+  assert.ok(
+    err instanceof ContractCallError,
+    "ContractError must remain a ContractCallError so callers can branch on one class"
+  );
+  assert.equal(err.code, ContractErrorCode.UNKNOWN);
+  assert.equal(err.correlationId, "cid-1");
 });

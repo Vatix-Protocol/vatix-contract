@@ -17,7 +17,13 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 
-import { ContractErrorCode } from "./contracts";
+import { ContractErrorCode, ContractCallError } from "./contracts";
+
+// The canonical error taxonomy lives in `./contracts` (see
+// `apps/web/lib/contracts/index.ts`). It is re-exported here so existing
+// `contract-client` import paths keep working without declaring a second,
+// divergent copy of the codes.
+export { ContractErrorCode, ContractCallError } from "./contracts";
 
 // Network configuration from environment.
 // The passphrase is intentionally NOT defaulted: a mainnet deployment that
@@ -55,10 +61,13 @@ const server = new rpc.Server(SOROBAN_RPC_URL);
  * Typed error thrown by all contract client entrypoints. Carries a stable
  * `code` and a `correlationId` so ops can trace a failure end-to-end
  * without leaking secrets or private keys.
+ *
+ * This subclasses the canonical {@link ContractCallError} from `./contracts`
+ * (single source of truth for the code taxonomy) and only adapts the
+ * constructor to the `(code, message, options)` shape this module's throw
+ * sites already use, preserving the `cause` chain for diagnostics.
  */
-export class ContractError extends Error {
-  readonly code: ContractErrorCode;
-  readonly correlationId: string;
+export class ContractError extends ContractCallError {
   readonly cause?: unknown;
 
   constructor(
@@ -66,10 +75,8 @@ export class ContractError extends Error {
     message: string,
     options: { correlationId?: string; cause?: unknown } = {}
   ) {
-    super(message);
+    super(code, options.correlationId ?? generateCorrelationId(), message);
     this.name = "ContractError";
-    this.code = code;
-    this.correlationId = options.correlationId ?? generateCorrelationId();
     this.cause = options.cause;
   }
 }
