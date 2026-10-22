@@ -1871,6 +1871,43 @@ fn challenge_rejects_challenge_uri_over_max_bytes() {
     assert_eq!(balance(&env, &token, &challenger), BOND);
 }
 
+/// A `challenge_uri` of exactly `MAX_URI_BYTES` succeeds and records the
+/// challenger (boundary case for #1118).
+#[test]
+fn challenge_accepts_challenge_uri_at_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &evidence(&env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &uri_of_len(&env, crate::MAX_URI_BYTES),
+        &BOND,
+    );
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Challenged);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 1);
+}
+
 // ── Issue #1024: `challenge` enforces MIN_CHALLENGE_BOND_AMOUNT ──────────
 
 /// `challenge` with a bond below `MIN_CHALLENGE_BOND_AMOUNT` must be
