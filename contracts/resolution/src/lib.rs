@@ -602,6 +602,24 @@ impl ResolutionContract {
 
         let config = storage::get_config(&env);
         let collateral_token = get_collateral_token(&env, &config, candidate.market_id);
+        let token_client = TokenClient::new(&env, &collateral_token);
+        let this = env.current_contract_address();
+
+        // Balance-delta verification (#1116): a challenge must be backed by a
+        // bond that actually arrives in this contract. Reject up front when
+        // the challenger cannot cover `bond_amount`, and re-check the
+        // contract's own balance across the transfer below so a
+        // fee-on-transfer (or otherwise short-delivering) token cannot flip
+        // the candidate to `Challenged` without paying.
+        if token_client.balance(&challenger) < bond_amount {
+            return Err(ContractError::InsufficientCollateral);
+        }
+        let contract_balance_before = token_client.balance(&this);
+
+        // Snapshot pre-challenge state so a post-transfer shortfall can roll
+        // the candidate back to `Proposed` with no new challenger record.
+        let prior_candidate = candidate.clone();
+        let prior_challengers = storage::get_challengers(&env, candidate_id);
 
         // Effects before Interactions (Issue #695): persist the Challenged
         // status and the new challenger record BEFORE the external bond
@@ -621,8 +639,25 @@ impl ResolutionContract {
         // Without this transfer the recorded bond is unbacked, and slashing
         // it in `finalize`/`arbitrate_uphold_proposer` would pay the reward
         // out of other parties' locked bonds.
-        let this = env.current_contract_address();
-        TokenClient::new(&env, &collateral_token).transfer(&challenger, &this, &bond_amount);
+        token_client.transfer(&challenger, &this, &bond_amount);
+
+        // Confirm the contract's collateral balance grew by exactly
+        // `bond_amount` (#1116). On a shortfall the transfer did not deliver
+        // the recorded bond, so restore the pre-challenge candidate and
+        // challenger list before failing closed.
+        if token_client.balance(&this) - contract_balance_before < bond_amount {
+            storage::set_candidate(&env, &prior_candidate);
+            storage::clear_challengers(&env, candidate_id);
+            for record in prior_challengers.iter() {
+                storage::append_challenger(
+                    &env,
+                    candidate_id,
+                    &record.challenger,
+                    record.bond,
+                );
+            }
+            return Err(ContractError::InsufficientCollateral);
+        }
 
         events::emit_candidate_challenged(
             &env,
