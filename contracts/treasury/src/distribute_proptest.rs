@@ -85,7 +85,7 @@ fn compute_distribution(total: i128, weights: &[u128]) -> Result<Distribution, D
         return Err(DistributeError::InvalidWeights);
     }
 
-    let total_u = total as u128;
+    let total_u = u128::try_from(total).map_err(|_| DistributeError::ArithmeticOverflow)?;
     let mut amounts: std::vec::Vec<i128> = std::vec::Vec::with_capacity(weights.len());
     let mut distributed: u128 = 0;
 
@@ -104,7 +104,8 @@ fn compute_distribution(total: i128, weights: &[u128]) -> Result<Distribution, D
         distributed = distributed
             .checked_add(share)
             .ok_or(DistributeError::ArithmeticOverflow)?;
-        amounts.push(share as i128);
+        // Reject shares that do not fit in i128 instead of wrapping (#1114).
+        amounts.push(i128::try_from(share).map_err(|_| DistributeError::ArithmeticOverflow)?);
     }
 
     if distributed != total_u {
@@ -113,7 +114,7 @@ fn compute_distribution(total: i128, weights: &[u128]) -> Result<Distribution, D
 
     Ok(Distribution {
         amounts,
-        total: distributed as i128,
+        total: i128::try_from(distributed).map_err(|_| DistributeError::ArithmeticOverflow)?,
     })
 }
 
@@ -168,7 +169,7 @@ proptest! {
 
     /// Conservation: the sum of distributed amounts equals the input total.
     #[test]
-    fn distribute_conserves_total(total in 0i128..=i128::MAX / 2, weights in weights_strategy()) {
+    fn distribute_conserves_total(total in 0i128..=i128::MAX / 1_000_000, weights in weights_strategy()) {
         let dist = compute_distribution(total, &weights).expect("valid inputs must distribute");
         let sum: i128 = dist.amounts.iter().sum();
         prop_assert_eq!(sum, total);
@@ -178,7 +179,7 @@ proptest! {
 
     /// No arithmetic overflow/underflow on accepted inputs.
     #[test]
-    fn distribute_never_overflows(total in 0i128..=i128::MAX / 2, weights in weights_strategy()) {
+    fn distribute_never_overflows(total in 0i128..=i128::MAX / 1_000_000, weights in weights_strategy()) {
         let dist = compute_distribution(total, &weights).expect("valid inputs must distribute");
         for amount in &dist.amounts {
             prop_assert!(*amount >= 0);
@@ -188,7 +189,7 @@ proptest! {
 
     /// Determinism: identical inputs yield identical results.
     #[test]
-    fn distribute_is_deterministic(total in 0i128..=i128::MAX / 2, weights in weights_strategy()) {
+    fn distribute_is_deterministic(total in 0i128..=i128::MAX / 1_000_000, weights in weights_strategy()) {
         let a = compute_distribution(total, &weights).expect("valid inputs must distribute");
         let b = compute_distribution(total, &weights).expect("valid inputs must distribute");
         prop_assert_eq!(a, b);
@@ -197,7 +198,7 @@ proptest! {
     /// Idempotency/replay: a replayed request id must not double-spend.
     #[test]
     fn distribute_replay_does_not_double_spend(
-        total in 0i128..=i128::MAX / 2,
+        total in 0i128..=i128::MAX / 1_000_000,
         weights in weights_strategy(),
         request_id in any::<u64>(),
     ) {
@@ -213,11 +214,29 @@ proptest! {
         prop_assert_eq!(state.invocations, 1);
     }
 
+    /// Wide inputs (up to `i128::MAX`) either distribute with conservation
+    /// and non-negative amounts, or fail closed with `ArithmeticOverflow` —
+    /// never a wrapped negative amount (#1114).
+    #[test]
+    fn distribute_wide_inputs_never_wrap(total in 0i128..=i128::MAX, weights in weights_strategy()) {
+        match compute_distribution(total, &weights) {
+            Ok(dist) => {
+                let sum: i128 = dist.amounts.iter().sum();
+                prop_assert_eq!(sum, total);
+                prop_assert_eq!(dist.total, total);
+                for amount in &dist.amounts {
+                    prop_assert!(*amount >= 0);
+                }
+            }
+            Err(err) => prop_assert_eq!(err, DistributeError::ArithmeticOverflow),
+        }
+    }
+
     /// Authz negatives: unauthorized/wrong-role callers are rejected and
     /// leave state untouched (deny-by-default).
     #[test]
     fn distribute_rejects_unauthorized(
-        total in 0i128..=i128::MAX / 2,
+        total in 0i128..=i128::MAX / 1_000_000,
         weights in weights_strategy(),
         request_id in any::<u64>(),
     ) {
@@ -229,10 +248,26 @@ proptest! {
 
     /// Malformed weights are rejected without mutating state.
     #[test]
-    fn distribute_rejects_empty_weights(total in 0i128..=i128::MAX / 2, request_id in any::<u64>()) {
+    fn distribute_rejects_empty_weights(total in 0i128..=i128::MAX / 1_000_000, request_id in any::<u64>()) {
         let mut state = TreasuryState::default();
         let result = apply_distribute(&mut state, Role::Admin, request_id, total, &[]);
         prop_assert_eq!(result, Err(DistributeError::InvalidWeights));
         prop_assert_eq!(state, TreasuryState::default());
     }
+}
+
+/// Deterministic regression test (#1114): a share computation that would
+/// overflow must return `ArithmeticOverflow` instead of a wrapped negative
+/// amount. A near-`i128::MAX` total with huge weights overflows the
+/// `total * weight` product, which must fail closed.
+#[test]
+fn distribute_returns_arithmetic_overflow_on_huge_shares() {
+    let err = compute_distribution(i128::MAX, &[u128::MAX, u128::MAX]).unwrap_err();
+    assert_eq!(err, DistributeError::ArithmeticOverflow);
+
+    // Sanity: the same total with sane weights still succeeds with
+    // non-negative amounts that conserve exactly.
+    let dist = compute_distribution(i128::MAX, &[1u128, 1u128]).unwrap();
+    assert!(dist.amounts.iter().all(|a| *a >= 0));
+    assert_eq!(dist.amounts.iter().sum::<i128>(), i128::MAX);
 }
