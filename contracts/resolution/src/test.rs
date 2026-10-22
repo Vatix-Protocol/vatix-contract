@@ -1632,6 +1632,55 @@ fn challenge_emits_candidate_challenged_event() {
     assert_eq!(balance(&env, &token, &challenger), before);
 }
 
+/// `candidate_proposed` carries the candidate's status after the event
+/// (`Proposed`) and `candidate_challenged` carries the post-challenge status
+/// (`Challenged`), so indexers can reconstruct state from events alone.
+#[test]
+fn propose_and_challenge_events_carry_candidate_status() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer,
+        &7u32,
+        &true,
+        &signature(&env),
+        &(env.ledger().timestamp() + 3_600),
+        &evidence(&env),
+        &300u64,
+        &BOND,
+    );
+
+    let (_, proposed_data) = find_event(&env, "candidate_proposed");
+    let proposed_status: crate::types::CandidateStatus = proposed_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        proposed_status,
+        crate::types::CandidateStatus::Proposed
+    );
+
+    set_time(&env, 1_100);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    let uri = String::from_str(&env, "ipfs://dispute");
+    client.challenge(&challenger, &candidate_id, &uri, &BOND);
+
+    let (_, challenged_data) = find_event(&env, "candidate_challenged");
+    let challenged_status: crate::types::CandidateStatus = challenged_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        challenged_status,
+        crate::types::CandidateStatus::Challenged
+    );
+}
+
 // ── Dispute integration & bond economics (#896, #899) ──────────────────────
 
 /// Propose → challenge → appeal → finalize, asserting balances at every

@@ -631,6 +631,7 @@ impl ResolutionContract {
             &challenger,
             &challenge_uri,
             bond_amount,
+            &candidate.status,
         );
 
         Ok(())
