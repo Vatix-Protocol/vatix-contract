@@ -94,8 +94,12 @@ impl OutcomeTokenContract {
     /// #1069 audit note: read-only view over the `Config` layout — query
     /// helper for off-chain clients, not a state mutation, so it needs no
     /// `assert_version` guard.
-    pub fn get_config(env: Env) -> OutcomeTokenConfig {
-        storage::get_config(&env)
+    ///
+    /// #1126: returns [`ContractError::NotInitialized`] instead of panicking
+    /// when the contract was never initialized, so indexers can distinguish
+    /// "not initialized" from "caller rejected".
+    pub fn get_config(env: Env) -> Result<OutcomeTokenConfig, ContractError> {
+        storage::get_config_checked(&env)
     }
 
     /// Delay, in seconds, an admin-proposed `market_contract` (mint/burn
@@ -279,13 +283,19 @@ impl OutcomeTokenContract {
     }
 
     // ── SAC metadata getters ────────────────────────────────────────────────
+    //
+    // #1126: these return `NotInitialized` on a never-initialized deployment
+    // instead of panicking, so indexers and the web client get a typed
+    // "not initialized" signal rather than an auth failure or host panic.
+    // `Unauthorized` is reserved for the `require_admin` path in
+    // `set_metadata`.
 
-    pub fn name(env: Env) -> String {
-        storage::get_config(&env).name
+    pub fn name(env: Env) -> Result<String, ContractError> {
+        Ok(storage::get_config_checked(&env)?.name)
     }
 
-    pub fn symbol(env: Env) -> String {
-        storage::get_config(&env).symbol
+    pub fn symbol(env: Env) -> Result<String, ContractError> {
+        Ok(storage::get_config_checked(&env)?.symbol)
     }
 
     /// Number of decimal places. Fixed at 7 (the Stellar SAC convention) and

@@ -449,3 +449,144 @@ fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
     let result = client.try_cancel_market_contract(&admin);
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
 }
+
+// ── Issue #1126: uninitialized reads return NotInitialized ─────────────────
+
+/// `name()`, `symbol()`, and `get_config()` on a never-initialized deployment
+/// must return the typed [`ContractError::NotInitialized`] — not
+/// `Unauthorized` and not a host panic — so indexers can distinguish
+/// "not initialized" from "caller rejected".
+#[test]
+fn uninitialized_metadata_reads_return_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_name(), Err(Ok(ContractError::NotInitialized)));
+    assert_eq!(client.try_symbol(), Err(Ok(ContractError::NotInitialized)));
+    assert_eq!(
+        client.try_get_config(),
+        Err(Ok(ContractError::NotInitialized))
+    );
+}
+
+/// `set_metadata` on a never-initialized deployment must fail closed before
+/// any auth or state touch (version guard fires first), so an untrusted
+/// caller can never probe or bypass metadata policy pre-init.
+#[test]
+fn uninitialized_set_metadata_fails_closed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let result = client.try_set_metadata(
+        &attacker,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    // No version was ever written, so the storage-version guard fires before
+    // the not-initialized check; with a config present, the same caller gets
+    // Unauthorized (covered by `non_admin_cannot_update_metadata` and
+    // `wrong_admin_cannot_update_metadata`).
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+}
+
+// ── Issue #1127: storage-version guard coverage ─────────────────────────────
+
+/// `initialize` must persist the current storage version.
+#[test]
+fn initialize_persists_storage_version() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+
+    let version: Option<u32> = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&crate::storage::StorageKey::StorageVersion)
+    });
+    assert_eq!(version, Some(crate::storage::STORAGE_VERSION));
+}
+
+/// A mismatched on-chain version must make `set_metadata` fail closed with
+/// `UpgradeRequired` without mutating name/symbol.
+#[test]
+fn set_metadata_fails_closed_when_storage_version_is_stale() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+
+    let original_name = client.name();
+    let original_symbol = client.symbol();
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .set(&crate::storage::StorageKey::StorageVersion, &0u32);
+    });
+
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+
+    // Fail-closed: rejected updates must not partially apply. Restore the
+    // version (plain `name()`/`symbol()` fail closed while it is stale) and
+    // confirm the metadata is untouched.
+    env.as_contract(&client.address, || {
+        crate::storage::set_version(&env);
+    });
+    assert_eq!(client.name(), original_name);
+    assert_eq!(client.symbol(), original_symbol);
+}
+
+// ── Issue #1129: initialize is single-shot ──────────────────────────────────
+
+/// A second `initialize` with a different admin must return
+/// `AlreadyInitialized` and leave the stored admin and metadata untouched.
+#[test]
+fn reinitialize_returns_already_initialized_without_overwriting() {
+    let env = Env::default();
+    let (client, admin, market) = setup(&env);
+
+    let original_name = client.name();
+    let original_symbol = client.symbol();
+
+    let attacker_admin = Address::generate(&env);
+    let result = client.try_initialize(
+        &attacker_admin,
+        &market,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
+
+    // The stored admin and metadata must be unchanged.
+    assert_eq!(client.get_config().admin, admin);
+    assert_eq!(client.name(), original_name);
+    assert_eq!(client.symbol(), original_symbol);
+}
+
+/// The first `initialize` on a fresh deployment still succeeds.
+#[test]
+fn first_initialize_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    client.initialize(
+        &admin,
+        &market,
+        &String::from_str(&env, "Vatix Outcome Token"),
+        &String::from_str(&env, "vOUT"),
+    );
+
+    assert_eq!(client.get_config().admin, admin);
+    assert_eq!(client.name(), String::from_str(&env, "Vatix Outcome Token"));
+}

@@ -2473,3 +2473,80 @@ fn finalize_rejects_expired_signature_and_leaves_candidate_unresolved() {
     assert_eq!(market_client.get_last_resolved(), None);
 }
 
+
+// ── Issue #1128: challenger list is append-only across appeals ───────────────
+
+/// After propose → challenge → appeal → challenge, both challengers must
+/// remain recorded with their original bonds, and `appeal_round` must reflect
+/// the appeal. A regression that overwrites the list on appeal would silently
+/// drop the first challenger's bond from terminal-state settlement.
+#[test]
+fn challengers_append_across_appeal() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let challenger_1 = Address::generate(&env);
+    fund(&env, &token, &challenger_1, 10_000_000i128);
+    client.challenge(
+        &challenger_1,
+        &candidate_id,
+        &String::from_str(&env, "ipfs://challenge-1"),
+        &10_000_000i128,
+    );
+
+    // Appeal resets the candidate to Proposed with a fresh challenge window;
+    // the challenger history must survive it.
+    client.appeal(
+        &proposer,
+        &candidate_id,
+        &false,
+        &signature(&env),
+        &evidence(&env),
+        &300,
+    );
+
+    let challenger_2 = Address::generate(&env);
+    fund(&env, &token, &challenger_2, 20_000_000i128);
+    client.challenge(
+        &challenger_2,
+        &candidate_id,
+        &String::from_str(&env, "ipfs://challenge-2"),
+        &20_000_000i128,
+    );
+
+    let challengers = client.get_challengers(&candidate_id);
+    assert_eq!(challengers.len(), 2);
+
+    let mut found_1 = false;
+    let mut found_2 = false;
+    for record in challengers.iter() {
+        let record: crate::types::ChallengeRecord = record;
+        if record.challenger == challenger_1 {
+            assert_eq!(record.bond, 10_000_000i128);
+            found_1 = true;
+        }
+        if record.challenger == challenger_2 {
+            assert_eq!(record.bond, 20_000_000i128);
+            found_2 = true;
+        }
+    }
+    assert!(found_1, "first challenger must survive the appeal");
+    assert!(found_2, "second challenger must be recorded");
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.appeal_round, 1);
+}
