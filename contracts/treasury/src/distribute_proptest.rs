@@ -126,7 +126,11 @@ pub struct TreasuryState {
     pub distributed_total: i128,
     /// Number of successful distribute invocations.
     pub invocations: u32,
-    /// Set of processed request ids for replay protection.
+    /// Set of processed request ids for replay protection. Grows by at most
+    /// one entry per accepted distribute call (see
+    /// `distribute_sequence_counts_distinct_accepted_ids`); lookups are a
+    /// linear scan, so throughput-sensitive deployments should keep the
+    /// accepted-id count small or compact this set off-chain.
     pub processed: std::vec::Vec<u64>,
 }
 
@@ -214,6 +218,38 @@ proptest! {
         prop_assert_eq!(state.invocations, 1);
     }
 
+    /// Sequence with duplicates: invocations/distributed_total track only the
+    /// distinct accepted ids, rejected replays leave state untouched, and
+    /// `processed` growth stays bounded (one entry per accepted id, #1115).
+    #[test]
+    fn distribute_sequence_counts_distinct_accepted_ids(
+        requests in prop::collection::vec((0u64..=3u64, 0i128..=1_000_000i128), 1..=8usize),
+        weights in weights_strategy(),
+    ) {
+        let mut state = TreasuryState::default();
+        let mut accepted: std::vec::Vec<u64> = std::vec::Vec::new();
+        let mut expected_total: i128 = 0;
+        for (id, total) in requests {
+            let before = state.clone();
+            match apply_distribute(&mut state, Role::Treasurer, id, total, &weights) {
+                Ok(dist) => {
+                    prop_assert!(!accepted.contains(&id), "duplicate id must not succeed");
+                    accepted.push(id);
+                    expected_total += total;
+                    prop_assert_eq!(dist.total, total);
+                }
+                Err(DistributeError::Replay) => {
+                    prop_assert!(accepted.contains(&id));
+                    prop_assert_eq!(&state, &before);
+                }
+                Err(other) => prop_assert!(false, "unexpected error: {:?}", other),
+            }
+        }
+        prop_assert_eq!(state.invocations as usize, accepted.len());
+        prop_assert_eq!(state.distributed_total, expected_total);
+        prop_assert_eq!(state.processed.len(), accepted.len());
+    }
+
     /// Wide inputs (up to `i128::MAX`) either distribute with conservation
     /// and non-negative amounts, or fail closed with `ArithmeticOverflow` —
     /// never a wrapped negative amount (#1114).
@@ -254,6 +290,27 @@ proptest! {
         prop_assert_eq!(result, Err(DistributeError::InvalidWeights));
         prop_assert_eq!(state, TreasuryState::default());
     }
+}
+
+/// Deterministic regression test (#1115): replaying the same request id
+/// returns `Replay` with state unchanged, while a distinct id succeeds.
+#[test]
+fn replay_of_same_request_id_is_rejected_without_state_change() {
+    let mut state = TreasuryState::default();
+    let weights = std::vec![1u128, 1u128];
+    let first = apply_distribute(&mut state, Role::Treasurer, 7, 1_000, &weights)
+        .expect("first call must succeed");
+    let after_first = state.clone();
+    assert_eq!(
+        apply_distribute(&mut state, Role::Treasurer, 7, 1_000, &weights),
+        Err(DistributeError::Replay)
+    );
+    assert_eq!(state, after_first);
+    assert_eq!(state.distributed_total, first.total);
+    assert_eq!(state.invocations, 1);
+    apply_distribute(&mut state, Role::Treasurer, 8, 1_000, &weights)
+        .expect("distinct id must succeed");
+    assert_eq!(state.invocations, 2);
 }
 
 /// Deterministic regression test (#1114): a share computation that would
