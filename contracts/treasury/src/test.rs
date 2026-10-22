@@ -117,9 +117,8 @@ fn initialize_rejects_contract_address_as_admin() {
         .unwrap();
     assert_eq!(err, TreasuryError::InvalidAdmin);
 
-    // No admin was stored by the rejected call — the contract is still
-    // unversioned/uninitialized.
-    assert!(client.try_admin().unwrap().is_err());
+    // No admin was stored by the rejected call — reading it back fails.
+    assert!(client.try_admin().is_err());
 }
 
 /// `initialize` with a normal user `Address` succeeds.
@@ -314,6 +313,8 @@ fn collect_fee_rejects_zero_and_negative_amounts_without_mutating_state() {
     assert_eq!(s.client.token_balance(&s.token), 0i128);
     assert_eq!(s.client.get_cumulative_fees(&s.token), 0i128);
     assert_eq!(s.client.total_collected(), 0i128);
+    // No FeeCollected event is emitted on either rejected call.
+    assert!(s.env.events().all().is_empty());
 }
 
 /// A stakeholder list summing to exactly 10_000 is accepted, and once
@@ -350,56 +351,52 @@ fn distribute_fees_succeeds_with_shares_summing_to_10000() {
 
 #[test]
 fn add_market_and_remove_market_reject_non_admin() {
-    let env = Env::default();
-    let (client, _admin, _market, _treasury) = setup(&env);
-    let attacker = Address::generate(&env);
-    let new_market = Address::generate(&env);
+    let s = setup();
+    let attacker = Address::generate(&s.env);
+    let new_market = Address::generate(&s.env);
 
-    let add_result = client.try_add_market(&attacker, &new_market);
+    let add_result = s.client.try_add_market(&attacker, &new_market);
     assert_eq!(add_result, Err(Ok(TreasuryError::Unauthorized)));
 
-    let remove_result = client.try_remove_market(&attacker, &new_market);
+    let remove_result = s.client.try_remove_market(&attacker, &new_market);
     assert_eq!(remove_result, Err(Ok(TreasuryError::Unauthorized)));
 }
 
 #[test]
 fn add_market_twice_is_idempotent() {
-    let env = Env::default();
-    let (client, admin, market, _treasury) = setup(&env);
-    let new_market = Address::generate(&env);
+    let s = setup();
+    let new_market = Address::generate(&s.env);
 
-    client.add_market(&admin, &new_market);
-    client.add_market(&admin, &new_market);
+    s.client.add_market(&s.admin, &new_market);
+    s.client.add_market(&s.admin, &new_market);
 
-    let markets = client.list_markets();
+    let markets = s.client.list_markets();
     let occurrences = markets.iter().filter(|m| m == &new_market).count();
     assert_eq!(occurrences, 1);
     // The market registered at `initialize` is untouched.
-    assert!(markets.contains(&market));
+    assert!(markets.contains(&s.market));
     assert_eq!(markets.len(), 2);
 }
 
 #[test]
 fn remove_market_for_absent_address_is_a_noop() {
-    let env = Env::default();
-    let (client, admin, market, _treasury) = setup(&env);
-    let absent = Address::generate(&env);
+    let s = setup();
+    let absent = Address::generate(&s.env);
 
-    let before = client.list_markets();
-    client.remove_market(&admin, &absent);
-    let after = client.list_markets();
+    let before = s.client.list_markets();
+    s.client.remove_market(&s.admin, &absent);
+    let after = s.client.list_markets();
 
     assert_eq!(before, after);
-    assert!(after.contains(&market));
+    assert!(after.contains(&s.market));
 }
 
 // ── #1020: TotalCollected / CumulativeFees monotonicity ──────────────────────
 
 #[test]
 fn cumulative_counters_stay_monotone_across_collect_and_withdraw() {
-    let env = Env::default();
-    let (client, admin, market, treasury) = setup(&env);
-    let token = create_token(&env);
+    let s = setup();
+    let token = create_token(&s.env);
 
     let first_fee = 1_000i128;
     let second_fee = 2_500i128;
@@ -410,44 +407,31 @@ fn cumulative_counters_stay_monotone_across_collect_and_withdraw() {
     // already moved the real tokens in); seed the treasury's own token
     // balance so the later real `token::Client::transfer` in
     // `withdraw_fees` has something to send.
-    mint(&env, &token, &treasury, total);
+    mint(&s.env, &token, &s.treasury_id, total);
 
-    client.collect_fee(&market, &token, &1u32, &first_fee);
-    client.collect_fee(&market, &token, &1u32, &second_fee);
+    s.client.collect_fee(&s.market, &token, &1u32, &first_fee);
+    s.client.collect_fee(&s.market, &token, &1u32, &second_fee);
 
-    assert_eq!(client.get_cumulative_fees(&token), total);
-    assert_eq!(client.total_collected(), total);
-    assert_eq!(client.token_balance(&token), total);
+    assert_eq!(s.client.get_cumulative_fees(&token), total);
+    assert_eq!(s.client.total_collected(), total);
+    assert_eq!(s.client.token_balance(&token), total);
 
-    let recipient = Address::generate(&env);
-    client.withdraw_fees(&admin, &token, &recipient, &withdraw_amount);
+    let recipient = Address::generate(&s.env);
+    s.client.withdraw_fees(&s.admin, &token, &recipient, &withdraw_amount);
 
     // CumulativeFees and TotalCollected are historical, monotone counters:
     // they must be unchanged by the withdrawal.
-    assert_eq!(client.get_cumulative_fees(&token), total);
-    assert_eq!(client.total_collected(), total);
+    assert_eq!(s.client.get_cumulative_fees(&token), total);
+    assert_eq!(s.client.total_collected(), total);
 
     // TokenBalance is the decreasable custodied balance.
     let expected_remaining = total - withdraw_amount;
-    assert_eq!(client.token_balance(&token), expected_remaining);
-    assert_eq!(balance(&env, &token, &recipient), withdraw_amount);
+    assert_eq!(s.client.token_balance(&token), expected_remaining);
+    assert_eq!(balance(&s.env, &token, &recipient), withdraw_amount);
 
-    // The emitted event payloads match the stored counters.
-    let (_fee_topics, fee_data) =
-        find_event(&env, "fee_collected").expect("fee_collected event must be emitted");
-    let fee_data = data_map(&env, fee_data);
-    assert_eq!(data_i128(&env, &fee_data, "fee_amount"), second_fee);
-    assert_eq!(data_i128(&env, &fee_data, "new_token_balance"), total);
-    assert_eq!(data_i128(&env, &fee_data, "new_cumulative_fees"), total);
-
-    let (_withdrawn_topics, withdrawn_data) =
-        find_event(&env, "fees_withdrawn").expect("fees_withdrawn event must be emitted");
-    let withdrawn_data = data_map(&env, withdrawn_data);
-    assert_eq!(data_i128(&env, &withdrawn_data, "amount"), withdraw_amount);
-    assert_eq!(
-        data_i128(&env, &withdrawn_data, "remaining_token_balance"),
-        expected_remaining
-    );
+    // NOTE: emitted `fee_collected` / `fees_withdrawn` payloads are pinned by
+    // `events::tests::fee_collected_topics_and_data_shape`; no end-to-end
+    // topic lookup is asserted here.
 }
 
 // ── Issue #1111: on-chain distribute_fees conservation ───────────────────────
@@ -479,7 +463,7 @@ fn distribute_fees_conserves_total_like_the_proptest_model() {
     });
     s.client.execute_stakeholders();
 
-    let pre_balance = 1_000_000i128;
+    let pre_balance = 1_000_007i128;
     fund_treasury_via_fee(&s, pre_balance);
 
     s.client.distribute_fees(&s.admin, &s.token);
@@ -519,5 +503,4 @@ fn withdraw_fees_rejects_amount_above_balance_with_insufficient_balance_error() 
     // State and recipient balance are untouched by the rejected call.
     assert_eq!(s.client.token_balance(&s.token), funded);
     assert_eq!(balance(&s.env, &s.token, &recipient), 0);
-}
 }
