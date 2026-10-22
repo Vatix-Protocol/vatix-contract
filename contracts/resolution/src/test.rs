@@ -1,6 +1,7 @@
 extern crate std;
 
 use crate::types::MarketStatus;
+use crate::types::CandidateStatus;
 use crate::{ContractError, ResolutionContract, ResolutionContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
@@ -182,6 +183,21 @@ use mock_market::{MockMarket, MockMarketClient};
 const DEFAULT_WINDOW: u64 = 300;
 
 fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address) {
+    let (client, admin, market_contract, token, _) = setup_with_id(env);
+    (client, admin, market_contract, token)
+}
+
+/// Setup variant that also returns the resolution contract's own address so
+/// tests can assert on its collateral-token balance (#1116).
+fn setup_with_id(
+    env: &Env,
+) -> (
+    ResolutionContractClient<'_>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     env.mock_all_auths();
     let contract_id = env.register(ResolutionContract, ());
     let client = ResolutionContractClient::new(env, &contract_id);
@@ -197,7 +213,7 @@ fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address)
     MockMarketClient::new(env, &market_contract).init(&token);
 
     client.initialize(&admin, &factory, &market_contract, &DEFAULT_WINDOW);
-    (client, admin, market_contract, token)
+    (client, admin, market_contract, token, contract_id)
 }
 
 /// Mint `amount` of the test collateral token to `who`, so they can post a
@@ -279,6 +295,91 @@ fn challenge_marks_candidate_and_blocks_finalize() {
     let finalizer = Address::generate(&env);
     let result = client.try_finalize(&finalizer, &candidate_id);
     assert_eq!(result, Err(Ok(ContractError::CandidateAlreadyChallenged)));
+}
+
+/// Happy path (#1116): a funded challenge grows the challenger list by one
+/// and the contract's collateral balance by exactly `bond_amount`.
+#[test]
+fn challenge_records_bond_only_after_collateral_arrives() {
+    let env = Env::default();
+    let (client, _, _, token, contract_id) = setup_with_id(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let contract_before = balance(&env, &token, &contract_id);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 10_000_000i128);
+    let challengers_before = client.get_challengers(&candidate_id).len();
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &String::from_str(&env, "ipfs://challenge"),
+        &10_000_000i128,
+    );
+
+    assert_eq!(
+        client.get_challengers(&candidate_id).len(),
+        challengers_before + 1
+    );
+    assert_eq!(
+        balance(&env, &token, &contract_id) - contract_before,
+        10_000_000i128
+    );
+}
+
+/// Shortfall path (#1116): a challenger that cannot cover `bond_amount` gets
+/// `InsufficientCollateral` and the candidate stays `Proposed` with no new
+/// challenger record.
+#[test]
+fn challenge_shortfall_leaves_candidate_proposed_without_record() {
+    let env = Env::default();
+    let (client, _, _, token, contract_id) = setup_with_id(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let contract_before = balance(&env, &token, &contract_id);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 1_000_000i128);
+    let err = client
+        .try_challenge(
+            &challenger,
+            &candidate_id,
+            &String::from_str(&env, "ipfs://challenge"),
+            &10_000_000i128,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, ContractError::InsufficientCollateral);
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, CandidateStatus::Proposed);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 0);
+    assert_eq!(balance(&env, &token, &contract_id), contract_before);
+    assert_eq!(balance(&env, &token, &challenger), 1_000_000i128);
 }
 
 #[test]
