@@ -1161,6 +1161,7 @@ impl ResolutionContract {
                     candidate.market_id,
                     &record.challenger,
                     record.bond,
+                    &crate::types::BondRefundReason::MarketVoided,
                 );
             }
         }

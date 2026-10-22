@@ -1,6 +1,7 @@
 use soroban_sdk::{contractevent, Address, Env, String};
 
 use crate::types::CandidateStatus;
+use crate::types::BondRefundReason;
 
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -145,6 +146,7 @@ pub struct BondRefunded {
     pub recipient: Address,
     pub amount: i128,
     pub refunded_at: u64,
+    pub reason: BondRefundReason,
 }
 
 pub fn emit_bond_refunded(
@@ -153,6 +155,7 @@ pub fn emit_bond_refunded(
     market_id: u32,
     recipient: &Address,
     amount: i128,
+    reason: &BondRefundReason,
 ) {
     BondRefunded {
         candidate_id,
@@ -160,6 +163,7 @@ pub fn emit_bond_refunded(
         recipient: recipient.clone(),
         amount,
         refunded_at: env.ledger().timestamp(),
+        reason: reason.clone(),
     }
     .publish(env);
 }

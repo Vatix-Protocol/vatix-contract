@@ -2481,6 +2481,11 @@ fn void_market_emits_bond_refunded_for_challenger() {
         .unwrap()
         .into_val(&env);
     assert_eq!(refunded_at, now);
+    let reason: crate::types::BondRefundReason = data
+        .get(Symbol::new(&env, "reason"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(reason, crate::types::BondRefundReason::MarketVoided);
     assert_eq!(balance(&env, &token, &challenger), before + BOND);
 }
 
@@ -2496,7 +2501,14 @@ fn bond_refunded_event_supports_zero_amount_payload() {
     let recipient = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        crate::events::emit_bond_refunded(&env, 9u32, 3u32, &recipient, 0i128);
+        crate::events::emit_bond_refunded(
+            &env,
+            9u32,
+            3u32,
+            &recipient,
+            0i128,
+            &crate::types::BondRefundReason::MarketVoided,
+        );
     });
 
     let (topics, data) = find_event(&env, "bond_refunded");
