@@ -463,6 +463,52 @@ fn initialize_stores_default_challenge_window() {
     assert_eq!(client.get_default_challenge_window(), DEFAULT_WINDOW);
 }
 
+// ── Issue #1133: initialize must reject an out-of-range challenge window ────
+
+/// Fresh (uninitialized) resolution contract for initialize-bounds tests.
+fn fresh_client(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address) {
+    env.mock_all_auths();
+    let contract_id = env.register(ResolutionContract, ());
+    let client = ResolutionContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let factory = Address::generate(env);
+    let market_contract = env.register(MockMarket, ());
+    (client, admin, factory, market_contract)
+}
+
+#[test]
+fn initialize_rejects_challenge_window_below_min() {
+    let env = Env::default();
+    let (client, admin, factory, market_contract) = fresh_client(&env);
+    assert_eq!(
+        client.try_initialize(&admin, &factory, &market_contract, &(MIN_WINDOW - 1)),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
+}
+
+#[test]
+fn initialize_rejects_challenge_window_above_max() {
+    let env = Env::default();
+    let (client, admin, factory, market_contract) = fresh_client(&env);
+    assert_eq!(
+        client.try_initialize(&admin, &factory, &market_contract, &(MAX_WINDOW + 1)),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
+}
+
+/// Boundary values MIN and MAX are accepted and round-trip through the
+/// config getter; storage is left untouched by a rejected initialize.
+#[test]
+fn initialize_accepts_challenge_window_boundaries() {
+    for window in [MIN_WINDOW, MAX_WINDOW] {
+        let env = Env::default();
+        let (client, admin, factory, market_contract) = fresh_client(&env);
+        client.initialize(&admin, &factory, &market_contract, &window);
+        assert_eq!(client.get_config().challenge_window_secs, window);
+        assert_eq!(client.get_default_challenge_window(), window);
+    }
+}
+
 // ── Issue #1068: version-guarded config readers fail closed ──────────────────
 
 /// #1068: on an initialized-but-stale deployment (config present,
