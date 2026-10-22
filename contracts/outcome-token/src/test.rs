@@ -542,3 +542,51 @@ fn set_metadata_fails_closed_when_storage_version_is_stale() {
     assert_eq!(client.name(), original_name);
     assert_eq!(client.symbol(), original_symbol);
 }
+
+// ── Issue #1129: initialize is single-shot ──────────────────────────────────
+
+/// A second `initialize` with a different admin must return
+/// `AlreadyInitialized` and leave the stored admin and metadata untouched.
+#[test]
+fn reinitialize_returns_already_initialized_without_overwriting() {
+    let env = Env::default();
+    let (client, admin, market) = setup(&env);
+
+    let original_name = client.name();
+    let original_symbol = client.symbol();
+
+    let attacker_admin = Address::generate(&env);
+    let result = client.try_initialize(
+        &attacker_admin,
+        &market,
+        &String::from_str(&env, "Hijacked"),
+        &String::from_str(&env, "HJK"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
+
+    // The stored admin and metadata must be unchanged.
+    assert_eq!(client.get_config().admin, admin);
+    assert_eq!(client.name(), original_name);
+    assert_eq!(client.symbol(), original_symbol);
+}
+
+/// The first `initialize` on a fresh deployment still succeeds.
+#[test]
+fn first_initialize_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    client.initialize(
+        &admin,
+        &market,
+        &String::from_str(&env, "Vatix Outcome Token"),
+        &String::from_str(&env, "vOUT"),
+    );
+
+    assert_eq!(client.get_config().admin, admin);
+    assert_eq!(client.name(), String::from_str(&env, "Vatix Outcome Token"));
+}
