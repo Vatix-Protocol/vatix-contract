@@ -327,6 +327,35 @@ fn mint_rejects_non_market_contract_caller() {
     client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
 }
 
+/// #1123: `initialize` persists `market_contract` (the sole mint/burn
+/// authority) inside `OutcomeTokenConfig`, and `get_config` reads back that
+/// same shape — so the stored authority is observable, not folklore.
+#[test]
+fn initialize_persists_market_contract_authority() {
+    let env = Env::default();
+    let (client, _admin, market) = setup(&env);
+
+    let config = client.get_config();
+    assert_eq!(
+        config.market_contract, market,
+        "get_config must return the market_contract passed to initialize"
+    );
+}
+
+#[test]
+#[should_panic]
+fn burn_rejects_non_market_contract_caller() {
+    let env = Env::default();
+    let (client, _admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    // Drop the blanket auth mock so only the real market contract could
+    // satisfy `config.market_contract.require_auth()`.
+    env.mock_auths(&[]);
+
+    client.burn(&1u32, &user, &TokenKind::Yes, &100i128);
+}
+
 // ── Issue #1037: is_paused / set_paused must share one storage domain ──────
 
 #[test]
@@ -448,6 +477,39 @@ fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
 
     let result = client.try_cancel_market_contract(&admin);
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
+}
+
+// ── Issue #1119: single canonical error enum with unique discriminants ──
+
+/// Every variant of the canonical [`ContractError`] must carry a unique
+/// discriminant so clients decoding a numeric error code cannot confuse two
+/// error kinds.
+#[test]
+fn contract_error_discriminants_are_unique() {
+    let discriminants = [
+        ContractError::AlreadyInitialized as u32,
+        ContractError::NotInitialized as u32,
+        ContractError::Unauthorized as u32,
+        ContractError::InsufficientBalance as u32,
+        ContractError::InvalidAmount as u32,
+        ContractError::Overflow as u32,
+        ContractError::MarketNotResolved as u32,
+        ContractError::UpgradeRequired as u32,
+        ContractError::NoPendingMarketContractChange as u32,
+        ContractError::TimelockNotElapsed as u32,
+        ContractError::TransferBlockedAfterResolve as u32,
+        ContractError::ContractPaused as u32,
+        ContractError::EmptyMetadata as u32,
+        ContractError::InvalidDecimals as u32,
+        ContractError::MetadataTooLong as u32,
+        ContractError::NotAdmin as u32,
+        ContractError::SymbolTooLong as u32,
+        ContractError::NameTooLong as u32,
+    ];
+    let mut seen = discriminants.to_vec();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), discriminants.len());
 }
 
 // ── Issue #1126: uninitialized reads return NotInitialized ─────────────────

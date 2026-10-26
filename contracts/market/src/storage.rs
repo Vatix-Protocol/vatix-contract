@@ -296,17 +296,27 @@ pub fn get_market_participants(env: &Env, market_id: u32) -> Vec<Address> {
 
 /// Record `user` as a participant of `market_id` if not already tracked and
 /// under the storage limit (`MAX_MARKET_PARTICIPANTS`).
-/// Idempotent — safe to call on every position update.
-pub fn add_market_participant(env: &Env, market_id: u32, user: &Address) {
+/// Idempotent — safe to call on every position update. Returns
+/// [`ContractError::BatchTooLarge`] when a *new* participant would grow the
+/// vec past the cap, so the bound is enforced rather than silently
+/// dropped (#1125).
+pub fn add_market_participant(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+) -> Result<(), ContractError> {
     let mut participants = get_market_participants(env, market_id);
-    if !participants.iter().any(|p| &p == user) {
-        if participants.len() < MAX_MARKET_PARTICIPANTS {
-            participants.push_back(user.clone());
-            env.storage()
-                .persistent()
-                .set(&StorageKey::MarketParticipants(market_id), &participants);
-        }
+    if participants.iter().any(|p| &p == user) {
+        return Ok(());
     }
+    if participants.len() >= MAX_MARKET_PARTICIPANTS {
+        return Err(ContractError::BatchTooLarge);
+    }
+    participants.push_back(user.clone());
+    env.storage()
+        .persistent()
+        .set(&StorageKey::MarketParticipants(market_id), &participants);
+    Ok(())
 }
 
 /// Number of distinct addresses that have ever held a position in `market_id`.
@@ -1588,17 +1598,26 @@ pub fn set_total_locked_collateral(env: &Env, user: &Address, value: i128) {
         .set(&MoneyPathKey::TotalLockedCollateral(user.clone()), &value);
 }
 
-pub fn add_market_participant(env: &Env, id: u32, user: &Address) {
+pub fn add_market_participant(
+    env: &Env,
+    id: u32,
+    user: &Address,
+) -> Result<(), ContractError> {
     let key = MoneyPathKey::MarketParticipants(id);
     let mut participants: soroban_sdk::Vec<Address> = env
         .storage()
         .persistent()
         .get(&key)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    if !participants.contains(user) && participants.len() < 1000 {
-        participants.push_back(user.clone());
-        env.storage().persistent().set(&key, &participants);
+    if participants.contains(user) {
+        return Ok(());
     }
+    if participants.len() >= MAX_MARKET_PARTICIPANTS {
+        return Err(ContractError::BatchTooLarge);
+    }
+    participants.push_back(user.clone());
+    env.storage().persistent().set(&key, &participants);
+    Ok(())
 }
 
 pub fn get_last_deposit_time(env: &Env, id: u32, user: &Address) -> Option<u64> {

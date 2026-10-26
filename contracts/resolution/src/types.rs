@@ -42,6 +42,18 @@ pub enum CandidateStatus {
     Voided,
 }
 
+/// Why a bond was refunded in full (no fault determined), carried by the
+/// `BondRefunded` event so indexers can attribute each refund to its cause
+/// without inferring it from surrounding events.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum BondRefundReason {
+    /// Every recorded challenger's bond was returned because the market was
+    /// voided after the dispute exhausted `MAX_APPEAL_ROUNDS` with no safely
+    /// attestable outcome.
+    MarketVoided,
+}
+
 /// A single challenger's locked bond against a candidate. Appended to the
 /// candidate's challenger list on every `challenge` call (including those
 /// superseded by a later `appeal`), so that every party who disputed the

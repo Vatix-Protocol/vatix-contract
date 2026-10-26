@@ -417,7 +417,7 @@ impl MarketContract {
         //     settled page-by-page via `settle_positions_page` (Issue #495)
         //     without requiring an off-chain index of every trader.
         if existing_position.is_none() {
-            storage::add_market_participant(&env, market_id, &user);
+            storage::add_market_participant(&env, market_id, &user)?;
         }
 
         // 5b. Mint or burn outcome tokens for the updated position.

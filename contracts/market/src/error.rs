@@ -102,6 +102,14 @@ pub enum ContractError {
     /// The batch supplied to `batch_settle_positions` was either empty or exceeded
     /// `MAX_BATCH_SETTLE_SIZE`. Empty batches are rejected to surface caller bugs
     /// early; oversized batches are rejected to prevent gas-griefing attacks.
+    ///
+    /// Also returned when a new participant would grow the market's participant
+    /// list past [`crate::storage::MAX_MARKET_PARTICIPANTS`]: the bounded
+    /// list cannot take another entry, so the deposit fails closed with this
+    /// code instead of silently dropping the cap (#1125). The 50-case
+    /// contract-spec ceiling for this error enum leaves no room for a
+    /// dedicated variant, and a batch/list that exceeds its maximum size is
+    /// exactly what this code already means.
     BatchTooLarge = 14,
 
     // ========== Oracle Errors (20-29) ==========

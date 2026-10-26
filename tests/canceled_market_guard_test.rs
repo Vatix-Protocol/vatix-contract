@@ -172,6 +172,53 @@ fn same_trade_succeeds_before_cancel_and_fails_after() {
     assert_eq!(after, Err(Ok(ContractError::MarketNotActive)));
 }
 
+/// `update_position` with a zero delta on a canceled market must still be
+/// rejected by the market-status guard — the status check runs before any
+/// quantity validation, so a no-op trade shape must not slip through.
+#[test]
+fn update_position_zero_delta_rejected_on_canceled_market() {
+    let (_env, contract_id, market_id, user, _token) = setup_canceled_market();
+    let client = MarketContractClient::new(&_env, &contract_id);
+
+    let result =
+        client.try_update_position(&user, &market_id, &0i128, &0i128, &6_000i128);
+    assert_eq!(result, Err(Ok(ContractError::MarketNotActive)));
+}
+
+/// `settle_position` on a canceled market must be rejected without paying
+/// out: settlement requires a `Resolved` market
+/// (`settlement::validate_settlement_eligibility` returns
+/// `MarketNotResolved` for any other status), so no collateral may move.
+#[test]
+fn settle_position_rejected_on_canceled_market_without_payout() {
+    use soroban_sdk::token::Client as TokenClient;
+
+    let (env, contract_id, market_id, user, collateral_token) = setup_canceled_market();
+    let client = MarketContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &collateral_token);
+
+    let user_before = token_client.balance(&user);
+    let contract_before = token_client.balance(&contract_id);
+
+    let result = client.try_settle_position(&user, &market_id);
+    assert_eq!(
+        result,
+        Err(Ok(ContractError::MarketNotResolved)),
+        "settle_position on a Canceled market must return MarketNotResolved"
+    );
+
+    assert_eq!(
+        token_client.balance(&user),
+        user_before,
+        "rejected settlement must not move user collateral"
+    );
+    assert_eq!(
+        token_client.balance(&contract_id),
+        contract_before,
+        "rejected settlement must not move contract collateral"
+    );
+}
+
 // ── #588: reopen_market guard — Canceled → Active requires explicit admin call ──
 
 /// Attempting to call `reopen_market` on an Active market must be rejected.

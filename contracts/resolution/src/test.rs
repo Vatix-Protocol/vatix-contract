@@ -1,6 +1,7 @@
 extern crate std;
 
 use crate::types::MarketStatus;
+use crate::types::CandidateStatus;
 use crate::{ContractError, ResolutionContract, ResolutionContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
@@ -182,6 +183,21 @@ use mock_market::{MockMarket, MockMarketClient};
 const DEFAULT_WINDOW: u64 = 300;
 
 fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address) {
+    let (client, admin, market_contract, token, _) = setup_with_id(env);
+    (client, admin, market_contract, token)
+}
+
+/// Setup variant that also returns the resolution contract's own address so
+/// tests can assert on its collateral-token balance (#1116).
+fn setup_with_id(
+    env: &Env,
+) -> (
+    ResolutionContractClient<'_>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     env.mock_all_auths();
     let contract_id = env.register(ResolutionContract, ());
     let client = ResolutionContractClient::new(env, &contract_id);
@@ -197,7 +213,7 @@ fn setup(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address)
     MockMarketClient::new(env, &market_contract).init(&token);
 
     client.initialize(&admin, &factory, &market_contract, &DEFAULT_WINDOW);
-    (client, admin, market_contract, token)
+    (client, admin, market_contract, token, contract_id)
 }
 
 /// Mint `amount` of the test collateral token to `who`, so they can post a
@@ -279,6 +295,91 @@ fn challenge_marks_candidate_and_blocks_finalize() {
     let finalizer = Address::generate(&env);
     let result = client.try_finalize(&finalizer, &candidate_id);
     assert_eq!(result, Err(Ok(ContractError::CandidateAlreadyChallenged)));
+}
+
+/// Happy path (#1116): a funded challenge grows the challenger list by one
+/// and the contract's collateral balance by exactly `bond_amount`.
+#[test]
+fn challenge_records_bond_only_after_collateral_arrives() {
+    let env = Env::default();
+    let (client, _, _, token, contract_id) = setup_with_id(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let contract_before = balance(&env, &token, &contract_id);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 10_000_000i128);
+    let challengers_before = client.get_challengers(&candidate_id).len();
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &String::from_str(&env, "ipfs://challenge"),
+        &10_000_000i128,
+    );
+
+    assert_eq!(
+        client.get_challengers(&candidate_id).len(),
+        challengers_before + 1
+    );
+    assert_eq!(
+        balance(&env, &token, &contract_id) - contract_before,
+        10_000_000i128
+    );
+}
+
+/// Shortfall path (#1116): a challenger that cannot cover `bond_amount` gets
+/// `InsufficientCollateral` and the candidate stays `Proposed` with no new
+/// challenger record.
+#[test]
+fn challenge_shortfall_leaves_candidate_proposed_without_record() {
+    let env = Env::default();
+    let (client, _, _, token, contract_id) = setup_with_id(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let contract_before = balance(&env, &token, &contract_id);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 1_000_000i128);
+    let err = client
+        .try_challenge(
+            &challenger,
+            &candidate_id,
+            &String::from_str(&env, "ipfs://challenge"),
+            &10_000_000i128,
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, ContractError::InsufficientCollateral);
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, CandidateStatus::Proposed);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 0);
+    assert_eq!(balance(&env, &token, &contract_id), contract_before);
+    assert_eq!(balance(&env, &token, &challenger), 1_000_000i128);
 }
 
 #[test]
@@ -461,6 +562,52 @@ fn initialize_stores_default_challenge_window() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env);
     assert_eq!(client.get_default_challenge_window(), DEFAULT_WINDOW);
+}
+
+// ── Issue #1133: initialize must reject an out-of-range challenge window ────
+
+/// Fresh (uninitialized) resolution contract for initialize-bounds tests.
+fn fresh_client(env: &Env) -> (ResolutionContractClient<'_>, Address, Address, Address) {
+    env.mock_all_auths();
+    let contract_id = env.register(ResolutionContract, ());
+    let client = ResolutionContractClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let factory = Address::generate(env);
+    let market_contract = env.register(MockMarket, ());
+    (client, admin, factory, market_contract)
+}
+
+#[test]
+fn initialize_rejects_challenge_window_below_min() {
+    let env = Env::default();
+    let (client, admin, factory, market_contract) = fresh_client(&env);
+    assert_eq!(
+        client.try_initialize(&admin, &factory, &market_contract, &(MIN_WINDOW - 1)),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
+}
+
+#[test]
+fn initialize_rejects_challenge_window_above_max() {
+    let env = Env::default();
+    let (client, admin, factory, market_contract) = fresh_client(&env);
+    assert_eq!(
+        client.try_initialize(&admin, &factory, &market_contract, &(MAX_WINDOW + 1)),
+        Err(Ok(ContractError::InvalidChallengeWindow))
+    );
+}
+
+/// Boundary values MIN and MAX are accepted and round-trip through the
+/// config getter; storage is left untouched by a rejected initialize.
+#[test]
+fn initialize_accepts_challenge_window_boundaries() {
+    for window in [MIN_WINDOW, MAX_WINDOW] {
+        let env = Env::default();
+        let (client, admin, factory, market_contract) = fresh_client(&env);
+        client.initialize(&admin, &factory, &market_contract, &window);
+        assert_eq!(client.get_config().challenge_window_secs, window);
+        assert_eq!(client.get_default_challenge_window(), window);
+    }
 }
 
 // ── Issue #1068: version-guarded config readers fail closed ──────────────────
@@ -1632,6 +1779,55 @@ fn challenge_emits_candidate_challenged_event() {
     assert_eq!(balance(&env, &token, &challenger), before);
 }
 
+/// `candidate_proposed` carries the candidate's status after the event
+/// (`Proposed`) and `candidate_challenged` carries the post-challenge status
+/// (`Challenged`), so indexers can reconstruct state from events alone.
+#[test]
+fn propose_and_challenge_events_carry_candidate_status() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer,
+        &7u32,
+        &true,
+        &signature(&env),
+        &(env.ledger().timestamp() + 3_600),
+        &evidence(&env),
+        &300u64,
+        &BOND,
+    );
+
+    let (_, proposed_data) = find_event(&env, "candidate_proposed");
+    let proposed_status: crate::types::CandidateStatus = proposed_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        proposed_status,
+        crate::types::CandidateStatus::Proposed
+    );
+
+    set_time(&env, 1_100);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    let uri = String::from_str(&env, "ipfs://dispute");
+    client.challenge(&challenger, &candidate_id, &uri, &BOND);
+
+    let (_, challenged_data) = find_event(&env, "candidate_challenged");
+    let challenged_status: crate::types::CandidateStatus = challenged_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        challenged_status,
+        crate::types::CandidateStatus::Challenged
+    );
+}
+
 // ── Dispute integration & bond economics (#896, #899) ──────────────────────
 
 /// Propose → challenge → appeal → finalize, asserting balances at every
@@ -1869,6 +2065,43 @@ fn challenge_rejects_challenge_uri_over_max_bytes() {
     assert_eq!(candidate.status, crate::types::CandidateStatus::Proposed);
     assert!(client.get_challengers(&candidate_id).is_empty());
     assert_eq!(balance(&env, &token, &challenger), BOND);
+}
+
+/// A `challenge_uri` of exactly `MAX_URI_BYTES` succeeds and records the
+/// challenger (boundary case for #1118).
+#[test]
+fn challenge_accepts_challenge_uri_at_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &evidence(&env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &uri_of_len(&env, crate::MAX_URI_BYTES),
+        &BOND,
+    );
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Challenged);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 1);
 }
 
 // ── Issue #1024: `challenge` enforces MIN_CHALLENGE_BOND_AMOUNT ──────────
@@ -2363,6 +2596,92 @@ fn bond_slashed_event_does_not_itself_enforce_split_invariant() {
     assert_ne!(reward + burned + treasury_cut, total);
 }
 
+/// #1122: `emit_bond_slashed` takes four adjacent `i128` amounts and two
+/// adjacent `Address`es, so a call site that transposes `reward`/`burned`
+/// (or `loser`/`winner`) still compiles and silently misattributes the bond
+/// split in every indexer consuming `BondSlashed`. This test pins the exact
+/// field-for-field mapping with four pairwise-distinct amounts and two
+/// distinct addresses, so any transposition fails the suite.
+#[test]
+fn bond_slashed_event_maps_each_argument_to_its_own_field() {
+    let env = Env::default();
+    let contract_id = env.register(ResolutionContract, ());
+    set_time(&env, 1234);
+    let loser = Address::generate(&env);
+    let winner = Address::generate(&env);
+    assert_ne!(loser, winner, "loser and winner must differ to catch a swap");
+
+    // Four pairwise-distinct amounts so a transposed argument maps to a
+    // visibly wrong field below instead of an identical value.
+    let (total, reward, burned, treasury_cut) = (1000i128, 600i128, 250i128, 150i128);
+    assert!(
+        total != reward
+            && total != burned
+            && total != treasury_cut
+            && reward != burned
+            && reward != treasury_cut
+            && burned != treasury_cut,
+        "amount fixtures must stay pairwise-distinct to catch a transposition"
+    );
+
+    env.as_contract(&contract_id, || {
+        crate::events::emit_bond_slashed(
+            &env,
+            7u32,
+            9u32,
+            &loser,
+            &winner,
+            total,
+            reward,
+            burned,
+            treasury_cut,
+        );
+    });
+
+    let (topics, data) = find_event(&env, "bond_slashed");
+    let id_topic: u32 = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(id_topic, 7u32);
+    let market_topic: u32 = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(market_topic, 9u32);
+
+    let got_loser: Address = data.get(Symbol::new(&env, "loser")).unwrap().into_val(&env);
+    assert_eq!(got_loser, loser, "loser field must carry the loser argument");
+    let got_winner: Address = data
+        .get(Symbol::new(&env, "winner"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_winner, winner,
+        "winner field must carry the winner argument"
+    );
+    let got_total: i128 = data.get(Symbol::new(&env, "total")).unwrap().into_val(&env);
+    assert_eq!(got_total, total, "total field must carry the total argument");
+    let got_reward: i128 = data
+        .get(Symbol::new(&env, "reward"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_reward, reward,
+        "reward field must carry the reward argument"
+    );
+    let got_burned: i128 = data
+        .get(Symbol::new(&env, "burned"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_burned, burned,
+        "burned field must carry the burned argument"
+    );
+    let got_treasury_cut: i128 = data
+        .get(Symbol::new(&env, "treasury_cut"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        got_treasury_cut, treasury_cut,
+        "treasury_cut field must carry the treasury_cut argument"
+    );
+}
+
 /// `void_market` refunds every recorded challenger in full, emitting
 /// `BondRefunded` with `candidate_id`/`market_id` topics and the
 /// `recipient`/`amount`/`refunded_at` payload.
@@ -2395,6 +2714,11 @@ fn void_market_emits_bond_refunded_for_challenger() {
         .unwrap()
         .into_val(&env);
     assert_eq!(refunded_at, now);
+    let reason: crate::types::BondRefundReason = data
+        .get(Symbol::new(&env, "reason"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(reason, crate::types::BondRefundReason::MarketVoided);
     assert_eq!(balance(&env, &token, &challenger), before + BOND);
 }
 
@@ -2410,7 +2734,14 @@ fn bond_refunded_event_supports_zero_amount_payload() {
     let recipient = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        crate::events::emit_bond_refunded(&env, 9u32, 3u32, &recipient, 0i128);
+        crate::events::emit_bond_refunded(
+            &env,
+            9u32,
+            3u32,
+            &recipient,
+            0i128,
+            &crate::types::BondRefundReason::MarketVoided,
+        );
     });
 
     let (topics, data) = find_event(&env, "bond_refunded");
