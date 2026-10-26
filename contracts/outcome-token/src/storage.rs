@@ -66,6 +66,21 @@ pub fn get_config(env: &Env) -> OutcomeTokenConfig {
         .expect("outcome-token config not set")
 }
 
+/// Version-guarded read of the outcome-token config (Issue #1126).
+///
+/// Fails closed with [`ContractError::NotInitialized`] when no config has ever
+/// been written (a never-bootstrapped deployment), and with
+/// [`ContractError::UpgradeRequired`] when a stored config is read against a
+/// stale or missing on-chain [`STORAGE_VERSION`] — instead of panicking on a
+/// missing `Config` key the way the unchecked [`get_config`] does. Mirrors
+/// `get_config_checked` in `contracts/resolution/src/storage.rs` (#1068).
+pub fn get_config_checked(env: &Env) -> Result<OutcomeTokenConfig, ContractError> {
+    let config: Option<OutcomeTokenConfig> = env.storage().persistent().get(&StorageKey::Config);
+    let config = config.ok_or(ContractError::NotInitialized)?;
+    assert_version(env)?;
+    Ok(config)
+}
+
 pub fn set_config(env: &Env, config: &OutcomeTokenConfig) {
     env.storage().persistent().set(&StorageKey::Config, config);
 }
