@@ -1632,6 +1632,55 @@ fn challenge_emits_candidate_challenged_event() {
     assert_eq!(balance(&env, &token, &challenger), before);
 }
 
+/// `candidate_proposed` carries the candidate's status after the event
+/// (`Proposed`) and `candidate_challenged` carries the post-challenge status
+/// (`Challenged`), so indexers can reconstruct state from events alone.
+#[test]
+fn propose_and_challenge_events_carry_candidate_status() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    let candidate_id = client.propose(
+        &proposer,
+        &7u32,
+        &true,
+        &signature(&env),
+        &(env.ledger().timestamp() + 3_600),
+        &evidence(&env),
+        &300u64,
+        &BOND,
+    );
+
+    let (_, proposed_data) = find_event(&env, "candidate_proposed");
+    let proposed_status: crate::types::CandidateStatus = proposed_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        proposed_status,
+        crate::types::CandidateStatus::Proposed
+    );
+
+    set_time(&env, 1_100);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, BOND);
+    let uri = String::from_str(&env, "ipfs://dispute");
+    client.challenge(&challenger, &candidate_id, &uri, &BOND);
+
+    let (_, challenged_data) = find_event(&env, "candidate_challenged");
+    let challenged_status: crate::types::CandidateStatus = challenged_data
+        .get(Symbol::new(&env, "status"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(
+        challenged_status,
+        crate::types::CandidateStatus::Challenged
+    );
+}
+
 // ── Dispute integration & bond economics (#896, #899) ──────────────────────
 
 /// Propose → challenge → appeal → finalize, asserting balances at every
@@ -1869,6 +1918,43 @@ fn challenge_rejects_challenge_uri_over_max_bytes() {
     assert_eq!(candidate.status, crate::types::CandidateStatus::Proposed);
     assert!(client.get_challengers(&candidate_id).is_empty());
     assert_eq!(balance(&env, &token, &challenger), BOND);
+}
+
+/// A `challenge_uri` of exactly `MAX_URI_BYTES` succeeds and records the
+/// challenger (boundary case for #1118).
+#[test]
+fn challenge_accepts_challenge_uri_at_max_bytes() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &proposer, BOND);
+    fund(&env, &token, &challenger, BOND);
+    let expiry = env.ledger().timestamp() + DEFAULT_WINDOW + 600;
+
+    let candidate_id = client.propose(
+        &proposer,
+        &1u32,
+        &true,
+        &signature(&env),
+        &expiry,
+        &evidence(&env),
+        &DEFAULT_WINDOW,
+        &BOND,
+    );
+
+    client.challenge(
+        &challenger,
+        &candidate_id,
+        &uri_of_len(&env, crate::MAX_URI_BYTES),
+        &BOND,
+    );
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, crate::types::CandidateStatus::Challenged);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 1);
 }
 
 // ── Issue #1024: `challenge` enforces MIN_CHALLENGE_BOND_AMOUNT ──────────
@@ -2395,6 +2481,11 @@ fn void_market_emits_bond_refunded_for_challenger() {
         .unwrap()
         .into_val(&env);
     assert_eq!(refunded_at, now);
+    let reason: crate::types::BondRefundReason = data
+        .get(Symbol::new(&env, "reason"))
+        .unwrap()
+        .into_val(&env);
+    assert_eq!(reason, crate::types::BondRefundReason::MarketVoided);
     assert_eq!(balance(&env, &token, &challenger), before + BOND);
 }
 
@@ -2410,7 +2501,14 @@ fn bond_refunded_event_supports_zero_amount_payload() {
     let recipient = Address::generate(&env);
 
     env.as_contract(&contract_id, || {
-        crate::events::emit_bond_refunded(&env, 9u32, 3u32, &recipient, 0i128);
+        crate::events::emit_bond_refunded(
+            &env,
+            9u32,
+            3u32,
+            &recipient,
+            0i128,
+            &crate::types::BondRefundReason::MarketVoided,
+        );
     });
 
     let (topics, data) = find_event(&env, "bond_refunded");

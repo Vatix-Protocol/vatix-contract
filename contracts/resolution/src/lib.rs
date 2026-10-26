@@ -631,6 +631,7 @@ impl ResolutionContract {
             &challenger,
             &challenge_uri,
             bond_amount,
+            &candidate.status,
         );
 
         Ok(())
@@ -1160,6 +1161,7 @@ impl ResolutionContract {
                     candidate.market_id,
                     &record.challenger,
                     record.bond,
+                    &crate::types::BondRefundReason::MarketVoided,
                 );
             }
         }

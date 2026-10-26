@@ -449,3 +449,36 @@ fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
     let result = client.try_cancel_market_contract(&admin);
     assert_eq!(result, Err(Ok(ContractError::UpgradeRequired)));
 }
+
+// ── Issue #1119: single canonical error enum with unique discriminants ──
+
+/// Every variant of the canonical [`ContractError`] must carry a unique
+/// discriminant so clients decoding a numeric error code cannot confuse two
+/// error kinds.
+#[test]
+fn contract_error_discriminants_are_unique() {
+    let discriminants = [
+        ContractError::AlreadyInitialized as u32,
+        ContractError::NotInitialized as u32,
+        ContractError::Unauthorized as u32,
+        ContractError::InsufficientBalance as u32,
+        ContractError::InvalidAmount as u32,
+        ContractError::Overflow as u32,
+        ContractError::MarketNotResolved as u32,
+        ContractError::UpgradeRequired as u32,
+        ContractError::NoPendingMarketContractChange as u32,
+        ContractError::TimelockNotElapsed as u32,
+        ContractError::TransferBlockedAfterResolve as u32,
+        ContractError::ContractPaused as u32,
+        ContractError::EmptyMetadata as u32,
+        ContractError::InvalidDecimals as u32,
+        ContractError::MetadataTooLong as u32,
+        ContractError::NotAdmin as u32,
+        ContractError::SymbolTooLong as u32,
+        ContractError::NameTooLong as u32,
+    ];
+    let mut seen = discriminants.to_vec();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), discriminants.len());
+}

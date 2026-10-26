@@ -1,5 +1,8 @@
 use soroban_sdk::{contractevent, Address, Env, String};
 
+use crate::types::CandidateStatus;
+use crate::types::BondRefundReason;
+
 #[contractevent]
 #[derive(Clone, Debug)]
 pub struct ResolutionRegistered {
@@ -31,6 +34,7 @@ pub struct CandidateProposed {
     pub challenge_deadline: u64,
     pub signature_expiry: u64,
     pub bond_amount: i128,
+    pub status: CandidateStatus,
 }
 
 pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCandidate) {
@@ -43,6 +47,7 @@ pub fn emit_candidate_proposed(env: &Env, candidate: &crate::types::ResolutionCa
         challenge_deadline: candidate.challenge_deadline,
         signature_expiry: candidate.signature_expiry,
         bond_amount: candidate.bond_amount,
+        status: candidate.status.clone(),
     }
     .publish(env);
 }
@@ -58,6 +63,7 @@ pub struct CandidateChallenged {
     pub challenge_uri: String,
     pub bond_amount: i128,
     pub challenged_at: u64,
+    pub status: CandidateStatus,
 }
 
 pub fn emit_candidate_challenged(
@@ -67,6 +73,7 @@ pub fn emit_candidate_challenged(
     challenger: &Address,
     challenge_uri: &String,
     bond_amount: i128,
+    status: &CandidateStatus,
 ) {
     CandidateChallenged {
         candidate_id,
@@ -75,6 +82,7 @@ pub fn emit_candidate_challenged(
         challenge_uri: challenge_uri.clone(),
         bond_amount,
         challenged_at: env.ledger().timestamp(),
+        status: status.clone(),
     }
     .publish(env);
 }
@@ -138,6 +146,7 @@ pub struct BondRefunded {
     pub recipient: Address,
     pub amount: i128,
     pub refunded_at: u64,
+    pub reason: BondRefundReason,
 }
 
 pub fn emit_bond_refunded(
@@ -146,6 +155,7 @@ pub fn emit_bond_refunded(
     market_id: u32,
     recipient: &Address,
     amount: i128,
+    reason: &BondRefundReason,
 ) {
     BondRefunded {
         candidate_id,
@@ -153,6 +163,7 @@ pub fn emit_bond_refunded(
         recipient: recipient.clone(),
         amount,
         refunded_at: env.ledger().timestamp(),
+        reason: reason.clone(),
     }
     .publish(env);
 }
