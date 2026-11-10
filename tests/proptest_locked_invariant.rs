@@ -98,7 +98,7 @@ proptest! {
     #[test]
     fn prop_yes_position_locked_le_deposited(
         deposit_usdc in 1u64..=500u64,
-        price_bps in 1i128..=9_999i128,
+        price_bps in 0i128..=10_000i128,
         share_pct in 0u64..=100u64,
     ) {
         let deposit = (deposit_usdc as i128) * STROOPS_PER_USDC;
@@ -117,7 +117,7 @@ proptest! {
     #[test]
     fn prop_no_position_locked_le_deposited(
         deposit_usdc in 1u64..=500u64,
-        price_bps in 1i128..=9_999i128,
+        price_bps in 0i128..=10_000i128,
         share_pct in 0u64..=100u64,
     ) {
         let deposit = (deposit_usdc as i128) * STROOPS_PER_USDC;
@@ -136,7 +136,7 @@ proptest! {
     #[test]
     fn prop_invariant_survives_deposit_trade_withdraw_sequence(
         deposit_usdc in 1u64..=200u64,
-        price_bps in 1i128..=9_999i128,
+        price_bps in 0i128..=10_000i128,
         yes_pct in 0u64..=100u64,
         withdraw_pct in 1u64..=100u64,
     ) {
@@ -170,8 +170,8 @@ proptest! {
     #[test]
     fn prop_mixed_position_locked_le_deposited(
         deposit_usdc in 2u64..=200u64,
-        price_yes in 1i128..=9_999i128,
-        price_no in 1i128..=9_999i128,
+        price_yes in 0i128..=10_000i128,
+        price_no in 0i128..=10_000i128,
         yes_pct in 0u64..=50u64,
         no_pct in 0u64..=50u64,
     ) {

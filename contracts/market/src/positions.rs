@@ -19,6 +19,14 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// Caller is not the position owner nor an approved operator
+    Unauthorized = 4,
+    /// Transfer/merge request id has already been processed (replay)
+    DuplicateRequest = 5,
+    /// Source and destination positions belong to different markets
+    MarketMismatch = 6,
+    /// Transfer/merge would leave the source position settled or invalid
+    InvalidPositionState = 7,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -958,5 +966,14 @@ mod proptest_tests {
             let net_swapped = calculate_net_position(no, yes);
             prop_assert_eq!(net, -net_swapped);
         }
+    }
+
+    #[test]
+    fn test_calculate_locked_collateral_hedged_and_price_boundaries() {
+        assert_eq!(calculate_locked_collateral(100, 100, 5_000), 0);
+        assert_eq!(calculate_locked_collateral(100, 0, 0), 0);
+        assert_eq!(calculate_locked_collateral(0, 100, 10_000), 0);
+        assert_eq!(calculate_locked_collateral(100, 0, 10_000), 100);
+        assert_eq!(calculate_locked_collateral(0, 100, 0), 100);
     }
 }
