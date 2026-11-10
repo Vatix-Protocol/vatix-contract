@@ -29,7 +29,30 @@ import { join, basename } from "path";
 const ROOT = join(__dirname, "..");
 const CONTRACTS_DIR = join(ROOT, "contracts");
 const WEB_CONTRACTS_OUTPUT = join(ROOT, "apps", "web", "lib", "contracts");
+export const SUPPORTED_WASM_TARGETS = [
+  "wasm32v1-none",
+  "wasm32-unknown-unknown",
+] as const;
 const WASM_TARGET = join(ROOT, "target", "wasm32v1-none", "release");
+
+/**
+ * Resolve the active WASM release output directory across the two supported
+ * Rust WASM targets (`wasm32v1-none` on newer `stellar` CLIs, falling back to
+ * `wasm32-unknown-unknown` when `wasm32-unknown-unknown` is the target that
+ * produced `.wasm` artifacts).
+ */
+export function resolveWasmTargetDir(
+  rootDir: string = ROOT,
+  existsFn: (path: string) => boolean = existsSync,
+): string {
+  for (const target of SUPPORTED_WASM_TARGETS) {
+    const candidate = join(rootDir, "target", target, "release");
+    if (existsFn(candidate)) {
+      return candidate;
+    }
+  }
+  return join(rootDir, "target", SUPPORTED_WASM_TARGETS[0], "release");
+}
 
 /** Minimum stellar CLI major version required. */
 const MIN_STELLAR_MAJOR = 21;
@@ -115,21 +138,34 @@ function checkStellarCli(): void {
   log(`Found stellar CLI: ${versionOutput}`);
 }
 
-function checkRustTarget(): void {
+export function checkRustTarget(
+  deps: {
+    execFn?: (cmd: string) => string;
+    fatalFn?: (msg: string) => never;
+    warnFn?: (msg: string) => void;
+  } = {},
+): void {
+  const execFn = deps.execFn ?? ((cmd: string) => exec(cmd));
+  const fatalFn = deps.fatalFn ?? fatal;
+  const warnFn = deps.warnFn ?? warn;
+
+  let targets: string;
   try {
-    const targets = exec("rustup target list --installed");
-    if (
-      !targets.includes("wasm32-unknown-unknown") &&
-      !targets.includes("wasm32v1-none")
-    ) {
-      warn(
-        "Neither wasm32-unknown-unknown nor wasm32v1-none Rust target is installed.\n" +
-          "Run: rustup target add wasm32-unknown-unknown"
-      );
-    }
+    targets = execFn("rustup target list --installed");
   } catch {
     // rustup not installed or unavailable – non-fatal, stellar contract build will surface the issue
-    warn("Could not verify Rust wasm target (rustup not found). Build may fail.");
+    warnFn("Could not verify Rust wasm target (rustup not found). Build may fail.");
+    return;
+  }
+
+  if (
+    !targets.includes("wasm32-unknown-unknown") &&
+    !targets.includes("wasm32v1-none")
+  ) {
+    fatalFn(
+      "Neither wasm32v1-none nor wasm32-unknown-unknown Rust target is installed.\n" +
+        "Run: rustup target add wasm32v1-none (or: rustup target add wasm32-unknown-unknown)"
+    );
   }
 }
 
@@ -145,16 +181,17 @@ function buildContracts(): void {
     fatal(`Contract build failed:\n${err}`);
   }
 
-  if (!existsSync(WASM_TARGET)) {
+  const wasmDir = resolveWasmTargetDir();
+  if (!existsSync(wasmDir)) {
     fatal(
-      `WASM output directory not found after build: ${WASM_TARGET}\n` +
+      `WASM output directory not found after build: ${wasmDir}\n` +
         "Ensure the Rust toolchain and wasm target are installed."
     );
   }
 
-  const wasmFiles = readdirSync(WASM_TARGET).filter((f) => f.endsWith(".wasm"));
+  const wasmFiles = readdirSync(wasmDir).filter((f) => f.endsWith(".wasm"));
   if (wasmFiles.length === 0) {
-    fatal(`No WASM files found in ${WASM_TARGET} after build.`);
+    fatal(`No WASM files found in ${wasmDir} after build.`);
   }
 
   log(`✓ Built ${wasmFiles.length} WASM file(s): ${wasmFiles.join(", ")}`);
@@ -186,7 +223,9 @@ function expectedWasmFileName(contract: ContractConfig): string {
  * Hash pinning is intentionally out of scope here — that is
  * `scripts/verify-wasm-hash.sh`'s job.
  */
-export function verifyWasmArtifacts(wasmDir: string = WASM_TARGET): void {
+export function verifyWasmArtifacts(
+  wasmDir: string = resolveWasmTargetDir(),
+): void {
   const present = new Set(
     readdirSync(wasmDir).filter((f) => f.endsWith(".wasm"))
   );
@@ -223,7 +262,8 @@ export function verifyWasmArtifacts(wasmDir: string = WASM_TARGET): void {
 }
 
 function resolveWasmPath(contract: ContractConfig): string | null {
-  const wasmFile = join(WASM_TARGET, `vatix_${contract.wasmStem}_contract.wasm`);
+  const wasmDir = resolveWasmTargetDir();
+  const wasmFile = join(wasmDir, `vatix_${contract.wasmStem}_contract.wasm`);
   if (!existsSync(wasmFile)) {
     warn(
       `WASM not found for "${contract.name}" at ${basename(wasmFile)}. Skipping.`
