@@ -5,8 +5,8 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -479,37 +479,81 @@ function generateTopUpIssues(
   return out;
 }
 
-async function publishIssues(
+export interface PublishResult {
+  created: number;
+  skipped: number;
+  failed: string[];
+}
+
+export interface PublishOptions {
+  checkGh?: () => boolean;
+  ensureLabelsFn?: (github: string) => void;
+  fetchExistingTitlesFn?: (github: string) => Set<string>;
+  createIssueFn?: (
+    github: string,
+    issue: GeneratedIssue,
+  ) => { status: number | null; stderr: string };
+}
+
+export function formatPublishSummary(result: PublishResult): string {
+  return `created=${result.created} skipped_duplicates=${result.skipped} failed=${result.failed.length}`;
+}
+
+export function writePublishSummaryToManifest(
+  result: PublishResult,
+  outDir: string = OUT_DIR,
+): void {
+  mkdirSync(outDir, { recursive: true });
+  const manifestPath = join(outDir, "manifest.json");
+  let manifest: Record<string, unknown> = {};
+  if (existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      manifest = {};
+    }
+  }
+  manifest.publishSummary = {
+    created: result.created,
+    skippedDuplicates: result.skipped,
+    failed: result.failed.length,
+    failedTitles: result.failed,
+  };
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+}
+
+export function handlePublishExit(
+  result: PublishResult,
+  exitFn: (code: number) => void = (code) => process.exit(code),
+): void {
+  const summaryLine = formatPublishSummary(result);
+  console.log(`\nPublish done: ${summaryLine}`);
+  if (result.failed.length > 0) {
+    console.error("Failed issues:");
+    for (const title of result.failed) {
+      console.error(`  - ${title}`);
+    }
+    exitFn(1);
+  }
+}
+
+export async function publishIssues(
   issues: GeneratedIssue[],
   delayMs: number,
-): Promise<{ created: number; skipped: number }> {
-  if (!commandExists("gh")) {
-    throw new Error("gh CLI not found — install GitHub CLI and run gh auth login");
-  }
-
-  const byRepo = new Map<string, GeneratedIssue[]>();
-  for (const issue of issues) {
-    const list = byRepo.get(issue.github) ?? [];
-    list.push(issue);
-    byRepo.set(issue.github, list);
-  }
-
-  let created = 0;
-  let skipped = 0;
-
-  for (const [github, repoIssues] of byRepo) {
-    ensureLabels(github);
-    const existing = fetchExistingTitles(github);
-    console.log(`Publishing to ${github} (${repoIssues.length} issues)…`);
-
-    for (const issue of repoIssues) {
-      if (existing.has(issue.title)) {
-        skipped += 1;
-        continue;
-      }
-
+  options: PublishOptions = {},
+): Promise<PublishResult> {
+  const checkGh = options.checkGh ?? (() => commandExists("gh"));
+  const ensureLabelsFn = options.ensureLabelsFn ?? ensureLabels;
+  const fetchExistingTitlesFn =
+    options.fetchExistingTitlesFn ?? fetchExistingTitles;
+  const createIssueFn =
+    options.createIssueFn ??
+    ((github: string, issue: GeneratedIssue) => {
       const labelArgs = issue.labels.flatMap((l) => ["--label", l]);
-      const result = spawnSync(
+      const res = spawnSync(
         "gh",
         [
           "issue",
@@ -524,9 +568,40 @@ async function publishIssues(
         ],
         { encoding: "utf8" },
       );
+      return { status: res.status, stderr: res.stderr ?? "" };
+    });
+
+  if (!checkGh()) {
+    throw new Error("gh CLI not found — install GitHub CLI and run gh auth login");
+  }
+
+  const byRepo = new Map<string, GeneratedIssue[]>();
+  for (const issue of issues) {
+    const list = byRepo.get(issue.github) ?? [];
+    list.push(issue);
+    byRepo.set(issue.github, list);
+  }
+
+  let created = 0;
+  let skipped = 0;
+  const failed: string[] = [];
+
+  for (const [github, repoIssues] of byRepo) {
+    ensureLabelsFn(github);
+    const existing = fetchExistingTitlesFn(github);
+    console.log(`Publishing to ${github} (${repoIssues.length} issues)…`);
+
+    for (const issue of repoIssues) {
+      if (existing.has(issue.title)) {
+        skipped += 1;
+        continue;
+      }
+
+      const result = createIssueFn(github, issue);
 
       if (result.status !== 0) {
         console.error(`Failed: ${issue.title}\n${result.stderr}`);
+        failed.push(issue.title);
         continue;
       }
 
@@ -537,7 +612,7 @@ async function publishIssues(
     }
   }
 
-  return { created, skipped };
+  return { created, skipped, failed };
 }
 
 function writeOutputs(all: GeneratedIssue[], configs: RepoConfig[]) {
@@ -609,8 +684,9 @@ async function main() {
   writeOutputs(all, configs);
 
   if (args.publish) {
-    const { created, skipped } = await publishIssues(all, args.delayMs);
-    console.log(`\nPublish done: ${created} created, ${skipped} skipped (duplicate titles)`);
+    const result = await publishIssues(all, args.delayMs);
+    writePublishSummaryToManifest(result, OUT_DIR);
+    handlePublishExit(result);
   } else {
     console.log(
       `\n${all.length} issues written. Run with --publish to create on GitHub.`,
@@ -618,7 +694,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isMainModule =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
