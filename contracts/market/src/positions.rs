@@ -7,6 +7,11 @@ const BASIS_POINTS: i128 = 10_000;
 pub const STROOPS_PER_USDC: i128 = 10_000_000;
 
 /// Errors returned by position validation and update operations.
+///
+/// # ABI Stability
+/// Discriminants (`1..=7`) are part of the public Soroban contract ABI (`Error(Contract, #N)`).
+/// Never renumber or reorder existing variants; append new variants at the end and update
+/// `test_position_error_discriminants_are_abi_stable`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -19,6 +24,14 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// Caller is not the position owner nor an approved operator
+    Unauthorized = 4,
+    /// Transfer/merge request id has already been processed (replay)
+    DuplicateRequest = 5,
+    /// Source and destination positions belong to different markets
+    MarketMismatch = 6,
+    /// Transfer/merge would leave the source position settled or invalid
+    InvalidPositionState = 7,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -958,5 +971,16 @@ mod proptest_tests {
             let net_swapped = calculate_net_position(no, yes);
             prop_assert_eq!(net, -net_swapped);
         }
+    }
+
+    #[test]
+    fn test_position_error_discriminants_are_abi_stable() {
+        assert_eq!(PositionError::ShareBalanceBelowZero as u32, 1);
+        assert_eq!(PositionError::InvalidMarketPrice as u32, 2);
+        assert_eq!(PositionError::InsufficientProtocolCollateral as u32, 3);
+        assert_eq!(PositionError::Unauthorized as u32, 4);
+        assert_eq!(PositionError::DuplicateRequest as u32, 5);
+        assert_eq!(PositionError::MarketMismatch as u32, 6);
+        assert_eq!(PositionError::InvalidPositionState as u32, 7);
     }
 }
