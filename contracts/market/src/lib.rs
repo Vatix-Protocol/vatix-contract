@@ -35,7 +35,10 @@ pub mod fee_waiver;
 pub mod oracle;
 pub mod positions;
 pub mod reconciliation;
+pub mod settlement;
 pub mod storage;
+
+pub const MAX_BATCH_SETTLE_SIZE: u32 = 100;
 pub mod validation;
 pub mod withdraw;
 
@@ -446,6 +449,122 @@ impl MarketContract {
     /// Whether the kill-switch is engaged. Defaults to paused (fail-closed) when
     /// the flag has never been written, so an uninitialized contract denies
     /// money-path writes rather than silently allowing them.
+
+    pub fn initialize_market(
+        env: Env,
+        creator: Address,
+        question: soroban_sdk::String,
+        end_time: u64,
+        oracle_pubkey: soroban_sdk::BytesN<32>,
+        collateral_token: Address,
+        metadata_uri: Option<soroban_sdk::String>,
+    ) -> Result<u32, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        validation::require_emergency_mode_allows(&env, &[crate::types::EmergencyMode::Normal])?;
+        creator.require_auth();
+        let admin = storage::get_admin(&env);
+        if creator != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        let current_time = env.ledger().timestamp();
+        validation::validate_market_creation(&question, end_time, current_time, &collateral_token)?;
+        validation::validate_metadata_uri(&metadata_uri)?;
+        if oracle_pubkey == soroban_sdk::BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(ContractError::InvalidSignature);
+        }
+        let market_id = storage::increment_market_id(&env)?;
+        let market = crate::types::Market {
+            id: market_id,
+            question: question.clone(),
+            end_time,
+            oracle_pubkey,
+            status: MarketStatus::Active,
+            result: None,
+            creator: creator.clone(),
+            created_at: current_time,
+            collateral_token,
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: crate::types::AdapterType::Ed25519,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+        storage::set_market(&env, market_id, &market)?;
+        events::emit_market_created(&env, market_id, &creator, &question, end_time, &metadata_uri);
+        Ok(market_id)
+    }
+
+    pub fn buy_yes(
+        env: Env,
+        user: Address,
+        market_id: u32,
+        shares: i128,
+        market_price: i128,
+    ) -> Result<Position, ContractError> {
+        Self::update_position(env, user, market_id, shares, 0, market_price)
+    }
+
+    pub fn resolve_market(
+        env: Env,
+        resolver: Address,
+        market_id: soroban_sdk::String,
+        outcome: bool,
+        signature: soroban_sdk::BytesN<64>,
+        expires_at: u64,
+    ) -> Result<(), ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        validation::require_emergency_mode_allows(
+            &env,
+            &[
+                crate::types::EmergencyMode::Normal,
+                crate::types::EmergencyMode::TradingHalted,
+            ],
+        )?;
+        resolver.require_auth();
+        let market_id_u32 = validation::parse_market_id(&market_id)?;
+        let mut market =
+            storage::get_market(&env, market_id_u32)?.ok_or(ContractError::MarketNotFound)?;
+        if market.status == MarketStatus::Resolved {
+            return Err(ContractError::MarketAlreadyResolved);
+        }
+        if expires_at == 0 || env.ledger().timestamp() > expires_at {
+            return Err(ContractError::OracleMessageExpired);
+        }
+        oracle::verify_market_outcome(
+            &env,
+            market_id_u32,
+            &market,
+            market.adapter_type.clone(),
+            outcome,
+            &signature,
+        )?;
+        let resolved_at = env.ledger().timestamp();
+        events::emit_oracle_signature_verified(&env, market_id_u32, outcome, resolved_at);
+        market.status = MarketStatus::Resolved;
+        market.result = Some(outcome);
+        market.resolver = Some(resolver.clone());
+        market.resolved_at = Some(resolved_at);
+        storage::set_market(&env, market_id_u32, &market)?;
+        events::emit_market_resolved(
+            &env,
+            market_id_u32,
+            &market.oracle_pubkey,
+            &resolver,
+            outcome,
+            resolved_at,
+        );
+        Ok(())
+    }
+
+    pub fn settle_position(env: Env, user: Address, market_id: u32) -> Result<i128, ContractError> {
+        validation::require_initialized(&env)?;
+        validation::require_not_paused(&env)?;
+        settlement::settle_position(&env, &user, market_id)
+    }
+
     fn is_paused(env: &Env) -> bool {
         env.storage()
             .instance()

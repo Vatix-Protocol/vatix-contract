@@ -19,17 +19,30 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// Caller is not the position owner nor an approved operator
+    Unauthorized = 4,
+    /// Transfer/merge request id has already been processed (replay)
+    DuplicateRequest = 5,
+    /// Source and destination positions belong to different markets
+    MarketMismatch = 6,
+    /// Transfer/merge would leave the source position settled or invalid
+    InvalidPositionState = 7,
+}
+
+/// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`)
+/// using checked arithmetic, returning `None` if `amount * price_bps` overflows `i128`.
+pub fn checked_scale_by_bps(amount: i128, price_bps: i128) -> Option<i128> {
+    amount.checked_mul(price_bps)?.checked_div(BASIS_POINTS)
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
 ///
-/// Uses checked arithmetic to avoid silent overflow. For valid share/price
-/// values within the i128 range used by this contract overflow should not occur,
-/// but we defensively cap at i128::MAX if it would.
+/// Uses checked arithmetic to avoid silent overflow. When `amount * price_bps`
+/// overflows `i128::MAX` (at `amount >= (i128::MAX / price_bps) + 1`), we cap at
+/// `i128::MAX` rather than dividing a saturated product by `10_000` (which would
+/// understate the required collateral at `i128::MAX / 10_000`).
 fn scale_by_bps(amount: i128, price_bps: i128) -> i128 {
-    let product = amount.saturating_mul(price_bps);
-    let result = product.checked_div(BASIS_POINTS).unwrap_or(i128::MAX);
-    result
+    checked_scale_by_bps(amount, price_bps).unwrap_or(i128::MAX)
 }
 
 /// Calculate required locked collateral based on net position.
@@ -106,7 +119,13 @@ pub fn check_protocol_collateral(
     collateral_balance: i128,
     locked_elsewhere: i128,
 ) -> Result<(), PositionError> {
-    if prospective_locked.saturating_add(locked_elsewhere) > collateral_balance {
+    if prospective_locked == i128::MAX {
+        return Err(PositionError::InsufficientProtocolCollateral);
+    }
+    let total_required = prospective_locked
+        .checked_add(locked_elsewhere)
+        .ok_or(PositionError::InsufficientProtocolCollateral)?;
+    if total_required > collateral_balance {
         return Err(PositionError::InsufficientProtocolCollateral);
     }
     Ok(())
@@ -759,6 +778,39 @@ mod tests {
         assert_eq!(switched.yes_shares + switched.no_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(switched.yes_shares, 0);
         assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
+    }
+
+    #[test]
+    fn test_scale_by_bps_saturation_boundary_and_check_protocol_collateral_rejection() {
+        let price_bps: i128 = 5_000;
+        let max_non_overflowing = i128::MAX / price_bps;
+        let first_overflowing = max_non_overflowing + 1;
+
+        assert_eq!(
+            checked_scale_by_bps(max_non_overflowing, price_bps),
+            Some((max_non_overflowing * price_bps) / BASIS_POINTS)
+        );
+        assert_eq!(
+            scale_by_bps(max_non_overflowing, price_bps),
+            (max_non_overflowing * price_bps) / BASIS_POINTS
+        );
+
+        assert_eq!(checked_scale_by_bps(first_overflowing, price_bps), None);
+        assert_eq!(scale_by_bps(first_overflowing, price_bps), i128::MAX);
+
+        let locked_at_boundary = calculate_locked_collateral(first_overflowing, 0, price_bps);
+        assert_eq!(locked_at_boundary, i128::MAX);
+        assert_eq!(
+            check_protocol_collateral(locked_at_boundary, i128::MAX, 0),
+            Err(PositionError::InsufficientProtocolCollateral)
+        );
+
+        let locked_max = calculate_locked_collateral(i128::MAX, 0, price_bps);
+        assert_eq!(locked_max, i128::MAX);
+        assert_eq!(
+            check_protocol_collateral(locked_max, i128::MAX, 0),
+            Err(PositionError::InsufficientProtocolCollateral)
+        );
     }
 }
 

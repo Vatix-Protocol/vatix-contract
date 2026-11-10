@@ -389,8 +389,8 @@ mod tests {
         }
         assert_eq!(
             checked,
-            47,
-            "expected all 47 ContractError variants to be parsed, only checked {checked}"
+            50,
+            "expected all 50 ContractError variants to be parsed, only checked {checked}"
         );
     }
 }
