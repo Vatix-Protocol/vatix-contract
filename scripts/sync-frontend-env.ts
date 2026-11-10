@@ -31,7 +31,7 @@ const REGISTRY_PATH = join(ROOT, "deployments", "testnet.json");
 const ENV_EXAMPLE_PATH = join(ROOT, "apps", "web", ".env.local.example");
 const ENV_LOCAL_PATH = join(ROOT, "apps", "web", ".env.local");
 
-interface DeploymentRegistry {
+export interface DeploymentRegistry {
   network: string;
   networkPassphrase: string;
   rpcUrl: string;
@@ -44,7 +44,7 @@ interface DeploymentRegistry {
 }
 
 /** Env vars this script owns, mapped to where their value comes from in the registry. */
-function fieldsFrom(registry: DeploymentRegistry): Record<string, string> {
+export function fieldsFrom(registry: DeploymentRegistry): Record<string, string> {
   return {
     NEXT_PUBLIC_MARKET_CONTRACT_ID: registry.contracts.market.contractId,
     NEXT_PUBLIC_TREASURY_CONTRACT_ID: registry.contracts.treasury.contractId,
@@ -55,7 +55,7 @@ function fieldsFrom(registry: DeploymentRegistry): Record<string, string> {
   };
 }
 
-function setEnvVar(lines: string[], key: string, value: string): boolean {
+export function setEnvVar(lines: string[], key: string, value: string): boolean {
   const pattern = new RegExp(`^${key}=`);
   const idx = lines.findIndex((l) => pattern.test(l));
   const newLine = `${key}=${value}`;
@@ -70,20 +70,19 @@ function setEnvVar(lines: string[], key: string, value: string): boolean {
   return true;
 }
 
-function main(): void {
-  if (!existsSync(REGISTRY_PATH)) {
-    console.error(`ERROR: registry not found at ${REGISTRY_PATH}`);
-    process.exit(1);
+export function trimTrailingBlankLines(lines: string[]): string[] {
+  const copy = [...lines];
+  while (copy.length > 0 && copy[copy.length - 1] === "") {
+    copy.pop();
   }
-  const registry: DeploymentRegistry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
+  return copy;
+}
 
-  const baseContent = existsSync(ENV_LOCAL_PATH)
-    ? readFileSync(ENV_LOCAL_PATH, "utf8")
-    : existsSync(ENV_EXAMPLE_PATH)
-      ? readFileSync(ENV_EXAMPLE_PATH, "utf8")
-      : "";
-  const lines = baseContent.length > 0 ? baseContent.split("\n") : [];
-
+export function mergeRegistryIntoEnvLines(
+  initialLines: string[],
+  registry: DeploymentRegistry,
+): { lines: string[]; changed: string[]; skippedEmpty: string[] } {
+  const lines = [...initialLines];
   const changed: string[] = [];
   const skippedEmpty: string[] = [];
 
@@ -97,11 +96,32 @@ function main(): void {
     }
   }
 
-  // Trim any trailing blank lines introduced by the join, keep a single
-  // trailing newline.
-  while (lines.length > 0 && lines[lines.length - 1] === "") {
-    lines.pop();
+  return {
+    lines: trimTrailingBlankLines(lines),
+    changed,
+    skippedEmpty,
+  };
+}
+
+function main(): void {
+  if (!existsSync(REGISTRY_PATH)) {
+    console.error(`ERROR: registry not found at ${REGISTRY_PATH}`);
+    process.exit(1);
   }
+  const registry: DeploymentRegistry = JSON.parse(readFileSync(REGISTRY_PATH, "utf8"));
+
+  const baseContent = existsSync(ENV_LOCAL_PATH)
+    ? readFileSync(ENV_LOCAL_PATH, "utf8")
+    : existsSync(ENV_EXAMPLE_PATH)
+      ? readFileSync(ENV_EXAMPLE_PATH, "utf8")
+      : "";
+  const initialLines = baseContent.length > 0 ? baseContent.split("\n") : [];
+
+  const { lines, changed, skippedEmpty } = mergeRegistryIntoEnvLines(
+    initialLines,
+    registry,
+  );
+
   writeFileSync(ENV_LOCAL_PATH, lines.join("\n") + "\n");
 
   console.log(`Synced ${ENV_LOCAL_PATH} from ${REGISTRY_PATH}`);
@@ -117,4 +137,6 @@ function main(): void {
   }
 }
 
-main();
+if (typeof require !== "undefined" && require.main === module) {
+  main();
+}
