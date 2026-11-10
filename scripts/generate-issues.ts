@@ -6,7 +6,7 @@
 
 import { execSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,6 +17,13 @@ const DEFAULT_LABELS = ["good first issue", "easy"] as const;
 // Titles for extra issues intentionally do NOT include this prefix.
 const TOPUP_LABEL = "topup";
 
+export const REQUIRED_SECTIONS = [
+  "## Context",
+  "## Task",
+  "## Acceptance criteria",
+  "## Notes",
+] as const;
+
 export interface GeneratedIssue {
   repo: string;
   github: string;
@@ -25,6 +32,64 @@ export interface GeneratedIssue {
   body: string;
   labels: string[];
   area: string;
+}
+
+export function validateIssue(issue: GeneratedIssue): string[] {
+  const violations: string[] = [];
+
+  if (!issue.title || issue.title.trim().length === 0) {
+    violations.push("title must be non-empty");
+  }
+
+  for (const section of REQUIRED_SECTIONS) {
+    if (!issue.body || !issue.body.includes(section)) {
+      violations.push(`body is missing required section "${section}"`);
+    }
+  }
+
+  if (
+    (issue.title && issue.title.includes("{target}")) ||
+    (issue.body && issue.body.includes("{target}"))
+  ) {
+    violations.push('contains unsubstituted "{target}" placeholder');
+  }
+
+  if (!Array.isArray(issue.labels) || issue.labels.length === 0) {
+    violations.push("labels must be a non-empty array");
+  }
+
+  return violations;
+}
+
+export function validateIssuesOrExit(
+  issues: GeneratedIssue[],
+  opts: {
+    writeFn?: (issues: GeneratedIssue[]) => void;
+    publishFn?: (issues: GeneratedIssue[]) => Promise<void> | void;
+    exitFn?: (code: number) => never;
+    errorLog?: (msg: string) => void;
+  } = {},
+): void {
+  const exitFn = opts.exitFn ?? ((code: number) => process.exit(code));
+  const errorLog = opts.errorLog ?? ((msg: string) => console.error(msg));
+
+  const failures: string[] = [];
+  for (const issue of issues) {
+    const violations = validateIssue(issue);
+    if (violations.length > 0) {
+      const label = issue.title?.trim() ? issue.title : `<issue #${issue.number}>`;
+      failures.push(
+        `Invalid generated issue [${issue.repo}#${issue.number}] "${label}": ${violations.join("; ")}`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    for (const msg of failures) {
+      errorLog(msg);
+    }
+    exitFn(1);
+  }
 }
 
 interface RepoConfig {
@@ -479,10 +544,11 @@ function generateTopUpIssues(
   return out;
 }
 
-async function publishIssues(
+export async function publishIssues(
   issues: GeneratedIssue[],
   delayMs: number,
 ): Promise<{ created: number; skipped: number }> {
+  validateIssuesOrExit(issues);
   if (!commandExists("gh")) {
     throw new Error("gh CLI not found — install GitHub CLI and run gh auth login");
   }
@@ -540,7 +606,8 @@ async function publishIssues(
   return { created, skipped };
 }
 
-function writeOutputs(all: GeneratedIssue[], configs: RepoConfig[]) {
+export function writeOutputs(all: GeneratedIssue[], configs: RepoConfig[]) {
+  validateIssuesOrExit(all);
   mkdirSync(OUT_DIR, { recursive: true });
 
   for (const config of configs) {
@@ -597,6 +664,8 @@ async function main() {
   const topUp = generateTopUpIssues(configs, args.extra);
   const all = args.extra > 0 ? topUp : base;
 
+  validateIssuesOrExit(all);
+
   if (args.dryRun) {
     for (const config of configs) {
       const sample = all.filter((i) => i.repo === config.slug).slice(0, 3);
@@ -618,7 +687,13 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isMainModule =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
