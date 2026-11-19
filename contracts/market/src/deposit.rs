@@ -63,6 +63,7 @@ impl<'a> Drop for DepositReentrancyGuard<'a> {
 /// - `MarketNotFound`: market_id doesn't exist in storage
 /// - `MarketNotActive`: Market is resolved or cancelled
 /// - `InvalidQuantity`: amount <= 0 or exceeds max
+/// - `BelowMinDeposit`: amount is below `MIN_DEPOSIT_AMOUNT`
 /// - `TokenTransferFailed`: USDC transfer failed (insufficient balance, etc.)
 /// - `ArithmeticOverflow`: Collateral amount would exceed i128 max
 ///
@@ -92,7 +93,7 @@ pub fn deposit_collateral(
     if amount <= 0 {
         return Err(ContractError::InvalidQuantity);
     }
-    validation::validate_collateral_amount(amount)?;
+    validation::validate_deposit_amount(amount)?;
 
     let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
 
