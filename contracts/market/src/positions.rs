@@ -19,6 +19,8 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// Adding the proposed delta to the stored share balance would overflow i128
+    ArithmeticOverflow = 4,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -69,14 +71,21 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
 ///
 /// # Errors
 /// Returns [`PositionError::ShareBalanceBelowZero`] when `yes_delta` or
-/// `no_delta` would leave either share balance negative.
+/// `no_delta` would leave either share balance negative, or
+/// [`PositionError::ArithmeticOverflow`] when the addition would overflow i128.
 pub fn validate_position_change(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
 ) -> Result<(), PositionError> {
-    let new_yes = current_position.yes_shares + yes_delta;
-    let new_no = current_position.no_shares + no_delta;
+    let new_yes = current_position
+        .yes_shares
+        .checked_add(yes_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
+    let new_no = current_position
+        .no_shares
+        .checked_add(no_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
 
     if new_yes < 0 || new_no < 0 {
         return Err(PositionError::ShareBalanceBelowZero);
@@ -114,18 +123,24 @@ pub fn check_protocol_collateral(
 
 /// Determine which side exceeded the allowed position limits.
 ///
-/// Returns `true` when the YES side would underflow, or `false` when the NO
-/// side would underflow.
+/// Returns `true` when the YES side would underflow or overflow, or `false`
+/// when the NO side would underflow or overflow instead.
 fn position_limit_exceeded_side(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
 ) -> bool {
-    let new_yes = current_position.yes_shares + yes_delta;
-    let new_no = current_position.no_shares + no_delta;
+    let yes_exceeded = current_position
+        .yes_shares
+        .checked_add(yes_delta)
+        .map_or(true, |new_yes| new_yes < 0);
+    let no_exceeded = current_position
+        .no_shares
+        .checked_add(no_delta)
+        .map_or(true, |new_no| new_no < 0);
 
     #[allow(clippy::nonminimal_bool)]
-    let result = new_yes < 0 || (new_no < 0 && new_yes >= 0);
+    let result = yes_exceeded || (no_exceeded && !yes_exceeded);
     result
 }
 
@@ -392,6 +407,7 @@ pub fn merge_positions(
 ///
 /// # Errors
 /// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
+/// - [`PositionError::ArithmeticOverflow`] if applying a delta would overflow i128
 pub fn update_position(
     env: &Env,
     market_id: u32,
@@ -426,8 +442,14 @@ pub fn update_position(
     }
 
     // 3. Apply deltas
-    position.yes_shares += yes_delta;
-    position.no_shares += no_delta;
+    position.yes_shares = position
+        .yes_shares
+        .checked_add(yes_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
+    position.no_shares = position
+        .no_shares
+        .checked_add(no_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
 
     // 4. Recalculate locked collateral
     let new_locked =
