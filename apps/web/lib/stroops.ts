@@ -25,7 +25,11 @@ export function toStroops(amount: string): bigint {
   }
 
   const [, whole, fraction = ""] = match;
-  // Pad/truncate the fractional part to exactly 7 digits (stroops precision).
+  if (fraction.length > 7) {
+    throw new Error("Invalid amount: more than 7 fractional digits");
+  }
+
+  // Pad the fractional part to exactly 7 digits (stroops precision).
   const fractionPadded = (fraction + "0000000").slice(0, 7);
 
   return BigInt(whole) * STROOPS_PER_UNIT + BigInt(fractionPadded || "0");
