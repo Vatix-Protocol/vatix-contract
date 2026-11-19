@@ -677,6 +677,46 @@ mod tests {
         assert_eq!(result, Err(ContractError::MarketExpired));
     }
 
+    /// A deposit submitted in the exact ledger second of `end_time` must be
+    /// rejected as `MarketExpired` (the `>=` boundary), while a deposit one
+    /// second earlier is still allowed.
+    #[test]
+    fn test_deposit_at_end_time_rejected_one_second_earlier_allowed() {
+        use soroban_sdk::testutils::Ledger;
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let collateral_token = token.address();
+        let contract_id = env.register(crate::MarketContract, ());
+
+        // Existing fixture sets end_time to 1000.
+        let market = create_test_market(&env, market_id, &collateral_token);
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+        });
+
+        env.mock_all_auths();
+        StellarAssetClient::new(&env, &collateral_token).mint(&user, &20_000);
+
+        // One second before expiry: not rejected for expiry, so the deposit
+        // succeeds.
+        env.ledger().set_timestamp(market.end_time - 1);
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, 5_000)
+        });
+        assert!(result.is_ok());
+
+        // Exactly at end_time: rejected as expired.
+        env.ledger().set_timestamp(market.end_time);
+        let result = env.as_contract(&contract_id, || {
+            deposit_collateral(env.clone(), user.clone(), market_id, 5_000)
+        });
+        assert_eq!(result, Err(ContractError::MarketExpired));
+    }
+
     // --- #374: total_deposited accumulates correctly across multiple deposits ---
 
     #[test]
