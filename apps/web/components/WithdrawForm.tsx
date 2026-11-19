@@ -86,10 +86,10 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
         return;
       }
       
-      // Prepare contract arguments for withdraw_unused_collateral(market_id: u32, user: Address, amount: i128)
+      // Prepare contract arguments for withdraw_unused_collateral(user: Address, market_id: u32, amount: i128)
       const args = [
-        u32ToScVal(parseInt(marketId)),
         addressToScVal(address),
+        u32ToScVal(parseInt(marketId)),
         amountToScVal(amountInStroopsStr),
       ];
 
