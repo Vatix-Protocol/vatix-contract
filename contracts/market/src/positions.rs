@@ -760,6 +760,222 @@ mod tests {
         assert_eq!(switched.yes_shares, 0);
         assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
     }
+
+    /// Build a position with explicit values for use in `merge_positions` tests.
+    fn test_position(
+        market_id: u32,
+        user: Address,
+        yes_shares: i128,
+        no_shares: i128,
+        locked_collateral: i128,
+        total_deposited: i128,
+        is_settled: bool,
+    ) -> Position {
+        Position {
+            market_id,
+            user,
+            yes_shares,
+            no_shares,
+            locked_collateral,
+            total_deposited,
+            is_settled,
+        }
+    }
+
+    #[test]
+    fn test_merge_positions_combines_into_primary_and_zeroes_other() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        let (primary_after, other_after) = env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 0, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 0, 60, false),
+            )
+            .unwrap();
+
+            merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1)
+                .expect("merge should succeed");
+
+            let primary_after =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_after =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+            (primary_after, other_after)
+        });
+
+        // Netting: 100 YES + 40 YES, 30 NO + 20 NO.
+        assert_eq!(primary_after.yes_shares, 140);
+        assert_eq!(primary_after.no_shares, 50);
+        // Summed deposits: 200 + 60.
+        assert_eq!(primary_after.total_deposited, 260);
+        // Net YES 90 at 50% price locks 45.
+        assert_eq!(primary_after.locked_collateral, 45);
+        assert!(!primary_after.is_settled);
+
+        // The merged position is zeroed out.
+        assert_eq!(other_after.yes_shares, 0);
+        assert_eq!(other_after.no_shares, 0);
+        assert_eq!(other_after.total_deposited, 0);
+        assert_eq!(other_after.locked_collateral, 0);
+        assert!(!other_after.is_settled);
+    }
+
+    #[test]
+    fn test_merge_positions_fails_closed_on_settled_position() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        let (primary_before, other_before, primary_after, other_after) = env.as_contract(
+            &contract_id,
+            || {
+                crate::storage::set_version(&env);
+                crate::storage::set_position(
+                    &env,
+                    market_id,
+                    &primary,
+                    &test_position(market_id, primary.clone(), 100, 30, 35, 200, false),
+                )
+                .unwrap();
+                crate::storage::set_position(
+                    &env,
+                    market_id,
+                    &other,
+                    &test_position(market_id, other.clone(), 40, 20, 20, 60, true),
+                )
+                .unwrap();
+
+                let primary_before =
+                    crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+                let other_before =
+                    crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+                let result =
+                    merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1);
+                assert_eq!(result, Err(PositionError::InvalidPositionState));
+
+                let primary_after =
+                    crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+                let other_after =
+                    crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+                (primary_before, other_before, primary_after, other_after)
+            },
+        );
+
+        assert_eq!(primary_after, primary_before);
+        assert_eq!(other_after, other_before);
+    }
+
+    #[test]
+    fn test_merge_positions_rejects_unauthorized_caller() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let intruder = sample_user(&env, 4);
+        let market_id = 42;
+
+        let (primary_before, other_before, primary_after, other_after) = env.as_contract(
+            &contract_id,
+            || {
+                crate::storage::set_version(&env);
+                crate::storage::set_position(
+                    &env,
+                    market_id,
+                    &primary,
+                    &test_position(market_id, primary.clone(), 100, 30, 35, 200, false),
+                )
+                .unwrap();
+                crate::storage::set_position(
+                    &env,
+                    market_id,
+                    &other,
+                    &test_position(market_id, other.clone(), 40, 20, 20, 60, false),
+                )
+                .unwrap();
+
+                let primary_before =
+                    crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+                let other_before =
+                    crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+                let result = merge_positions(
+                    &env,
+                    market_id,
+                    &owner,
+                    &primary,
+                    &other,
+                    &intruder,
+                    5_000,
+                    1,
+                );
+                assert_eq!(result, Err(PositionError::Unauthorized));
+
+                let primary_after =
+                    crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+                let other_after =
+                    crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+                (primary_before, other_before, primary_after, other_after)
+            },
+        );
+
+        assert_eq!(primary_after, primary_before);
+        assert_eq!(other_after, other_before);
+    }
+
+    #[test]
+    fn test_merge_positions_rejects_duplicate_request_id() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 0, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 0, 60, false),
+            )
+            .unwrap();
+
+            merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1)
+                .expect("first merge should succeed");
+
+            let result =
+                merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1);
+            assert_eq!(result, Err(PositionError::DuplicateRequest));
+        });
+    }
 }
 
 #[cfg(test)]
