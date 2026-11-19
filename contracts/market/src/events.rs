@@ -2007,6 +2007,9 @@ mod tests {
         assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        // Pin the full documented payload: exactly `admin` and `closed_at`, so a
+        // change that drops (or adds) a field fails this focused regression test.
+        assert_eq!(data.len(), 2);
         let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
         let closed_at_val: u64 = data
             .get(Symbol::new(&env, "closed_at"))
