@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1253 -->
 - #1253: Add a regression test for emit_fee_waiver_removed in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1254 -->
+- #1254: Add a regression test for acquire in contracts/market/src/deposit.rs
