@@ -1047,6 +1047,37 @@ mod tests {
         );
     }
 
+    /// The cooldown is exactly 3 600 seconds: 3 599 s elapsed is rejected,
+    /// 3 600 s elapsed is not rejected for the cooldown.
+    #[test]
+    fn test_withdraw_cooldown_boundary_is_3600_seconds() {
+        assert_eq!(WITHDRAW_COOLDOWN_SECONDS, 3_600);
+        let now = 10_000u64;
+        for (elapsed, expect_cooldown) in [(3_599u64, true), (3_600u64, false)] {
+            let env = setup_env();
+            env.ledger().set_timestamp(now);
+            let user = Address::generate(&env);
+            let market_id = 1u32;
+            let collateral_token = Address::generate(&env);
+            let contract_id = env.register(crate::MarketContract, ());
+            let market = create_test_market(&env, market_id, &collateral_token);
+            env.as_contract(&contract_id, || {
+                storage::set_version(&env);
+                storage::set_market(&env, market_id, &market).unwrap();
+                storage::set_last_deposit_time(&env, market_id, &user, now - elapsed);
+            });
+            env.mock_all_auths();
+            let result = env.as_contract(&contract_id, || {
+                withdraw_unused_collateral(env.clone(), user.clone(), market_id, 500)
+            });
+            assert_eq!(
+                result == Err(ContractError::WithdrawCooldownActive),
+                expect_cooldown,
+                "elapsed {elapsed}s: {result:?}"
+            );
+        }
+    }
+
     /// A user who has never deposited (no `LastDepositTime` key) is not
     /// subject to any cooldown — the cooldown only applies after a deposit.
     #[test]
