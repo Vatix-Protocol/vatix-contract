@@ -229,6 +229,23 @@ mod share_collateral_invariants {
                 "locked={locked} > deposited={deposited} yes={yes_shares} no={no_shares} price={price}");
         }
 
+        /// Regression (#1209): `arb_valid_position` must only yield reachable
+        /// states. `locked` is recomputed from shares/price as `update_position`
+        /// does, and `deposited` is that lock plus slack in `0..=10_000_000`.
+        /// A generator that pairs independent shares with an arbitrary
+        /// `deposited` would produce `deposited - locked < 0` and fail here.
+        #[test]
+        fn prop_arb_valid_position_is_reachable_state(
+            (yes_shares, no_shares, price, deposited) in arb_valid_position()
+        ) {
+            let locked = positions::calculate_locked_collateral(yes_shares, no_shares, price);
+            let slack = deposited - locked;
+            prop_assert!(slack >= 0,
+                "trade locks more than is deposited: locked={locked} deposited={deposited} yes={yes_shares} no={no_shares} price={price}");
+            prop_assert!((0..=10_000_000).contains(&slack),
+                "slack out of strategy range: slack={slack} locked={locked} deposited={deposited}");
+        }
+
         /// Invariant: available = total_deposited - locked is always non-negative
         #[test]
         fn prop_available_non_negative(
