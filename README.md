@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1241 -->
 - #1241: Add a regression test for transfer_position in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1242 -->
+- #1242: Add a regression test for update_position in contracts/market/src/positions.rs
