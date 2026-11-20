@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1238 -->
 - #1238: Add a regression test for setup_resolved_market in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1239 -->
+- #1239: Add a regression test for calculate_locked_collateral in contracts/market/src/positions.rs
