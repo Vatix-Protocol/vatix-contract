@@ -185,84 +185,25 @@ impl StorageKey {
 
 // --- Market Storage ---
 
-pub fn get_market(env: &Env, market_id: u32) -> Result<Option<Market>, ContractError> {
-    assert_version(env)?;
-    Ok(env
-        .storage()
-        .persistent()
-        .get(&StorageKey::Market(market_id)))
-}
-
-pub fn set_market(env: &Env, market_id: u32, market: &Market) -> Result<(), ContractError> {
-    assert_version(env)?;
-    crate::validation::validate_outcome_count(market.outcome_count)?;
-    env.storage()
-        .persistent()
-        .set(&StorageKey::Market(market_id), market);
-    Ok(())
-}
-
 pub fn has_market(env: &Env, market_id: u32) -> Result<bool, ContractError> {
     assert_version(env)?;
     Ok(env
         .storage()
         .persistent()
-        .has(&StorageKey::Market(market_id)))
+        .has(&MoneyPathKey::Market(market_id)))
 }
 
 // --- Position Storage ---
-
-pub fn get_position(
-    env: &Env,
-    market_id: u32,
-    user: &Address,
-) -> Result<Option<Position>, ContractError> {
-    assert_version(env)?;
-    Ok(env
-        .storage()
-        .persistent()
-        .get(&StorageKey::Position(market_id, user.clone())))
-}
-
-pub fn set_position(
-    env: &Env,
-    market_id: u32,
-    user: &Address,
-    position: &Position,
-) -> Result<(), ContractError> {
-    assert_version(env)?;
-    env.storage()
-        .persistent()
-        .set(&StorageKey::Position(market_id, user.clone()), position);
-    Ok(())
-}
 
 pub fn has_position(env: &Env, market_id: u32, user: &Address) -> Result<bool, ContractError> {
     assert_version(env)?;
     Ok(env
         .storage()
         .persistent()
-        .has(&StorageKey::Position(market_id, user.clone())))
+        .has(&MoneyPathKey::Position(market_id, user.clone())))
 }
 
 // --- Protocol-wide Collateral (ADR-002, Issue #685) ---
-
-/// Return `user`'s protocol-wide collateral balance (the sum of everything
-/// they have deposited across every market via `deposit_collateral`).
-/// Defaults to `0` when the user has never deposited.
-pub fn get_collateral_balance(env: &Env, user: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::CollateralBalance(user.clone()))
-        .unwrap_or(0)
-}
-
-/// Set `user`'s protocol-wide collateral balance.
-pub fn set_collateral_balance(env: &Env, user: &Address, balance: i128) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::CollateralBalance(user.clone()), &balance);
-}
 
 /// Return the aggregate `locked_collateral` across every market for `user`.
 /// Defaults to `0` when the user has no open positions.
@@ -378,19 +319,8 @@ pub fn increment_market_id(env: &Env) -> Result<u32, ContractError> {
 
 // --- Treasury Storage ---
 
-pub fn get_treasury(env: &Env) -> Option<Address> {
-    env.storage().persistent().get(&StorageKey::Treasury)
-}
-
-/// Register (or replace) the treasury contract address for protocol fee routing.
-pub fn set_treasury(env: &Env, treasury: &Address) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::Treasury, treasury);
-}
-
 pub fn has_treasury(env: &Env) -> bool {
-    env.storage().persistent().has(&StorageKey::Treasury)
+    env.storage().persistent().has(&MoneyPathKey::Treasury)
 }
 
 pub fn get_pending_treasury(env: &Env) -> Option<crate::types::PendingAddressChange> {
@@ -443,19 +373,6 @@ pub fn clear_pending_outcome_token_contract(env: &Env) {
 
 // --- Deposit Timestamp Storage (issue #413) ---
 
-pub fn get_last_deposit_time(env: &Env, market_id: u32, user: &Address) -> Option<u64> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::LastDepositTime(market_id, user.clone()))
-}
-
-pub fn set_last_deposit_time(env: &Env, market_id: u32, user: &Address, timestamp: u64) {
-    env.storage().persistent().set(
-        &StorageKey::LastDepositTime(market_id, user.clone()),
-        &timestamp,
-    );
-}
-
 // --- Pending Renounce Storage (issue #414) ---
 
 pub fn has_pending_renounce(env: &Env) -> bool {
@@ -479,19 +396,6 @@ pub fn clear_admin(env: &Env) {
 }
 
 // --- Fee Config Storage ---
-
-pub fn get_fee_rate_bps(env: &Env) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::FeeRateBps)
-        .unwrap_or(DEFAULT_FEE_RATE_BPS)
-}
-
-pub fn set_fee_rate_bps(env: &Env, fee_rate_bps: i128) {
-    env.storage()
-        .persistent()
-        .set(&StorageKey::FeeRateBps, &fee_rate_bps);
-}
 
 // --- Pending Fee Rate Change / Timelock (Issue #496) ---
 
@@ -1310,32 +1214,6 @@ pub fn set_version(env: &Env) {
     );
 }
 
-/// Read a position row for `(market_id, user)`.
-pub fn get_position(
-    env: &Env,
-    market_id: u32,
-    user: &Address,
-) -> Result<Option<crate::types::Position>, crate::error::ContractError> {
-    Ok(env
-        .storage()
-        .persistent()
-        .get(&(Symbol::new(env, "position"), market_id, user.clone())))
-}
-
-/// Persist a position row for `(market_id, user)`.
-pub fn set_position(
-    env: &Env,
-    market_id: u32,
-    user: &Address,
-    position: &crate::types::Position,
-) -> Result<(), crate::error::ContractError> {
-    env.storage().persistent().set(
-        &(Symbol::new(env, "position"), market_id, user.clone()),
-        position,
-    );
-    Ok(())
-}
-
 /// Read the current fee-waiver list (empty when never written).
 pub fn get_fee_waivers(env: &Env) -> soroban_sdk::Vec<Address> {
     env.storage()
@@ -1492,6 +1370,7 @@ pub fn get_market_adapter_config(
 #[soroban_sdk::contracttype]
 enum MoneyPathKey {
     Market(u32),
+    Position(u32, Address),
     DepositLock,
     CollateralBalance(Address),
     TotalLockedCollateral(Address),
@@ -1514,6 +1393,7 @@ pub fn get_market(
     env: &Env,
     id: u32,
 ) -> Result<Option<crate::types::Market>, crate::error::ContractError> {
+    assert_version(env)?;
     Ok(env.storage().persistent().get(&MoneyPathKey::Market(id)))
 }
 
@@ -1522,9 +1402,36 @@ pub fn set_market(
     id: u32,
     market: &crate::types::Market,
 ) -> Result<(), crate::error::ContractError> {
+    assert_version(env)?;
+    crate::validation::validate_outcome_count(market.outcome_count)?;
     env.storage()
         .persistent()
         .set(&MoneyPathKey::Market(id), market);
+    Ok(())
+}
+
+pub fn get_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+) -> Result<Option<crate::types::Position>, crate::error::ContractError> {
+    assert_version(env)?;
+    Ok(env
+        .storage()
+        .persistent()
+        .get(&MoneyPathKey::Position(market_id, user.clone())))
+}
+
+pub fn set_position(
+    env: &Env,
+    market_id: u32,
+    user: &Address,
+    position: &crate::types::Position,
+) -> Result<(), crate::error::ContractError> {
+    assert_version(env)?;
+    env.storage()
+        .persistent()
+        .set(&MoneyPathKey::Position(market_id, user.clone()), position);
     Ok(())
 }
 
@@ -1636,7 +1543,7 @@ pub fn get_fee_rate_bps(env: &Env) -> i128 {
     env.storage()
         .persistent()
         .get(&MoneyPathKey::FeeRateBps)
-        .unwrap_or(0)
+        .unwrap_or(DEFAULT_FEE_RATE_BPS)
 }
 
 pub fn set_fee_rate_bps(env: &Env, rate: i128) {
