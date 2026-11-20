@@ -301,6 +301,39 @@ mod tests {
         });
     }
 
+    /// `add_fee_waiver` emits exactly one event for a real add, and none for
+    /// the idempotent duplicate or the cap-rejected paths.
+    #[test]
+    fn add_fee_waiver_emits_event_only_on_real_add() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract_id, admin) = setup(&env);
+
+        let waiver = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waiver).expect("add must succeed");
+        });
+        assert_eq!(env.events().all().len(), 1, "real add must emit one event");
+
+        env.as_contract(&contract_id, || {
+            add_fee_waiver(&env, &admin, &waiver).expect("duplicate add must not error");
+        });
+        assert_eq!(env.events().all().len(), 0, "duplicate add must emit no event");
+
+        for _ in 1..storage::MAX_FEE_WAIVERS {
+            let addr = Address::generate(&env);
+            env.as_contract(&contract_id, || {
+                add_fee_waiver(&env, &admin, &addr).expect("add must succeed under cap");
+            });
+        }
+        let overflow = Address::generate(&env);
+        let result = env.as_contract(&contract_id, || add_fee_waiver(&env, &admin, &overflow));
+        assert_eq!(result, Err(ContractError::FeeWaiverCapReached));
+        assert_eq!(env.events().all().len(), 0, "cap-rejected add must emit no event");
+        let present = env.as_contract(&contract_id, || has_fee_waiver(&env, &overflow));
+        assert!(!present, "cap-rejected add must not grant a waiver");
+    }
+
     #[test]
     fn test_non_admin_cannot_add_fee_waiver() {
         let env = Env::default();
