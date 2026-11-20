@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1260 -->
 - #1260: Add a regression test for prop_fee_rounding_near_max_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1261 -->
+- #1261: Add a regression test for prop_fee_rounding_max_bps_equals_amount in contracts/market/src/withdraw_fuzz.rs
