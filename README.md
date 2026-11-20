@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1214 -->
 - #1214: Add a regression test for prop_fee_on_top_boundary_is_exact in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1215 -->
+- #1215: Add a regression test for withdrawn_collateral_cannot_back_new_trades in contracts/market/src/withdraw_fuzz.rs
