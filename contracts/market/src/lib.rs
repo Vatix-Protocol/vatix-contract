@@ -353,8 +353,14 @@ impl MarketContract {
         let position = existing_position
             .clone()
             .unwrap_or_else(|| Position::new_empty(market_id, user.clone()));
-        let new_yes = position.yes_shares + yes_delta;
-        let new_no = position.no_shares + no_delta;
+        let new_yes = position
+            .yes_shares
+            .checked_add(yes_delta)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        let new_no = position
+            .no_shares
+            .checked_add(no_delta)
+            .ok_or(ContractError::ArithmeticOverflow)?;
         let locked_elsewhere = if new_yes >= 0 && new_no >= 0 {
             let prospective_locked =
                 positions::calculate_locked_collateral(new_yes, new_no, market_price);
@@ -402,6 +408,7 @@ impl MarketContract {
                 positions::PositionError::InsufficientProtocolCollateral => {
                     ContractError::InsufficientCollateral
                 }
+                positions::PositionError::ArithmeticOverflow => ContractError::ArithmeticOverflow,
                 _ => ContractError::InvalidShareAmount,
             })?;
 
