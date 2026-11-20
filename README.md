@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1262 -->
 - #1262: Add a regression test for prop_fee_rounding_zero_bps_is_always_zero in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1263 -->
+- #1263: Add a regression test for prop_waived_user_withdraws_full_available_fee_free in contracts/market/src/withdraw_fuzz.rs
