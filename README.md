@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1256 -->
 - #1256: Add a regression test for has_fee_waiver in contracts/market/src/fee_waiver.rs
+
+<!-- handsoff-issue-1257 -->
+- #1257: Add a regression test for prop_available_non_negative in contracts/market/src/withdraw_fuzz.rs
