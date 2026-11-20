@@ -211,6 +211,63 @@ proptest! {
     }
 }
 
+/// Focused regression for Invariant B (`prop_successful_withdraw_decrements_deposited`):
+/// with fee rate 0 and nothing locked, a withdraw of `amount` succeeds and lowers
+/// `total_deposited` by exactly `amount`; over-withdrawing fails and changes nothing.
+#[test]
+fn regression_successful_withdraw_decrements_deposited() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let user = Address::generate(&env);
+    let market_id = 1u32;
+    let token = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let collateral_token = token.address();
+    let contract_id = env.register(crate::MarketContract, ());
+    let deposited = 1_000i128;
+
+    let position = Position {
+        market_id,
+        user: user.clone(),
+        yes_shares: 0,
+        no_shares: 0,
+        locked_collateral: 0,
+        total_deposited: deposited,
+        is_settled: false,
+    };
+    env.as_contract(&contract_id, || {
+        storage::set_version(&env);
+        storage::set_market(&env, market_id, &make_market(&env, market_id, &collateral_token))
+            .unwrap();
+        storage::set_position(&env, market_id, &user, &position).unwrap();
+        storage::set_fee_rate_bps(&env, 0);
+    });
+    soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token)
+        .mint(&contract_id, &deposited);
+
+    let withdraw = |amount: i128| {
+        env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, amount)
+        })
+    };
+    let total_deposited = || {
+        env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user)
+                .unwrap()
+                .expect("position exists")
+                .total_deposited
+        })
+    };
+
+    // Failure path: more than available is rejected and leaves the position untouched.
+    assert!(withdraw(deposited + 1).is_err());
+    assert_eq!(total_deposited(), deposited);
+
+    // Success path: decreases by exactly `amount`.
+    assert!(withdraw(400).is_ok());
+    assert_eq!(total_deposited(), deposited - 400);
+}
+
 /// Share and collateral invariants - #351
 mod share_collateral_invariants {
     use super::*;
