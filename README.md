@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1258 -->
 - #1258: Add a regression test for prop_fee_rounding_never_overflows_or_exceeds_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1259 -->
+- #1259: Add a regression test for prop_fee_rounding_near_zero_amount in contracts/market/src/withdraw_fuzz.rs
