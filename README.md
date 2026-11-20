@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1249 -->
 - #1249: Add a regression test for emit_market_canceled in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1250 -->
+- #1250: Add a regression test for emit_market_reopened in contracts/market/src/events.rs
