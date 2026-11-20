@@ -2015,4 +2015,54 @@ mod tests {
         assert_eq!(admin_val, admin);
         assert_eq!(closed_at_val, closed_at);
     }
+
+    #[test]
+    fn test_emit_market_oracle_updated() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+        let admin = Address::generate(&env);
+        let market_id = 7u32;
+        let old_key = BytesN::from_array(&env, &[1u8; 32]);
+        let new_key = BytesN::from_array(&env, &[2u8; 32]);
+        let updated_at = 1_700_000_000u64;
+
+        env.as_contract(&contract_id, || {
+            emit_market_oracle_updated(&env, market_id, &admin, &old_key, &new_key, updated_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+        assert_eq!(topics.len(), 3);
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "market_oracle_updated"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
+        let old_val: BytesN<32> = data
+            .get(Symbol::new(&env, "old_oracle_pubkey"))
+            .unwrap()
+            .into_val(&env);
+        let new_val: BytesN<32> = data
+            .get(Symbol::new(&env, "new_oracle_pubkey"))
+            .unwrap()
+            .into_val(&env);
+        let updated_val: u64 = data
+            .get(Symbol::new(&env, "updated_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(admin_val, admin);
+        assert_eq!(old_val, old_key);
+        assert_eq!(new_val, new_key);
+        assert_eq!(updated_val, updated_at);
+    }
 }
