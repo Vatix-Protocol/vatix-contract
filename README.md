@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1217 -->
 - #1217: Add a regression test for validate_collateral_token in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1218 -->
+- #1218: Add a regression test for validate_fee_rate_bps in contracts/market/src/validation.rs
