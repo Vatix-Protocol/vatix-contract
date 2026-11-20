@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1237 -->
 - #1237: Add a regression test for settle_position in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1238 -->
+- #1238: Add a regression test for setup_resolved_market in contracts/market/src/settlement.rs
