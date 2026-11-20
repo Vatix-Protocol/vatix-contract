@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1242 -->
 - #1242: Add a regression test for update_position in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1243 -->
+- #1243: Add a regression test for prop_locked_collateral_zero_shares_is_zero in contracts/market/src/positions.rs
