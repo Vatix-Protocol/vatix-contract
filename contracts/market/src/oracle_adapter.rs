@@ -456,6 +456,25 @@ mod tests {
         Bytes::from_slice(env, &[0xde, 0xad, 0xbe, 0xef])
     }
 
+    // ---- MockPyth call-ordering regression tests ----
+
+    /// #1200: `MockPyth::get_price` is documented to panic when reached
+    /// before `update_price_feeds` — the real Pyth receiver only has a
+    /// verified price to serve once the VAA has been submitted, so a first
+    /// call to `get_price` would mean `PythAdapter` skipped the update step
+    /// (#717). Pin that failure path directly: call `get_price` before any
+    /// update and assert the mock panics rather than serving a default price.
+    #[test]
+    #[should_panic]
+    fn pyth_get_price_panics_when_called_before_update_price_feeds() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+
+        // No `set_price`/`update_price_feeds` has run — `get_price` must panic.
+        let _ = mock_client.get_price(&BytesN::from_array(&env, &[0u8; 32]));
+    }
+
     // ---- PythAdapter tests ----
 
     #[test]
