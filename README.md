@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1216 -->
 - #1216: Add a regression test for repeated_round_trips_at_max_fee_stay_non_negative in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1217 -->
+- #1217: Add a regression test for validate_collateral_token in contracts/market/src/validation.rs
