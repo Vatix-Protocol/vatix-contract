@@ -1989,6 +1989,7 @@ mod tests {
 
         let event = events.first().unwrap();
         let topics = &event.1;
+        assert_eq!(topics.len(), 4);
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "fee_calculated"));
@@ -1998,6 +1999,9 @@ mod tests {
 
         let topic2: u32 = topics.get(2).unwrap().into_val(&env);
         assert_eq!(topic2, market_id);
+
+        let topic3: Address = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, user);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let fee_val: i128 = data
