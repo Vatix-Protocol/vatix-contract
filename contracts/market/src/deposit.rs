@@ -45,9 +45,9 @@ impl<'a> Drop for DepositReentrancyGuard<'a> {
 ///
 /// # Detailed Flow
 /// 1. **Authorization**: Verify user signed this transaction
-/// 2. **Validation**: Check amount, market existence, market status
-/// 3. **Token Transfer**: Move USDC from user to contract (ATOMIC POINT)
-/// 4. **State Update**: Persist position and collateral data
+/// 2. **Validation**: Check emergency mode, reentrancy lock, amount, market existence, market status
+/// 3. **State Update**: Persist position and collateral data (before the transfer, Issue #695)
+/// 4. **Token Transfer**: Move USDC from user to contract (external call, last state-changing step)
 /// 5. **Event Emission**: Publish CollateralDeposited event
 ///
 /// # Arguments
@@ -62,6 +62,9 @@ impl<'a> Drop for DepositReentrancyGuard<'a> {
 /// # Errors
 /// - `MarketNotFound`: market_id doesn't exist in storage
 /// - `MarketNotActive`: Market is resolved or cancelled
+/// - `MarketClosedToDeposits`: Market is closed to deposits
+/// - `MarketExpired`: ledger timestamp is at or past market end_time
+/// - `ReentrantCall`: a deposit is already in progress
 /// - `InvalidQuantity`: amount <= 0 or exceeds max
 /// - `BelowMinDeposit`: amount is below `MIN_DEPOSIT_AMOUNT`
 /// - `TokenTransferFailed`: USDC transfer failed (insufficient balance, etc.)
