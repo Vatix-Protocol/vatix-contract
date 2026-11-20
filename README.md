@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1212 -->
 - #1212: Add a regression test for prop_withdraw_preserves_locked_invariant in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1213 -->
+- #1213: Add a regression test for prop_deposit_withdraw_sequence_never_underflows in contracts/market/src/withdraw_fuzz.rs
