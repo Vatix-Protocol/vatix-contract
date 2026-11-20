@@ -582,6 +582,14 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_locked_collateral_hedged_vs_net_at_same_price() {
+        let shares = 100 * STROOPS_PER_USDC;
+        assert_eq!(calculate_locked_collateral(shares, shares, 6_000), 0);
+        assert_eq!(calculate_locked_collateral(shares, 0, 6_000), 60 * STROOPS_PER_USDC);
+        assert_eq!(calculate_locked_collateral(0, shares, 6_000), 40 * STROOPS_PER_USDC);
+    }
+
+    #[test]
     fn test_validate_position_change() {
         let env = setup_env();
         let position = Position {
