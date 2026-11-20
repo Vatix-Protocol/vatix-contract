@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1264 -->
 - #1264: Add a regression test for waived_user_withdraws_full_available_balance_deterministic in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1265 -->
+- #1265: Add a regression test for validate_collateral_amount in contracts/market/src/validation.rs
