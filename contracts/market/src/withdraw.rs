@@ -84,6 +84,11 @@ pub const LARGE_WITHDRAW_THRESHOLD: i128 = 1_000_000_0000000;
 /// is `amount + fee ≤ available`, so the user always receives exactly `amount`
 /// and the fee is deducted on top — it is never silently subtracted from the
 /// requested amount.
+///
+/// Example: withdrawing 1_000_000_0000 stroops at 100 bps charges a fee of
+/// 10_000_0000, so 1_010_000_0000 must be available and exactly
+/// 1_000_000_0000 is transferred to the user. A fee-waived account pays a fee
+/// of 0, so only `amount` must be available.
 pub fn withdraw_unused_collateral(
     env: Env,
     user: Address,
