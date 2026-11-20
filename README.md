@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1220 -->
 - #1220: Add a regression test for verify_via_reflector in contracts/market/src/oracle.rs
+
+<!-- handsoff-issue-1222 -->
+- #1222: Add a regression test for get_authorized_markets in contracts/treasury/src/storage.rs
