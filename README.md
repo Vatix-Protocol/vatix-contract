@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1250 -->
 - #1250: Add a regression test for emit_market_reopened in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1251 -->
+- #1251: Add a regression test for emit_oracle_signature_verified in contracts/market/src/events.rs
