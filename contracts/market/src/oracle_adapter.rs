@@ -588,6 +588,44 @@ mod tests {
         );
     }
 
+    /// Regression test for `MockPyth::update_count` (#1198): it must report the
+    /// *number of times* `update_price_feeds` has been invoked — not merely
+    /// whether it has run at least once — and the empty-proof path (#1014)
+    /// must reject before that counter ever moves.
+    #[test]
+    fn update_count_tracks_invocations_and_empty_proof_skips_call() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+
+        // Fresh mock: no cross-contract call has happened yet.
+        assert_eq!(mock_client.update_count(), 0);
+
+        // Each invocation must increment the counter (a boolean "called at
+        // least once" flag would fail this).
+        mock_client.update_price_feeds(&vaa_bytes(&env));
+        assert_eq!(mock_client.update_count(), 1);
+        mock_client.update_price_feeds(&vaa_bytes(&env));
+        assert_eq!(mock_client.update_count(), 2);
+
+        // Failure path (#1014): an empty proof must reject *before* the
+        // cross-contract call, so the counter must not move.
+        let adapter = PythAdapter {
+            contract_id: contract_id.clone(),
+            price_feed_id: BytesN::from_array(&env, &[0u8; 32]),
+            resolution_price: 500,
+        };
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
+            Err(ContractError::InvalidSignature)
+        );
+        assert_eq!(
+            mock_client.update_count(),
+            2,
+            "update_price_feeds must not be called when proof is empty"
+        );
+    }
+
     // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
 
     #[test]
