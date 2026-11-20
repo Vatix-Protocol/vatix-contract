@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1224 -->
 - #1224: Add a regression test for transfer_admin in contracts/treasury/src/lib.rs
+
+<!-- handsoff-issue-1225 -->
+- #1225: Add a regression test for add_market in contracts/treasury/src/lib.rs
