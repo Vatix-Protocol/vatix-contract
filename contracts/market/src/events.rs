@@ -1662,6 +1662,33 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_market_voided_is_distinct_from_market_canceled() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+        let actor = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            emit_market_voided(&env, 7, &actor, 100);
+        });
+        let events = env.events().all();
+        // A void publishes exactly one event, and it is not `market_canceled`.
+        assert_eq!(events.len(), 1);
+        let void_topic: Symbol = events.first().unwrap().1.get(0).unwrap().into_val(&env);
+
+        let env2 = Env::default();
+        let contract_id2 = env2.register(MarketContract, ());
+        let actor2 = Address::generate(&env2);
+        env2.as_contract(&contract_id2, || {
+            emit_market_canceled(&env2, 7, &actor2, 100);
+        });
+        let cancel_topic: Symbol = env2.events().all().first().unwrap().1.get(0).unwrap().into_val(&env2);
+
+        assert_eq!(void_topic, Symbol::new(&env, "market_voided"));
+        assert_eq!(cancel_topic, Symbol::new(&env2, "market_canceled"));
+        assert_ne!(void_topic.to_string(), cancel_topic.to_string());
+    }
+
+    #[test]
     fn test_emit_position_updated() {
         let env = Env::default();
         let contract_id = env.register(MarketContract, ());
