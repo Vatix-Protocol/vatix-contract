@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1240 -->
 - #1240: Add a regression test for check_protocol_collateral in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1241 -->
+- #1241: Add a regression test for transfer_position in contracts/market/src/positions.rs
