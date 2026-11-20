@@ -19,6 +19,8 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// The updated position could not be persisted to storage.
+    StorageError = 4,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -69,14 +71,21 @@ pub fn calculate_locked_collateral(yes_shares: i128, no_shares: i128, market_pri
 ///
 /// # Errors
 /// Returns [`PositionError::ShareBalanceBelowZero`] when `yes_delta` or
-/// `no_delta` would leave either share balance negative.
+/// `no_delta` would leave either share balance negative, or
+/// [`PositionError::ArithmeticOverflow`] when the addition would overflow i128.
 pub fn validate_position_change(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
 ) -> Result<(), PositionError> {
-    let new_yes = current_position.yes_shares + yes_delta;
-    let new_no = current_position.no_shares + no_delta;
+    let new_yes = current_position
+        .yes_shares
+        .checked_add(yes_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
+    let new_no = current_position
+        .no_shares
+        .checked_add(no_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
 
     if new_yes < 0 || new_no < 0 {
         return Err(PositionError::ShareBalanceBelowZero);
@@ -114,18 +123,24 @@ pub fn check_protocol_collateral(
 
 /// Determine which side exceeded the allowed position limits.
 ///
-/// Returns `true` when the YES side would underflow, or `false` when the NO
-/// side would underflow.
+/// Returns `true` when the YES side would underflow or overflow, or `false`
+/// when the NO side would underflow or overflow instead.
 fn position_limit_exceeded_side(
     current_position: &Position,
     yes_delta: i128,
     no_delta: i128,
 ) -> bool {
-    let new_yes = current_position.yes_shares + yes_delta;
-    let new_no = current_position.no_shares + no_delta;
+    let yes_exceeded = current_position
+        .yes_shares
+        .checked_add(yes_delta)
+        .map_or(true, |new_yes| new_yes < 0);
+    let no_exceeded = current_position
+        .no_shares
+        .checked_add(no_delta)
+        .map_or(true, |new_no| new_no < 0);
 
     #[allow(clippy::nonminimal_bool)]
-    let result = new_yes < 0 || (new_no < 0 && new_yes >= 0);
+    let result = yes_exceeded || (no_exceeded && !yes_exceeded);
     result
 }
 
@@ -392,6 +407,9 @@ pub fn merge_positions(
 ///
 /// # Errors
 /// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
+/// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
+/// - [`PositionError::ArithmeticOverflow`] if applying a delta would overflow i128
+/// - [`PositionError::StorageError`] if the updated position cannot be persisted
 pub fn update_position(
     env: &Env,
     market_id: u32,
@@ -426,17 +444,25 @@ pub fn update_position(
     }
 
     // 3. Apply deltas
-    position.yes_shares += yes_delta;
-    position.no_shares += no_delta;
+    position.yes_shares = position
+        .yes_shares
+        .checked_add(yes_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
+    position.no_shares = position
+        .no_shares
+        .checked_add(no_delta)
+        .ok_or(PositionError::ArithmeticOverflow)?;
 
     // 4. Recalculate locked collateral
     let new_locked =
         calculate_locked_collateral(position.yes_shares, position.no_shares, market_price);
     position.locked_collateral = new_locked;
 
-    // 5. Persist
+    // 5. Persist. Propagate storage failures (e.g. a failed `assert_version`)
+    //    so a position that was not written is never reported as a success and
+    //    no trade events are emitted for it.
     crate::storage::set_position(env, market_id, user, &position)
-        .unwrap_or_default();
+        .map_err(|_| PositionError::StorageError)?;
 
     // 6. Emit position_updated event
     emit_position_updated(
@@ -759,6 +785,207 @@ mod tests {
         assert_eq!(switched.yes_shares + switched.no_shares, 100 * STROOPS_PER_USDC);
         assert_eq!(switched.yes_shares, 0);
         assert_eq!(switched.no_shares, 100 * STROOPS_PER_USDC);
+    }
+
+    /// Build a position with explicit values for use in `merge_positions` tests.
+    fn test_position(
+        market_id: u32,
+        user: Address,
+        yes_shares: i128,
+        no_shares: i128,
+        locked_collateral: i128,
+        total_deposited: i128,
+        is_settled: bool,
+    ) -> Position {
+        Position {
+            market_id,
+            user,
+            yes_shares,
+            no_shares,
+            locked_collateral,
+            total_deposited,
+            is_settled,
+        }
+    }
+
+    #[test]
+    fn test_merge_positions_combines_into_primary_and_zeroes_other() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 0, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 0, 60, false),
+            )
+            .unwrap();
+
+            merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1)
+                .expect("merge should succeed");
+
+            let primary_after =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_after =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+            // Netting: 100 YES + 40 YES, 30 NO + 20 NO.
+            assert_eq!(primary_after.yes_shares, 140);
+            assert_eq!(primary_after.no_shares, 50);
+            // Summed deposits: 200 + 60.
+            assert_eq!(primary_after.total_deposited, 260);
+            // Net YES 90 at 50% price locks 45.
+            assert_eq!(primary_after.locked_collateral, 45);
+            assert!(!primary_after.is_settled);
+
+            // The merged position is zeroed out.
+            assert_eq!(other_after.yes_shares, 0);
+            assert_eq!(other_after.no_shares, 0);
+            assert_eq!(other_after.total_deposited, 0);
+            assert_eq!(other_after.locked_collateral, 0);
+            assert!(!other_after.is_settled);
+        });
+    }
+
+    #[test]
+    fn test_merge_positions_fails_closed_on_settled_position() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 35, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 20, 60, true),
+            )
+            .unwrap();
+
+            let primary_before =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_before =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+            let result =
+                merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1);
+            assert_eq!(result, Err(PositionError::InvalidPositionState));
+
+            let primary_after =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_after =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+            // Fail-closed: neither position is touched on a validation error.
+            assert_eq!(primary_after, primary_before);
+            assert_eq!(other_after, other_before);
+        });
+    }
+
+    #[test]
+    fn test_merge_positions_rejects_unauthorized_caller() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let intruder = sample_user(&env, 4);
+        let market_id = 42;
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 35, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 20, 60, false),
+            )
+            .unwrap();
+
+            let primary_before =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_before =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+            let result =
+                merge_positions(&env, market_id, &owner, &primary, &other, &intruder, 5_000, 1);
+            assert_eq!(result, Err(PositionError::Unauthorized));
+
+            let primary_after =
+                crate::storage::get_position(&env, market_id, &primary).unwrap().unwrap();
+            let other_after =
+                crate::storage::get_position(&env, market_id, &other).unwrap().unwrap();
+
+            // Fail-closed: neither position is touched on an auth failure.
+            assert_eq!(primary_after, primary_before);
+            assert_eq!(other_after, other_before);
+        });
+    }
+
+    #[test]
+    fn test_merge_positions_rejects_duplicate_request_id() {
+        let env = setup_env();
+        let contract_id = env.register(crate::MarketContract, ());
+        let owner = sample_user(&env, 1);
+        let primary = sample_user(&env, 2);
+        let other = sample_user(&env, 3);
+        let market_id = 42;
+
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &primary,
+                &test_position(market_id, primary.clone(), 100, 30, 0, 200, false),
+            )
+            .unwrap();
+            crate::storage::set_position(
+                &env,
+                market_id,
+                &other,
+                &test_position(market_id, other.clone(), 40, 20, 0, 60, false),
+            )
+            .unwrap();
+
+            merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1)
+                .expect("first merge should succeed");
+
+            let result =
+                merge_positions(&env, market_id, &owner, &primary, &other, &owner, 5_000, 1);
+            assert_eq!(result, Err(PositionError::DuplicateRequest));
+        });
     }
 }
 

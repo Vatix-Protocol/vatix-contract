@@ -8,6 +8,7 @@ import { TxResult } from "@/components/TxResult";
 import { useToast } from "@/context/ToastContext";
 import { parseContractError } from "@/lib/errors";
 import { toStroops, fromStroops } from "@/lib/stroops";
+import { isValidMarketId } from "@/lib/market-helpers";
 
 interface WithdrawFormProps {
   /**
@@ -29,7 +30,7 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
   const [available, setAvailable] = useState<bigint | null>(null);
 
   const refreshAvailable = useCallback(() => {
-    if (address && marketId && !isNaN(parseInt(marketId))) {
+    if (address && isValidMarketId(marketId)) {
       return getPosition(parseInt(marketId), address)
         .then((pos) => {
           if (pos) {
@@ -53,6 +54,12 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
     e.preventDefault();
     if (!address) {
       setError("Connect your Freighter wallet first.");
+      return;
+    }
+
+    // parseInt would silently truncate "1.5" to 1 and turn "1e2" into 100.
+    if (!isValidMarketId(marketId)) {
+      setError("Market ID must be a whole number.");
       return;
     }
 
@@ -86,10 +93,10 @@ export function WithdrawForm({ onSuccess }: WithdrawFormProps) {
         return;
       }
       
-      // Prepare contract arguments for withdraw_unused_collateral(market_id: u32, user: Address, amount: i128)
+      // Prepare contract arguments for withdraw_unused_collateral(user: Address, market_id: u32, amount: i128)
       const args = [
-        u32ToScVal(parseInt(marketId)),
         addressToScVal(address),
+        u32ToScVal(parseInt(marketId)),
         amountToScVal(amountInStroopsStr),
       ];
 

@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32ToScVal } from "@/lib/contract-client";
+import { toStroops } from "@/lib/stroops";
 import { TxResult } from "@/components/TxResult";
 import { useToast } from "@/context/ToastContext";
 import { parseContractError } from "@/lib/errors";
+import { isValidMarketId } from "@/lib/market-helpers";
 
 interface DepositFormProps {
   /** Pre-select a market. When provided the market ID field is hidden. */
@@ -33,6 +35,12 @@ export function DepositForm({ marketId: marketIdProp, onSuccess }: DepositFormPr
       return;
     }
 
+    // parseInt would silently truncate "1.5" to 1 and turn "1e2" into 100.
+    if (!isValidMarketId(marketId)) {
+      setError("Market ID must be a whole number.");
+      return;
+    }
+
     if (!MARKET_CONTRACT_ID) {
       setError("Market contract ID not configured. Set NEXT_PUBLIC_MARKET_CONTRACT_ID in .env.local");
       return;
@@ -43,10 +51,13 @@ export function DepositForm({ marketId: marketIdProp, onSuccess }: DepositFormPr
     setTxHash(null);
 
     try {
-      const amountInStroops = Math.floor(parseFloat(amount) * 10_000_000).toString();
+      // Convert the amount to stroops with BigInt-safe math so precision
+      // isn't lost for fractional amounts like `0.10` (#1179).
+      const amountInStroops = toStroops(amount).toString();
+      // deposit_collateral(user: Address, market_id: u32, amount: i128)
       const args = [
-        u32ToScVal(parseInt(marketId)),
         addressToScVal(address),
+        u32ToScVal(parseInt(marketId)),
         amountToScVal(amountInStroops),
       ];
 

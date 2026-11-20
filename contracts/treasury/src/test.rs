@@ -504,3 +504,35 @@ fn withdraw_fees_rejects_amount_above_balance_with_insufficient_balance_error() 
     assert_eq!(s.client.token_balance(&s.token), funded);
     assert_eq!(balance(&s.env, &s.token, &recipient), 0);
 }
+
+// ── Issue #1190: withdraw_fees rejects non-admin, bad amounts, overdraw ──
+
+/// A non-admin caller gets `Unauthorized`, a non-positive amount gets
+/// `InvalidAmount`, and an amount above the balance gets
+/// `InsufficientBalance`; the stored balance is unchanged after each.
+#[test]
+fn withdraw_fees_rejects_non_admin_invalid_amount_and_overdraw_without_changing_balance() {
+    let s = setup();
+    let funded = 1_000i128;
+    fund_treasury_via_fee(&s, funded);
+
+    let stranger = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+
+    let cases = [
+        (&stranger, 100i128, TreasuryError::Unauthorized),
+        (&s.admin, 0i128, TreasuryError::InvalidAmount),
+        (&s.admin, -1i128, TreasuryError::InvalidAmount),
+        (&s.admin, funded + 1, TreasuryError::InsufficientBalance),
+    ];
+    for (caller, amount, expected) in cases {
+        let err = s
+            .client
+            .try_withdraw_fees(caller, &s.token, &recipient, &amount)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, expected);
+        assert_eq!(s.client.token_balance(&s.token), funded);
+        assert_eq!(balance(&s.env, &s.token, &recipient), 0);
+    }
+}

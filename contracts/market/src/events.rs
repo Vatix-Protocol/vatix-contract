@@ -1891,6 +1891,45 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_withdraw_edge_case() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let user = Address::generate(&env);
+        let amount = 1_000_000i128;
+
+        env.as_contract(&contract_id, || {
+            emit_withdraw_edge_case(&env, &user, market_id, amount);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "withdraw_edge_case"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, user);
+
+        let topic3: u32 = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let amount_val: i128 = data
+            .get(Symbol::new(&env, "amount"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(amount_val, amount);
+    }
+
+    #[test]
     fn test_emit_oracle_signature_verified() {
         let env = Env::default();
         let contract_id = env.register(MarketContract, ());
@@ -1950,6 +1989,7 @@ mod tests {
 
         let event = events.first().unwrap();
         let topics = &event.1;
+        assert_eq!(topics.len(), 4);
 
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         assert_eq!(topic0, Symbol::new(&env, "fee_calculated"));
@@ -1959,6 +1999,9 @@ mod tests {
 
         let topic2: u32 = topics.get(2).unwrap().into_val(&env);
         assert_eq!(topic2, market_id);
+
+        let topic3: Address = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, user);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
         let fee_val: i128 = data
@@ -1971,6 +2014,51 @@ mod tests {
             .into_val(&env);
         assert_eq!(fee_val, fee_amount);
         assert_eq!(available_val, available_after_fee);
+    }
+
+    #[test]
+    fn test_emit_fee_retained_no_treasury() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 7u32;
+        let user = Address::generate(&env);
+        let fee_amount = 500i128; // non-zero fee retained in the contract
+
+        env.as_contract(&contract_id, || {
+            emit_fee_retained_no_treasury(&env, market_id, &user, fee_amount);
+        });
+
+        // Exactly one event: the retained fee must be observable on-chain.
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.0, contract_id);
+
+        let topics = &event.1;
+        assert_eq!(topics.len(), 4);
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "fee_retained_no_treasury"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        let topic3: Address = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, user);
+
+        // Data carries the full retained fee (never dropped or burned).
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        assert_eq!(data.len(), 1);
+        let fee_val: i128 = data
+            .get(Symbol::new(&env, "fee_amount"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(fee_val, fee_amount);
     }
 
     /// #710: `market_closed_to_deposits` must expose the canonical topic set
@@ -2007,6 +2095,9 @@ mod tests {
         assert_eq!(topic2, market_id);
 
         let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        // Pin the full documented payload: exactly `admin` and `closed_at`, so a
+        // change that drops (or adds) a field fails this focused regression test.
+        assert_eq!(data.len(), 2);
         let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
         let closed_at_val: u64 = data
             .get(Symbol::new(&env, "closed_at"))
@@ -2014,5 +2105,55 @@ mod tests {
             .into_val(&env);
         assert_eq!(admin_val, admin);
         assert_eq!(closed_at_val, closed_at);
+    }
+
+    #[test]
+    fn test_emit_market_oracle_updated() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+        let admin = Address::generate(&env);
+        let market_id = 7u32;
+        let old_key = BytesN::from_array(&env, &[1u8; 32]);
+        let new_key = BytesN::from_array(&env, &[2u8; 32]);
+        let updated_at = 1_700_000_000u64;
+
+        env.as_contract(&contract_id, || {
+            emit_market_oracle_updated(&env, market_id, &admin, &old_key, &new_key, updated_at);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+        assert_eq!(topics.len(), 3);
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "market_oracle_updated"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let admin_val: Address = data.get(Symbol::new(&env, "admin")).unwrap().into_val(&env);
+        let old_val: BytesN<32> = data
+            .get(Symbol::new(&env, "old_oracle_pubkey"))
+            .unwrap()
+            .into_val(&env);
+        let new_val: BytesN<32> = data
+            .get(Symbol::new(&env, "new_oracle_pubkey"))
+            .unwrap()
+            .into_val(&env);
+        let updated_val: u64 = data
+            .get(Symbol::new(&env, "updated_at"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(admin_val, admin);
+        assert_eq!(old_val, old_key);
+        assert_eq!(new_val, new_key);
+        assert_eq!(updated_val, updated_at);
     }
 }

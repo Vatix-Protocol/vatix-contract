@@ -169,6 +169,8 @@ pub fn withdraw_unused_collateral(
         .checked_sub(total_deducted)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
+    // Protocol-wide balance must drop too, or a later trade could lock tokens already paid out.
+    storage::debit_collateral_balance(&env, &user, total_deducted)?;
     storage::set_position(&env, market_id, &user, &position)?;
 
     // 8. Route fee to treasury if one is registered (External Calls)
@@ -500,6 +502,58 @@ mod tests {
             withdraw_unused_collateral(env.clone(), user.clone(), market_id, 48)
         });
         assert_eq!(result, Err(ContractError::InsufficientCollateral));
+    }
+
+    /// #376/#377: the fee-inclusive boundary. `amount + fee` may equal `available`
+    /// (leaving exactly the locked amount), but one unit more must be rejected.
+    #[test]
+    fn test_withdraw_fee_inclusive_boundary_respects_locked_collateral() {
+        use soroban_sdk::token::StellarAssetClient;
+        let env = setup_env();
+        let user = Address::generate(&env);
+        let market_id = 1u32;
+        let token_admin = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(token_admin).address();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market = create_test_market(&env, market_id, &token);
+        // locked=50, total=100 → available=50, fee 10%
+        let position = Position {
+            market_id,
+            user: user.clone(),
+            yes_shares: 0,
+            no_shares: 0,
+            locked_collateral: 50,
+            total_deposited: 100,
+            is_settled: false,
+        };
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            storage::set_market(&env, market_id, &market).unwrap();
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+            storage::set_fee_rate_bps(&env, 1_000);
+        });
+        env.mock_all_auths();
+        StellarAssetClient::new(&env, &token).mint(&contract_id, &200);
+        // Withdraw 47: fee=4, total_required=51 > available=50 → rejected, state untouched
+        let rejected = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 47)
+        });
+        assert_eq!(rejected, Err(ContractError::InsufficientCollateral));
+        let unchanged = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(unchanged.total_deposited, 100);
+        // Withdraw 46: fee=4, total_required=50 == available → succeeds,
+        // and total_deposited lands exactly on the locked amount.
+        let accepted = env.as_contract(&contract_id, || {
+            withdraw_unused_collateral(env.clone(), user.clone(), market_id, 46)
+        });
+        assert!(accepted.is_ok());
+        let updated = env.as_contract(&contract_id, || {
+            storage::get_position(&env, market_id, &user).unwrap().unwrap()
+        });
+        assert_eq!(updated.total_deposited, 50);
+        assert_eq!(updated.locked_collateral, 50);
     }
 
     #[test]
