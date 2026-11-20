@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1230 -->
 - #1230: Add a regression test for list_markets in contracts/treasury/src/lib.rs
+
+<!-- handsoff-issue-1231 -->
+- #1231: Add a regression test for arbitrate_uphold_proposer in contracts/resolution/src/lib.rs
