@@ -1973,6 +1973,51 @@ mod tests {
         assert_eq!(available_val, available_after_fee);
     }
 
+    #[test]
+    fn test_emit_fee_retained_no_treasury() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 7u32;
+        let user = Address::generate(&env);
+        let fee_amount = 500i128; // non-zero fee retained in the contract
+
+        env.as_contract(&contract_id, || {
+            emit_fee_retained_no_treasury(&env, market_id, &user, fee_amount);
+        });
+
+        // Exactly one event: the retained fee must be observable on-chain.
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        assert_eq!(event.0, contract_id);
+
+        let topics = &event.1;
+        assert_eq!(topics.len(), 4);
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "fee_retained_no_treasury"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: u32 = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, market_id);
+
+        let topic3: Address = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, user);
+
+        // Data carries the full retained fee (never dropped or burned).
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        assert_eq!(data.len(), 1);
+        let fee_val: i128 = data
+            .get(Symbol::new(&env, "fee_amount"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(fee_val, fee_amount);
+    }
+
     /// #710: `market_closed_to_deposits` must expose the canonical topic set
     /// off-chain indexer mappings key on — `[event_name, version, market_id]`
     /// — with `admin` and `closed_at` in the data payload. Locks the wire
