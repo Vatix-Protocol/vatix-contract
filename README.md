@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1266 -->
 - #1266: Add a regression test for validate_cancelable in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1267 -->
+- #1267: Add a regression test for calculate_fee in contracts/market/src/validation.rs
