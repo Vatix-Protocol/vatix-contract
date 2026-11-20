@@ -95,6 +95,7 @@ update_position(user, market_id, -yes_delta, 0, price)
 | Auth required | `Treasury` checks `caller == authorized_market_contract` |
 | Failure behaviour | If `collect_fee` reverts the token transfer also reverts (same transaction) |
 | Registration | `MarketContract::set_treasury(admin, address)` + `MarketContract::set_fee_rate(admin, bps)` |
+| Treasury unset (fee > 0) | No transfer and no call. The withdrawal still succeeds and the user receives `amount`. The fee stays in the market contract's collateral token balance and `fee_retained_no_treasury` is emitted |
 
 ```
 withdraw_unused_collateral(user, market_id, amount)
