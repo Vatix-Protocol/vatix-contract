@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1265 -->
 - #1265: Add a regression test for validate_collateral_amount in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1266 -->
+- #1266: Add a regression test for validate_cancelable in contracts/market/src/validation.rs
