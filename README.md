@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1226 -->
 - #1226: Add a regression test for remove_market in contracts/treasury/src/lib.rs
+
+<!-- handsoff-issue-1227 -->
+- #1227: Add a regression test for set_market_contract in contracts/treasury/src/lib.rs
