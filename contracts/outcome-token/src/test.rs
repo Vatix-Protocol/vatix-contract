@@ -407,7 +407,7 @@ fn pause_blocks_mint_burn_and_transfer_then_unpause_restores_mint_and_burn() {
     // it above.
     assert_eq!(
         client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
-        Err(Ok(ContractError::MarketNotResolved))
+        Err(Ok(ContractError::TransfersDisabled))
     );
 }
 

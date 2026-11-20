@@ -74,4 +74,8 @@ pub enum ContractError {
     /// renderers.  Enforced on every entrypoint that sets or updates outcome
     /// metadata (Issue #958).
     NameTooLong = 18,
+    /// A peer-to-peer `transfer` was attempted while the market is still
+    /// active. Outcome-token transfers are disabled by design; they stay
+    /// disabled until the transfer policy is changed.
+    TransfersDisabled = 19,
 }
