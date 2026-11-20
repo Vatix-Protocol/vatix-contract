@@ -652,3 +652,57 @@ fn first_initialize_succeeds() {
     assert_eq!(client.get_config().admin, admin);
     assert_eq!(client.name(), String::from_str(&env, "Vatix Outcome Token"));
 }
+
+#[test]
+fn initialize_cannot_run_twice() {
+    let env = Env::default();
+    let (client, admin, market) = setup(&env);
+
+    let other = Address::generate(&env);
+    let result = client.try_initialize(
+        &other,
+        &market,
+        &String::from_str(&env, "Other"),
+        &String::from_str(&env, "OTH"),
+    );
+    assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
+    assert_eq!(client.get_config().admin, admin);
+}
+
+#[test]
+fn initialize_rejects_empty_and_oversized_metadata_before_writing_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let market = Address::generate(&env);
+    let contract_id = env.register(OutcomeTokenContract, ());
+    let client = OutcomeTokenContractClient::new(&env, &contract_id);
+
+    let long_name = String::from_bytes(&env, &[b'n'; 65]);
+    let long_symbol = String::from_bytes(&env, &[b's'; 13]);
+    let ok_name = String::from_str(&env, "Name");
+    let ok_symbol = String::from_str(&env, "SYM");
+    let empty = String::from_str(&env, "");
+
+    assert_eq!(
+        client.try_initialize(&admin, &market, &empty, &ok_symbol),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_initialize(&admin, &market, &ok_name, &empty),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_initialize(&admin, &market, &long_name, &ok_symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    assert_eq!(
+        client.try_initialize(&admin, &market, &ok_name, &long_symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    // No failed call wrote config.
+    assert_eq!(
+        client.try_get_config(),
+        Err(Ok(ContractError::NotInitialized))
+    );
+}
