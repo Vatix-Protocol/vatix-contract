@@ -19,6 +19,8 @@ pub enum PositionError {
     /// market's prospective lock once collateral already locked in the
     /// user's other markets is accounted for (ADR-002, issue #685).
     InsufficientProtocolCollateral = 3,
+    /// The updated position could not be persisted to storage.
+    StorageError = 4,
 }
 
 /// Scale `amount` by `price_bps` basis points (i.e. `amount * price_bps / 10_000`).
@@ -392,6 +394,7 @@ pub fn merge_positions(
 ///
 /// # Errors
 /// - [`PositionError::ShareBalanceBelowZero`] if deltas would make shares negative
+/// - [`PositionError::StorageError`] if the updated position cannot be persisted
 pub fn update_position(
     env: &Env,
     market_id: u32,
@@ -434,9 +437,11 @@ pub fn update_position(
         calculate_locked_collateral(position.yes_shares, position.no_shares, market_price);
     position.locked_collateral = new_locked;
 
-    // 5. Persist
+    // 5. Persist. Propagate storage failures (e.g. a failed `assert_version`)
+    //    so a position that was not written is never reported as a success and
+    //    no trade events are emitted for it.
     crate::storage::set_position(env, market_id, user, &position)
-        .unwrap_or_default();
+        .map_err(|_| PositionError::StorageError)?;
 
     // 6. Emit position_updated event
     emit_position_updated(
