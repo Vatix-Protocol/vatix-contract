@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1229 -->
 - #1229: Add a regression test for is_authorized_market in contracts/treasury/src/lib.rs
+
+<!-- handsoff-issue-1230 -->
+- #1230: Add a regression test for list_markets in contracts/treasury/src/lib.rs
