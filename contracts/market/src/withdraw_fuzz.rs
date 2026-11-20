@@ -256,12 +256,53 @@ mod share_collateral_invariants {
         ) {
             let locked = positions::calculate_locked_collateral(yes_shares, no_shares, price);
             let deposited = locked; // zero slack: locked == deposited exactly
-            let available = deposited.saturating_sub(locked);
+
+            let env = Env::default();
+            env.mock_all_auths();
+            let user = Address::generate(&env);
+            let market_id = 1u32;
+            let token_admin = Address::generate(&env);
+            let token = env.register_stellar_asset_contract_v2(token_admin);
+            let collateral_token = token.address();
+            let contract_id = env.register(crate::MarketContract, ());
+
+            let market = make_market(&env, market_id, &collateral_token);
+            let position = Position {
+                market_id,
+                user: user.clone(),
+                yes_shares,
+                no_shares,
+                locked_collateral: locked,
+                total_deposited: deposited,
+                is_settled: false,
+            };
+
+            env.as_contract(&contract_id, || {
+                storage::set_version(&env);
+                storage::set_market(&env, market_id, &market).unwrap();
+                storage::set_position(&env, market_id, &user, &position).unwrap();
+                storage::set_fee_rate_bps(&env, 0);
+            });
+
+            soroban_sdk::token::StellarAssetClient::new(&env, &collateral_token)
+                .mint(&contract_id, &deposited);
+
+            let stored = env.as_contract(&contract_id, || {
+                storage::get_position(&env, market_id, &user).unwrap().expect("position exists")
+            });
+            let available = stored.total_deposited - stored.locked_collateral;
 
             prop_assert_eq!(available, 0,
                 "zero-slack boundary violated: locked={locked} deposited={deposited}");
-            prop_assert!(locked <= deposited,
-                "locked={locked} > deposited={deposited} at zero-slack boundary");
+            prop_assert!(stored.locked_collateral <= stored.total_deposited,
+                "locked={} > deposited={} at zero-slack boundary",
+                stored.locked_collateral, stored.total_deposited);
+
+            // Failure path: with zero available collateral, any positive withdrawal is rejected.
+            let result = env.as_contract(&contract_id, || {
+                withdraw_unused_collateral(env.clone(), user.clone(), market_id, 1)
+            });
+            prop_assert_eq!(result, Err(ContractError::InsufficientCollateral));
         }
 
         /// Invariant: after successful deposit, locked <= total_deposited
