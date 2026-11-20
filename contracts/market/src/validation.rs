@@ -645,6 +645,17 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_market_price_range_boundaries() {
+        assert_eq!(validate_market_price(-1), Err(ContractError::InvalidPrice));
+        assert!(validate_market_price(0).is_ok());
+        assert!(validate_market_price(10_000).is_ok());
+        assert_eq!(
+            validate_market_price(10_001),
+            Err(ContractError::InvalidPrice)
+        );
+    }
+
+    #[test]
     fn test_calculate_fee_valid() {
         assert_eq!(calculate_fee(1000, 100).unwrap(), 10); // 1% of 1000
         assert_eq!(calculate_fee(10000, 500).unwrap(), 500); // 5% of 10000
