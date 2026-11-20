@@ -328,8 +328,7 @@ impl MarketContract {
         user.require_auth();
 
         // 2. Validate market state: must exist, be Active, and not be expired
-        let mut market =
-            storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
+        let market = storage::get_market(&env, market_id)?.ok_or(ContractError::MarketNotFound)?;
         if market.status != MarketStatus::Active {
             return Err(ContractError::MarketNotActive);
         }
@@ -337,8 +336,12 @@ impl MarketContract {
             return Err(ContractError::MarketExpired);
         }
 
-        // 3. Validate the market price up front for a clear ContractError
-        validation::validate_market_price(market_price)?;
+        // 3. Locks are priced at the market's stored price, never a caller-chosen
+        //    one: a caller-supplied 0 (YES) or 10_000 (NO) would lock no collateral.
+        if market_price != market.price_bps {
+            return Err(ContractError::InvalidPrice);
+        }
+        let market_price = market.price_bps;
 
         // 4. Enforce that deposited collateral covers any increase in the lock,
         //    and that a market closed to deposits cannot be used to open new
@@ -435,10 +438,6 @@ impl MarketContract {
                 token_client.burn(&market_id, &user, &TokenKind::No, &(-no_delta));
             }
         }
-
-        // 6. Persist the updated price so withdraw and other callers see it
-        market.price_bps = market_price;
-        storage::set_market(&env, market_id, &market)?;
 
         Ok(result)
     }
