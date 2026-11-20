@@ -169,6 +169,8 @@ pub fn withdraw_unused_collateral(
         .checked_sub(total_deducted)
         .ok_or(ContractError::ArithmeticOverflow)?;
 
+    // Protocol-wide balance must drop too, or a later trade could lock tokens already paid out.
+    storage::debit_collateral_balance(&env, &user, total_deducted)?;
     storage::set_position(&env, market_id, &user, &position)?;
 
     // 8. Route fee to treasury if one is registered (External Calls)
