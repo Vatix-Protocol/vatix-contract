@@ -17,9 +17,7 @@ interface PositionPanelProps {
 }
 
 function formatShares(stroops: bigint): string {
-  return fromStroops(stroops).toLocaleString(undefined, {
-    maximumFractionDigits: 2,
-  });
+  return fromStroops(stroops);
 }
 
 /**

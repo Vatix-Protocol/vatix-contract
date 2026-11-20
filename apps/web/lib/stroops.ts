@@ -31,7 +31,18 @@ export function toStroops(amount: string): bigint {
   return BigInt(whole) * STROOPS_PER_UNIT + BigInt(fractionPadded || "0");
 }
 
-/** Formats a stroops bigint as a display-unit decimal string/number. */
-export function fromStroops(stroops: bigint): number {
-  return Number(stroops) / Number(STROOPS_PER_UNIT);
+/**
+ * Formats a stroops bigint as a display-unit decimal string, using bigint
+ * arithmetic so i128 amounts above Number.MAX_SAFE_INTEGER stay exact.
+ */
+export function fromStroops(stroops: bigint): string {
+  const sign = stroops < 0n ? "-" : "";
+  const absolute = stroops < 0n ? -stroops : stroops;
+  const whole = absolute / STROOPS_PER_UNIT;
+  const fraction = (absolute % STROOPS_PER_UNIT)
+    .toString()
+    .padStart(7, "0")
+    .replace(/0+$/, "");
+
+  return fraction ? `${sign}${whole}.${fraction}` : `${sign}${whole}`;
 }
