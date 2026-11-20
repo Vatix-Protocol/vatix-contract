@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1270 -->
 - #1270: Add a regression test for verify_oracle_signature_v2 in contracts/market/src/oracle.rs
+
+<!-- handsoff-issue-1271 -->
+- #1271: Add a regression test for validate_oracle_authorization in contracts/market/src/oracle.rs
