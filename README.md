@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1252 -->
 - #1252: Add a regression test for emit_oracle_adapter_configured in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1253 -->
+- #1253: Add a regression test for emit_fee_waiver_removed in contracts/market/src/events.rs
