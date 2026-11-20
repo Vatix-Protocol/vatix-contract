@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1268 -->
 - #1268: Add a regression test for require_initialized in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1269 -->
+- #1269: Add a regression test for require_emergency_mode_allows in contracts/market/src/validation.rs
