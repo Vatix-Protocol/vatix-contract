@@ -1574,15 +1574,19 @@ pub fn set_collateral_balance(env: &Env, user: &Address, balance: i128) {
         .set(&MoneyPathKey::CollateralBalance(user.clone()), &balance);
 }
 
-pub fn debit_collateral_balance(env: &Env, user: &Address, amount: i128) {
-    // Legacy positions may predate the shared collateral ledger.
-    set_collateral_balance(
-        env,
-        user,
-        get_collateral_balance(env, user)
-            .saturating_sub(amount)
-            .max(0),
-    );
+/// Subtract `amount` from `user`'s protocol-wide balance. Fails with
+/// `InsufficientCollateral` instead of going negative.
+pub fn debit_collateral_balance(
+    env: &Env,
+    user: &Address,
+    amount: i128,
+) -> Result<(), ContractError> {
+    let balance = get_collateral_balance(env, user)
+        .checked_sub(amount)
+        .filter(|balance| *balance >= 0)
+        .ok_or(ContractError::InsufficientCollateral)?;
+    set_collateral_balance(env, user, balance);
+    Ok(())
 }
 
 pub fn get_total_locked_collateral(env: &Env, user: &Address) -> i128 {
