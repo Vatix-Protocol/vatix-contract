@@ -588,6 +588,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mock_pyth_update_price_feeds_is_recorded_and_gates_get_price() {
+        // #717: `update_price_feeds` must record that the VAA was submitted,
+        // and `get_price` must fail until it has run.
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let client = MockPythClient::new(&env, &contract_id);
+        client.set_price(&1_000);
+        let feed_id = BytesN::from_array(&env, &[0u8; 32]);
+
+        // Failure path: reading before the update step must panic.
+        assert_eq!(client.update_count(), 0);
+        assert!(client.try_get_price(&feed_id).is_err());
+
+        client.update_price_feeds(&vaa_bytes(&env));
+        assert_eq!(client.update_count(), 1);
+        assert_eq!(client.get_price(&feed_id).price, 1_000);
+
+        // Each call is counted, not just the first.
+        client.update_price_feeds(&vaa_bytes(&env));
+        assert_eq!(client.update_count(), 2);
+    }
+
     /// Regression test for `MockPyth::update_count` (#1198): it must report the
     /// *number of times* `update_price_feeds` has been invoked — not merely
     /// whether it has run at least once — and the empty-proof path (#1014)
@@ -624,6 +647,20 @@ mod tests {
             2,
             "update_price_feeds must not be called when proof is empty"
         );
+    }
+
+    // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
+
+    #[test]
+    fn pyth_accepts_price_exactly_at_max_age() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let mock_client = MockPythClient::new(&env, &contract_id);
+
+        let now = 10_000_000u64;
+        env.ledger().set_timestamp(now);
+        // Age == MAX_PRICE_AGE_SECONDS exactly → must still be accepted.
+        mock_client.set_price_with_publish_time(&1_000, &(now - M
     }
 
     // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
