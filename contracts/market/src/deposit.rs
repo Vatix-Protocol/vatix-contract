@@ -336,6 +336,28 @@ mod tests {
         assert_eq!(result, Err(ContractError::InvalidQuantity));
     }
 
+    /// Non-positive amounts are rejected before the market is read (no market
+    /// is stored, yet the error is `InvalidQuantity`, not `MarketNotFound`)
+    /// and without writing the collateral balance.
+    #[test]
+    fn test_deposit_non_positive_rejected_before_market_read_no_balance_write() {
+        let env = setup_env();
+        env.mock_all_auths();
+        let user = Address::generate(&env);
+        let contract_id = env.register(crate::MarketContract, ());
+
+        env.as_contract(&contract_id, || {
+            storage::set_version(&env);
+            for amount in [0, -1] {
+                assert_eq!(
+                    deposit_collateral(env.clone(), user.clone(), 1, amount),
+                    Err(ContractError::InvalidQuantity)
+                );
+                assert_eq!(storage::get_collateral_balance(&env, &user), 0);
+            }
+        });
+    }
+
     #[test]
     fn test_deposit_validates_negative_amount() {
         let env = setup_env();
