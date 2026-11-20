@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1236 -->
 - #1236: Add a regression test for burn_settled_outcome_tokens in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1237 -->
+- #1237: Add a regression test for settle_position in contracts/market/src/settlement.rs
