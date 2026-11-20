@@ -6,6 +6,7 @@ import { invokeContract, MARKET_CONTRACT_ID, amountToScVal, addressToScVal, u32T
 import { TxResult } from "@/components/TxResult";
 import { useToast } from "@/context/ToastContext";
 import { parseContractError } from "@/lib/errors";
+import { isValidMarketId } from "@/lib/market-helpers";
 
 interface DepositFormProps {
   /** Pre-select a market. When provided the market ID field is hidden. */
@@ -30,6 +31,12 @@ export function DepositForm({ marketId: marketIdProp, onSuccess }: DepositFormPr
     e.preventDefault();
     if (!address) {
       setError("Connect your Freighter wallet first.");
+      return;
+    }
+
+    // parseInt would silently truncate "1.5" to 1 and turn "1e2" into 100.
+    if (!isValidMarketId(marketId)) {
+      setError("Market ID must be a whole number.");
       return;
     }
 
