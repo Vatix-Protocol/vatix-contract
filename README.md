@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1257 -->
 - #1257: Add a regression test for prop_available_non_negative in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1258 -->
+- #1258: Add a regression test for prop_fee_rounding_never_overflows_or_exceeds_amount in contracts/market/src/withdraw_fuzz.rs
