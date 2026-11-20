@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1244 -->
 - #1244: Add a regression test for prop_locked_collateral_hedged_is_zero in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1245 -->
+- #1245: Add a regression test for prop_locked_symmetric_at_midpoint in contracts/market/src/positions.rs
