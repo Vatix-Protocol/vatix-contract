@@ -643,3 +643,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1246 -->
 - #1246: Add a regression test for emit_collateral_deposited in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1247 -->
+- #1247: Add a regression test for emit_collateral_withdrawn in contracts/market/src/events.rs
