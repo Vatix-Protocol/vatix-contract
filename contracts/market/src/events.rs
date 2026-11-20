@@ -1891,6 +1891,45 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_withdraw_edge_case() {
+        let env = Env::default();
+        let contract_id = env.register(MarketContract, ());
+
+        let market_id = 1u32;
+        let user = Address::generate(&env);
+        let amount = 1_000_000i128;
+
+        env.as_contract(&contract_id, || {
+            emit_withdraw_edge_case(&env, &user, market_id, amount);
+        });
+
+        let events = env.events().all();
+        assert_eq!(events.len(), 1);
+
+        let event = events.first().unwrap();
+        let topics = &event.1;
+
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "withdraw_edge_case"));
+
+        let topic1: u32 = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, EVENT_VERSION);
+
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic2, user);
+
+        let topic3: u32 = topics.get(3).unwrap().into_val(&env);
+        assert_eq!(topic3, market_id);
+
+        let data: Map<Symbol, Val> = event.2.try_into_val(&env).unwrap();
+        let amount_val: i128 = data
+            .get(Symbol::new(&env, "amount"))
+            .unwrap()
+            .into_val(&env);
+        assert_eq!(amount_val, amount);
+    }
+
+    #[test]
     fn test_emit_oracle_signature_verified() {
         let env = Env::default();
         let contract_id = env.register(MarketContract, ());
