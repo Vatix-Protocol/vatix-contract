@@ -31,6 +31,9 @@ export const MARKET_ERROR_MESSAGES: Record<number, string> = {
   21: "This address isn't authorized to resolve this market.",
   22: "That resolution outcome isn't valid.",
   23: "The price oracle didn't return a price for this asset. Try again shortly.",
+  24: "That oracle message has expired. Submit a freshly signed one.",
+  25: "That threshold/quorum isn't valid.",
+  26: "The oracle price is too old to use right now. Try again shortly.",
 
   // Validation errors (30-39)
   30: "That price is out of range.",
@@ -42,38 +45,40 @@ export const MARKET_ERROR_MESSAGES: Record<number, string> = {
   36: "That deposit is below the minimum allowed amount.",
   37: "That metadata URI is too long.",
   38: "That fee rate isn't valid.",
+  39: "That fee waiver account isn't valid.",
 
   // Authorization errors (40-49)
   40: "You're not authorized to do that.",
-  41: "Only the contract admin can do that.",
-  42: "This contract has already been initialized.",
-  43: "There's no pending admin nomination to accept.",
-  44: "There's no pending renounce request to confirm.",
-  45: "An admin renounce request is already pending.",
-  46: "That fee rate exceeds the maximum allowed.",
+  41: "Your authorization has expired. Please re-authenticate and try again.",
+  42: "That role isn't permitted to do this.",
+  43: "Only the contract admin can do that.",
+  44: "The fee waiver list is full.",
+  46: "This contract is paused for maintenance. Please try again later.",
+  47: "This action isn't allowed while emergency mode is active.",
+  48: "That action was blocked as a potential reentrant call. Please try again.",
 
   // Token errors (50-59)
   50: "The token transfer failed. Check your balance and try again.",
+  51: "That token isn't supported.",
 
   // Arithmetic errors (60-69)
   60: "That operation would overflow — try a smaller amount.",
+  61: "That operation would underflow — try a larger amount.",
+  62: "That operation tried to divide by zero.",
 
-  // Upgrade errors (70-79)
-  70: "This contract needs a migration before it can be used again.",
+  // Treasury errors (70-79)
+  70: "The treasury doesn't have enough balance for that.",
+  71: "That treasury operation isn't allowed right now.",
 
-  // Resolution errors (80-89)
-  80: "The resolution for this market hasn't been finalized yet.",
+  // Reconciliation errors (80-89)
+  80: "The on-chain balances don't reconcile with the expected state.",
+  81: "That request was already processed.",
+  82: "A required service is temporarily unavailable. Please try again shortly.",
+  83: "That reconciliation has already been applied.",
+  84: "This position's shares don't match its token balances.",
 
-  // Pause / initialization errors (90-99)
-  90: "This contract hasn't been initialized yet.",
-  91: "This contract is paused for maintenance. Please try again later.",
-
-  // Security errors (100-109)
-  100: "That action was blocked as a potential reentrant call. Please try again.",
-
-  // Timelock errors (110-119)
-  110: "There's no pending fee rate change to execute.",
-  111: "The fee rate change timelock hasn't elapsed yet.",
+  // Conservation errors (90-99)
+  90: "That operation would break the collateral conservation invariant.",
 };
 
 /**
