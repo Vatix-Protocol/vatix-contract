@@ -391,7 +391,7 @@ impl OutcomeTokenContract {
     /// Before resolution, positions can only change through [`Self::mint`]/
     /// [`Self::burn`] driven by the market contract itself, so a direct
     /// peer-to-peer transfer is rejected with
-    /// [`ContractError::MarketNotResolved`] — this keeps a market's
+    /// [`ContractError::TransfersDisabled`] — this keeps a market's
     /// price-discovery phase free of secondary-market transfers of unsettled
     /// claims.
     ///
@@ -437,7 +437,7 @@ impl OutcomeTokenContract {
         if status == MarketStatus::Resolved {
             return Err(ContractError::TransferBlockedAfterResolve);
         }
-        Err(ContractError::MarketNotResolved)
+        Err(ContractError::TransfersDisabled)
     }
 
     /// Return the token balance for a specific `(market_id, user, kind)` triple.
