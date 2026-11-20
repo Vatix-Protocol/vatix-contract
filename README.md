@@ -637,3 +637,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1248 -->
 - #1248: Add a regression test for emit_large_withdraw in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1249 -->
+- #1249: Add a regression test for emit_market_canceled in contracts/market/src/events.rs
