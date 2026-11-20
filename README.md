@@ -640,3 +640,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1222 -->
 - #1222: Add a regression test for get_authorized_markets in contracts/treasury/src/storage.rs
+
+<!-- handsoff-issue-1223 -->
+- #1223: Add a regression test for collect_fee in contracts/treasury/src/lib.rs
