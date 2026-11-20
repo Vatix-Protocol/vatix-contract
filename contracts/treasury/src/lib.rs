@@ -133,23 +133,29 @@ impl TreasuryContract {
             return Err(TreasuryError::InvalidAmount);
         }
 
+        // Compute every new total before writing anything, so an overflow
+        // leaves all stored balances untouched.
+        let prev_balance = storage::get_token_balance(&env, &token)?;
+        let new_balance = prev_balance
+            .checked_add(fee_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+
+        let prev_cumulative = storage::get_cumulative_fees(&env, &token)?;
+        let new_cumulative = prev_cumulative
+            .checked_add(fee_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+
+        let prev_total = storage::get_total_collected(&env)?;
+        let new_total = prev_total
+            .checked_add(fee_amount)
+            .ok_or(TreasuryError::ArithmeticOverflow)?;
+
         // Track every token we've ever seen so callers can enumerate the full
         // set of fee-bearing tokens without prior knowledge (#484).
         storage::register_fee_token(&env, &token);
-
-        let prev_balance = storage::get_token_balance(&env, &token)?;
-        let new_balance = prev_balance.checked_add(fee_amount).unwrap_or(i128::MAX);
         storage::set_token_balance(&env, &token, new_balance);
-
-        let prev_cumulative = storage::get_cumulative_fees(&env, &token)?;
-        let new_cumulative = prev_cumulative.checked_add(fee_amount).unwrap_or(i128::MAX);
         storage::set_cumulative_fees(&env, &token, new_cumulative);
-
-        let prev_total = storage::get_total_collected(&env)?;
-        storage::set_total_collected(
-            &env,
-            prev_total.checked_add(fee_amount).unwrap_or(i128::MAX),
-        );
+        storage::set_total_collected(&env, new_total);
 
         events::emit_fee_collected(
             &env,
