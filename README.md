@@ -635,6 +635,18 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-1086 -->
 - #1086: `validate_payout` is wired into the settlement path, not dead code. `contracts/market/src/settlement.rs::compute_settlement` calls `validate_payout(payout)?` at line 109 (immediately after computing `payout`), rejecting any negative payout before a position is marked settled. Directly unit-tested by `test_validate_payout_valid` and `test_validate_payout_invalid` in the same file.
 
+<!-- handsoff-issue-1236 -->
+- #1236: Add a regression test for burn_settled_outcome_tokens in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1237 -->
+- #1237: Add a regression test for settle_position in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1238 -->
+- #1238: Add a regression test for setup_resolved_market in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1239 -->
+- #1239: Add a regression test for calculate_locked_collateral in contracts/market/src/positions.rs
+
 <!-- handsoff-issue-1244 -->
 - #1244: Add a regression test for prop_locked_collateral_hedged_is_zero in contracts/market/src/positions.rs
 
