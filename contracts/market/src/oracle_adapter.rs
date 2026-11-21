@@ -80,7 +80,7 @@ pub trait OracleAdapter {
     /// `proof` carries adapter-specific evidence:
     /// - [`Ed25519Adapter`]: exactly 64 bytes — the Ed25519 signature produced
     ///   by the market's stored oracle key over
-    ///   `keccak256(market_id_be || outcome_byte)`.
+    ///   `keccak256("VATIX_ORACLE_V1" || market_id_be || outcome_byte)`.
     /// - [`ReflectorAdapter`]: empty (`Bytes::new`); the adapter fetches the
     ///   price on-chain from the Reflector contract.
     /// - [`PythAdapter`]: raw Wormhole VAA bytes containing the price
@@ -344,11 +344,59 @@ impl<'a> OracleAdapter for AnyAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{
-        contract, contractimpl,
-        testutils::{Address as _, Ledger as _},
-        Env,
-    };
+    use soroban_sdk::{contract, contractimpl, testutils::Ledger as _, Env};
+
+    #[test]
+    fn ed25519_verify_outcome_checks_proof_length_market_outcome_and_key() {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market_id = 0x0102_0304;
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let oracle_pubkey = BytesN::from_array(&env, &key.verifying_key().to_bytes());
+        let digest = env.crypto().keccak256(&Bytes::from_slice(
+            &env,
+            b"VATIX_ORACLE_V1\x01\x02\x03\x04\x01",
+        ));
+        let signature = key.sign(&digest.to_array()).to_bytes();
+        let proof = Bytes::from_slice(&env, &signature);
+        let adapter = AnyAdapter::Ed25519(Ed25519Adapter {
+            oracle_pubkey: &oracle_pubkey,
+        });
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                adapter.verify_outcome(&env, market_id, true, &proof),
+                Ok(())
+            );
+            for invalid_proof in [
+                Bytes::from_slice(&env, &signature[..63]),
+                Bytes::from_slice(&env, &[0; 64]),
+            ] {
+                assert_eq!(
+                    adapter.verify_outcome(&env, market_id, true, &invalid_proof),
+                    Err(ContractError::InvalidSignature)
+                );
+            }
+            assert_eq!(
+                adapter.verify_outcome(&env, market_id + 1, true, &proof),
+                Err(ContractError::InvalidSignature)
+            );
+            assert_eq!(
+                adapter.verify_outcome(&env, market_id, false, &proof),
+                Err(ContractError::InvalidSignature)
+            );
+
+            let unauthorized = Ed25519Adapter {
+                oracle_pubkey: &BytesN::from_array(&env, &[0; 32]),
+            };
+            assert_eq!(
+                unauthorized.verify_outcome(&env, market_id, true, &proof),
+                Err(ContractError::UnauthorizedOracle)
+            );
+        });
+    }
 
     // ---- Mock Pyth receiver contract ----
 
@@ -357,13 +405,6 @@ mod tests {
     /// resolves without network I/O or Wormhole validation.
     #[contract]
     struct MockPyth;
-
-    /// Controls what price `MockPyth.get_price` returns.
-    #[contracttype]
-    #[derive(Clone)]
-    pub struct MockPythState {
-        pub price: i64,
-    }
 
     #[contractimpl]
     impl MockPyth {
@@ -399,8 +440,10 @@ mod tests {
         /// VAA-submission step actually happened before `get_price` reads
         /// the verified price back (#717) — not just that the caller-facing
         /// outcome happened to be correct.
-        pub fn update_price_feeds(env: Env, _data: Bytes) {
-            // In tests we pre-set the price via `set_price`; the VAA is ignored.
+        pub fn update_price_feeds(env: Env, data: Bytes) {
+            env.storage()
+                .instance()
+                .set(&soroban_sdk::symbol_short!("vaa"), &data);
             env.storage()
                 .instance()
                 .set(&soroban_sdk::symbol_short!("upd"), &true);
@@ -586,6 +629,27 @@ mod tests {
             1,
             "update_price_feeds must run exactly once on the happy path"
         );
+        env.as_contract(&contract_id, || {
+            let submitted: Option<Bytes> = env
+                .storage()
+                .instance()
+                .get(&soroban_sdk::symbol_short!("vaa"));
+            assert_eq!(submitted, Some(vaa_bytes(&env)));
+        });
+    }
+
+    #[test]
+    fn pyth_set_price_with_publish_time_controls_get_price() {
+        let env = Env::default();
+        let contract_id = setup_mock_pyth(&env);
+        let client = MockPythClient::new(&env, &contract_id);
+        let feed_id = BytesN::from_array(&env, &[0; 32]);
+
+        client.set_price_with_publish_time(&2_000, &8_765);
+        client.update_price_feeds(&vaa_bytes(&env));
+        let price = client.get_price(&feed_id);
+        assert_eq!(price.price, 2_000);
+        assert_eq!(price.publish_time, 8_765);
     }
 
     #[test]
@@ -660,20 +724,6 @@ mod tests {
         let now = 10_000_000u64;
         env.ledger().set_timestamp(now);
         // Age == MAX_PRICE_AGE_SECONDS exactly → must still be accepted.
-        mock_client.set_price_with_publish_time(&1_000, &(now - M
-    }
-
-    // ---- MAX_PRICE_AGE_SECONDS staleness boundary (#1015) ----
-
-    #[test]
-    fn pyth_accepts_price_exactly_at_max_age() {
-        let env = Env::default();
-        let contract_id = setup_mock_pyth(&env);
-        let mock_client = MockPythClient::new(&env, &contract_id);
-
-        let now = 10_000_000u64;
-        env.ledger().set_timestamp(now);
-        // Age == MAX_PRICE_AGE_SECONDS exactly → must still be accepted.
         mock_client.set_price_with_publish_time(&1_000, &(now - MAX_PRICE_AGE_SECONDS));
 
         let adapter = PythAdapter {
@@ -732,11 +782,7 @@ mod tests {
 #[cfg(test)]
 mod reflector_tests {
     use super::*;
-    use soroban_sdk::{
-        contract, contractimpl,
-        testutils::{Address as _, Ledger as _},
-        Env,
-    };
+    use soroban_sdk::{contract, contractimpl, testutils::Ledger as _, Env};
 
     // ---- Mock Reflector contract (#379) ----
 
@@ -806,13 +852,23 @@ mod reflector_tests {
         env.register(MockReflector, ())
     }
 
-    fn dummy_asset(env: &Env) -> Asset {
+    fn dummy_asset() -> Asset {
         Asset::Other(soroban_sdk::symbol_short!("BTC"))
     }
 
-    /// Testnet contract address for Reflector (as of 2026-06-20):
-    /// `CAZP4SMCQX7L6O42AT4GLLRRSFDXPXS7IH7MMHZ52QWUQBFPXFQVMGQ`
-    /// See docs/adr-001-oracle-adapter.md §Option B for integration details.
+    #[test]
+    fn reflector_set_price_with_timestamp_controls_lastprice() {
+        let env = Env::default();
+        let contract_id = setup_mock_reflector(&env);
+        let client = MockReflectorClient::new(&env, &contract_id);
+        let asset = dummy_asset();
+
+        assert!(client.lastprice(&asset).is_none());
+        client.set_price_with_timestamp(&2_000_000, &8_765);
+        let price = client.lastprice(&asset).unwrap();
+        assert_eq!(price.price, 2_000_000);
+        assert_eq!(price.timestamp, 8_765);
+    }
 
     #[test]
     fn reflector_resolves_yes_when_price_meets_threshold() {
@@ -822,13 +878,17 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         // price (1_000_000) >= threshold (1_000_000) → YES
         assert_eq!(
             adapter.verify_outcome(&env, 1, true, &Bytes::new(&env)),
             Ok(())
+        );
+        assert_eq!(
+            adapter.verify_outcome(&env, 1, false, &Bytes::new(&env)),
+            Err(ContractError::InvalidSignature)
         );
     }
 
@@ -840,7 +900,7 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         // price (999_999) < threshold (1_000_000) → NO
@@ -858,7 +918,7 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         // price >= threshold → YES, but caller claims NO
@@ -876,7 +936,7 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         assert_eq!(
@@ -900,7 +960,7 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         assert_eq!(
@@ -922,7 +982,7 @@ mod reflector_tests {
 
         let adapter = ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000_000,
         };
         assert_eq!(
@@ -939,7 +999,7 @@ mod reflector_tests {
 
         let adapter = AnyAdapter::Reflector(ReflectorAdapter {
             contract_id,
-            asset: dummy_asset(&env),
+            asset: dummy_asset(),
             resolution_price: 1_000,
         });
         // price (500) < threshold (1_000) → NO
