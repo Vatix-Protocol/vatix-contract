@@ -646,3 +646,15 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1247 -->
 - #1247: Add a regression test for emit_collateral_withdrawn in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1264 -->
+- #1264: Add a regression test for waived_user_withdraws_full_available_balance_deterministic in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1265 -->
+- #1265: Add a regression test for validate_collateral_amount in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1266 -->
+- #1266: Add a regression test for validate_cancelable in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1267 -->
+- #1267: Add a regression test for calculate_fee in contracts/market/src/validation.rs
