@@ -635,6 +635,30 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-1086 -->
 - #1086: `validate_payout` is wired into the settlement path, not dead code. `contracts/market/src/settlement.rs::compute_settlement` calls `validate_payout(payout)?` at line 109 (immediately after computing `payout`), rejecting any negative payout before a position is marked settled. Directly unit-tested by `test_validate_payout_valid` and `test_validate_payout_invalid` in the same file.
 
+<!-- handsoff-issue-1244 -->
+- #1244: Add a regression test for prop_locked_collateral_hedged_is_zero in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1245 -->
+- #1245: Add a regression test for prop_locked_symmetric_at_midpoint in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1246 -->
+- #1246: Add a regression test for emit_collateral_deposited in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1247 -->
+- #1247: Add a regression test for emit_collateral_withdrawn in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1264 -->
+- #1264: Add a regression test for waived_user_withdraws_full_available_balance_deterministic in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1265 -->
+- #1265: Add a regression test for validate_collateral_amount in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1266 -->
+- #1266: Add a regression test for validate_cancelable in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1267 -->
+- #1267: Add a regression test for calculate_fee in contracts/market/src/validation.rs
+
 <!-- handsoff-issue-1268 -->
 - #1268: Add a regression test for require_initialized in contracts/market/src/validation.rs
 
