@@ -659,6 +659,18 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-1247 -->
 - #1247: Add a regression test for emit_collateral_withdrawn in contracts/market/src/events.rs
 
+<!-- handsoff-issue-1260 -->
+- #1260: Add a regression test for prop_fee_rounding_near_max_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1261 -->
+- #1261: Add a regression test for prop_fee_rounding_max_bps_equals_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1262 -->
+- #1262: Add a regression test for prop_fee_rounding_zero_bps_is_always_zero in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1263 -->
+- #1263: Add a regression test for prop_waived_user_withdraws_full_available_fee_free in contracts/market/src/withdraw_fuzz.rs
+
 <!-- handsoff-issue-1264 -->
 - #1264: Add a regression test for waived_user_withdraws_full_available_balance_deterministic in contracts/market/src/withdraw_fuzz.rs
 
