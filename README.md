@@ -646,3 +646,75 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1251 -->
 - #1251: Add a regression test for emit_oracle_signature_verified in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1252 -->
+- #1252: Add a regression test for emit_oracle_adapter_configured in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1253 -->
+- #1253: Add a regression test for emit_fee_waiver_removed in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1254 -->
+- #1254: Add a regression test for acquire in contracts/market/src/deposit.rs
+
+<!-- handsoff-issue-1255 -->
+- #1255: Add a regression test for remove_fee_waiver in contracts/market/src/fee_waiver.rs
+
+<!-- handsoff-issue-1236 -->
+- #1236: Add a regression test for burn_settled_outcome_tokens in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1237 -->
+- #1237: Add a regression test for settle_position in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1238 -->
+- #1238: Add a regression test for setup_resolved_market in contracts/market/src/settlement.rs
+
+<!-- handsoff-issue-1239 -->
+- #1239: Add a regression test for calculate_locked_collateral in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1244 -->
+- #1244: Add a regression test for prop_locked_collateral_hedged_is_zero in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1245 -->
+- #1245: Add a regression test for prop_locked_symmetric_at_midpoint in contracts/market/src/positions.rs
+
+<!-- handsoff-issue-1246 -->
+- #1246: Add a regression test for emit_collateral_deposited in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1247 -->
+- #1247: Add a regression test for emit_collateral_withdrawn in contracts/market/src/events.rs
+
+<!-- handsoff-issue-1260 -->
+- #1260: Add a regression test for prop_fee_rounding_near_max_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1261 -->
+- #1261: Add a regression test for prop_fee_rounding_max_bps_equals_amount in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1262 -->
+- #1262: Add a regression test for prop_fee_rounding_zero_bps_is_always_zero in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1263 -->
+- #1263: Add a regression test for prop_waived_user_withdraws_full_available_fee_free in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1264 -->
+- #1264: Add a regression test for waived_user_withdraws_full_available_balance_deterministic in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1265 -->
+- #1265: Add a regression test for validate_collateral_amount in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1266 -->
+- #1266: Add a regression test for validate_cancelable in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1267 -->
+- #1267: Add a regression test for calculate_fee in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1268 -->
+- #1268: Add a regression test for require_initialized in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1269 -->
+- #1269: Add a regression test for require_emergency_mode_allows in contracts/market/src/validation.rs
+
+<!-- handsoff-issue-1270 -->
+- #1270: Add a regression test for verify_oracle_signature_v2 in contracts/market/src/oracle.rs
+
+<!-- handsoff-issue-1271 -->
+- #1271: Add a regression test for validate_oracle_authorization in contracts/market/src/oracle.rs
