@@ -635,6 +635,18 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-1086 -->
 - #1086: `validate_payout` is wired into the settlement path, not dead code. `contracts/market/src/settlement.rs::compute_settlement` calls `validate_payout(payout)?` at line 109 (immediately after computing `payout`), rejecting any negative payout before a position is marked settled. Directly unit-tested by `test_validate_payout_valid` and `test_validate_payout_invalid` in the same file.
 
+<!-- handsoff-issue-1212 -->
+- #1212: Add a regression test for prop_withdraw_preserves_locked_invariant in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1213 -->
+- #1213: Add a regression test for prop_deposit_withdraw_sequence_never_underflows in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1214 -->
+- #1214: Add a regression test for prop_fee_on_top_boundary_is_exact in contracts/market/src/withdraw_fuzz.rs
+
+<!-- handsoff-issue-1215 -->
+- #1215: Add a regression test for withdrawn_collateral_cannot_back_new_trades in contracts/market/src/withdraw_fuzz.rs
+
 <!-- handsoff-issue-1216 -->
 - #1216: Add a regression test for repeated_round_trips_at_max_fee_stay_non_negative in contracts/market/src/withdraw_fuzz.rs
 
