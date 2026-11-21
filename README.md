@@ -635,6 +635,15 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 <!-- handsoff-issue-1086 -->
 - #1086: `validate_payout` is wired into the settlement path, not dead code. `contracts/market/src/settlement.rs::compute_settlement` calls `validate_payout(payout)?` at line 109 (immediately after computing `payout`), rejecting any negative payout before a position is marked settled. Directly unit-tested by `test_validate_payout_valid` and `test_validate_payout_invalid` in the same file.
 
+<!-- handsoff-issue-1220 -->
+- #1220: Add a regression test for verify_via_reflector in contracts/market/src/oracle.rs
+
+<!-- handsoff-issue-1222 -->
+- #1222: Add a regression test for get_authorized_markets in contracts/treasury/src/storage.rs
+
+<!-- handsoff-issue-1223 -->
+- #1223: Add a regression test for collect_fee in contracts/treasury/src/lib.rs
+
 <!-- handsoff-issue-1240 -->
 - #1240: Add a regression test for check_protocol_collateral in contracts/market/src/positions.rs
 
