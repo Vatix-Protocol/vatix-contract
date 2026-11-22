@@ -33,6 +33,8 @@ pub mod events;
 pub mod fee_rate;
 pub mod fee_waiver;
 pub mod oracle;
+#[cfg(test)]
+mod oracle_adapter;
 pub mod positions;
 pub mod reconciliation;
 pub mod storage;
