@@ -2,7 +2,9 @@ extern crate std;
 
 use crate::types::MarketStatus;
 use crate::types::CandidateStatus;
-use crate::{ContractError, ResolutionContract, ResolutionContractClient};
+use crate::{
+    ContractError, ResolutionContract, ResolutionContractClient, MIN_CHALLENGE_BOND_AMOUNT,
+};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
@@ -380,6 +382,43 @@ fn challenge_shortfall_leaves_candidate_proposed_without_record() {
     assert_eq!(client.get_challengers(&candidate_id).len(), 0);
     assert_eq!(balance(&env, &token, &contract_id), contract_before);
     assert_eq!(balance(&env, &token, &challenger), 1_000_000i128);
+}
+
+/// A bond one below `MIN_CHALLENGE_BOND_AMOUNT` is rejected with
+/// `InsufficientChallengeBond` and the candidate stays `Proposed`. A bond at the
+/// minimum is covered by `challenge_records_bond_only_after_collateral_arrives`.
+#[test]
+fn challenge_below_min_bond_is_rejected() {
+    let env = Env::default();
+    let (client, _, _, token) = setup(&env);
+    set_time(&env, 1_000);
+
+    let proposer = Address::generate(&env);
+    fund(&env, &token, &proposer, 10_000_000i128);
+    let candidate_id = client.propose(
+        &proposer,
+        &1,
+        &false,
+        &signature(&env),
+        &(env.ledger().timestamp() + 600),
+        &evidence(&env),
+        &300,
+        &10_000_000i128,
+    );
+
+    let challenger = Address::generate(&env);
+    fund(&env, &token, &challenger, 10_000_000i128);
+    let result = client.try_challenge(
+        &challenger,
+        &candidate_id,
+        &String::from_str(&env, "ipfs://challenge"),
+        &(MIN_CHALLENGE_BOND_AMOUNT - 1),
+    );
+    assert_eq!(result, Err(Ok(ContractError::InsufficientChallengeBond)));
+
+    let candidate = client.get_candidate(&candidate_id).unwrap();
+    assert_eq!(candidate.status, CandidateStatus::Proposed);
+    assert_eq!(client.get_challengers(&candidate_id).len(), 0);
 }
 
 #[test]
