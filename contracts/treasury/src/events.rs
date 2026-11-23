@@ -469,6 +469,56 @@ mod tests {
         assert_eq!(got_fees, new_cumulative_fees, "new_cumulative_fees swapped");
     }
 
+    /// Regression for Issue #1113: pin every argument of `emit_fee_collected`
+    /// to its documented position. Distinct values make a transposition of
+    /// the two adjacent `i128` fields (or of fee vs balance) fail loudly.
+    #[test]
+    fn emit_fee_collected_pins_argument_order() {
+        let env = Env::default();
+        let contract_id = env.register(crate::TreasuryContract, ());
+        let token = Address::generate(&env);
+        let market_id: u32 = 17;
+        let fee_amount: i128 = 11;
+        let new_token_balance: i128 = 1234;
+        let new_cumulative_fees: i128 = 9876;
+
+        env.as_contract(&contract_id, || {
+            emit_fee_collected(
+                &env,
+                market_id,
+                &token,
+                fee_amount,
+                new_token_balance,
+                new_cumulative_fees,
+            );
+        });
+
+        let all = env.events().all();
+        let (_, topics, data) = all.last().expect("fee_collected published");
+        let name = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        assert_eq!(name, Symbol::new(&env, "fee_collected"));
+        let topic_market_id: u32 = u32::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
+        let topic_token = Address::try_from_val(&env, &topics.get(2).unwrap()).unwrap();
+        assert_eq!(topic_market_id, market_id);
+        assert_eq!(topic_token, token);
+
+        let map = Map::<Symbol, Val>::try_from_val(&env, &data).expect("data is a map");
+        let got_fee: i128 =
+            i128::try_from_val(&env, &map.get(Symbol::new(&env, "fee_amount")).unwrap()).unwrap();
+        let got_balance: i128 =
+            i128::try_from_val(&env, &map.get(Symbol::new(&env, "new_token_balance")).unwrap())
+                .unwrap();
+        let got_fees: i128 = i128::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "new_cumulative_fees")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(got_fee, fee_amount, "fee_amount is not the third argument");
+        assert_eq!(got_balance, new_token_balance, "new_token_balance swapped");
+        assert_eq!(got_fees, new_cumulative_fees, "new_cumulative_fees swapped");
+    }
+
     #[test]
     fn fees_withdrawn_topics_and_data_shape() {
         let env = Env::default();
