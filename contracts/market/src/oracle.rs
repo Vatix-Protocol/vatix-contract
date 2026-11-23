@@ -1494,6 +1494,85 @@ mod adapter_fallback_tests {
         });
     }
 
+    /// Regression for #1272: `verify_market_outcome` must dispatch
+    /// `AdapterType::Ed25519` straight to signature verification against the
+    /// market's own `oracle_pubkey`, rejecting signatures that do not match
+    /// either the payload or the configured key.
+    #[test]
+    fn verify_market_outcome_ed25519_uses_market_pubkey() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market_id = 7u32;
+        let outcome = true;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng);
+        let message = construct_oracle_message(&env, market_id, outcome);
+        let signature = signing_key.sign(message.to_array().as_slice());
+        let sig = BytesN::from_array(&env, &signature.to_bytes());
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Ed25519 dispatch regression"),
+            end_time: 9_999_999,
+            oracle_pubkey: BytesN::from_array(&env, &signing_key.verifying_key().to_bytes()),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token: Address::generate(&env),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Ed25519,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        // A market configured with a different key must not accept this proof.
+        let mut wrong_key_market = market.clone();
+        wrong_key_market.oracle_pubkey =
+            BytesN::from_array(&env, &other_key.verifying_key().to_bytes());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                verify_market_outcome(
+                    &env,
+                    market_id,
+                    &market,
+                    AdapterType::Ed25519,
+                    outcome,
+                    &sig,
+                ),
+                Ok(())
+            );
+            assert_eq!(
+                verify_market_outcome(
+                    &env,
+                    market_id,
+                    &market,
+                    AdapterType::Ed25519,
+                    !outcome,
+                    &sig,
+                ),
+                Err(ContractError::InvalidSignature)
+            );
+            assert_eq!(
+                verify_market_outcome(
+                    &env,
+                    market_id,
+                    &wrong_key_market,
+                    AdapterType::Ed25519,
+                    outcome,
+                    &sig,
+                ),
+                Err(ContractError::InvalidSignature)
+            );
+        });
+    }
+
     // --- #555: Pyth adapter path coverage ---
 
     /// When a Pyth adapter is disabled (the default — no storage entry), the
