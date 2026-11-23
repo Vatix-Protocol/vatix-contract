@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, String};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, Env, IntoVal, String};
 
 use crate::error::ContractError;
 use crate::types::TokenKind;
@@ -255,6 +255,86 @@ fn metadata_over_cap_does_not_mutate_state() {
     // Fail-closed: rejected updates must not partially apply.
     assert_eq!(client.name(), original_name);
     assert_eq!(client.symbol(), original_symbol);
+}
+
+// ── #1285: set_metadata regression for admin-only, idempotent policy ─────
+
+#[test]
+fn set_metadata_regression_covers_admin_idempotency_and_fail_closed_validation() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let attacker = Address::generate(&env);
+
+    let events_before_change = env.events().all().len();
+
+    let name = String::from_str(&env, "Vatix Outcome YES");
+    let symbol = String::from_str(&env, "vYES");
+    client.set_metadata(&admin, &name, &symbol);
+
+    let events_after_change = env.events().all().len();
+    assert!(
+        events_after_change > events_before_change,
+        "a real metadata change must emit a change event"
+    );
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+
+    // Idempotent replay succeeds without a state write or change event.
+    env.events().all(); // drain the change event before the replay
+    client.set_metadata(&admin, &name, &symbol);
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+    assert_eq!(
+        env.events().all().len(),
+        0,
+        "re-submitting the current metadata must not emit a change event"
+    );
+
+    // Deny-by-default: the stored admin check runs before any state write.
+    assert_eq!(
+        client.try_set_metadata(
+            &attacker,
+            &String::from_str(&env, "Hijacked"),
+            &String::from_str(&env, "HJK"),
+        ),
+        Err(Ok(ContractError::Unauthorized))
+    );
+
+    // Empty values and values over the #958 caps are rejected fail-closed.
+    let over_name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize + 1));
+    let over_symbol = String::from_str(&env, &"S".repeat(crate::MAX_SYMBOL_LEN as usize + 1));
+    assert_eq!(
+        client.try_set_metadata(&admin, &String::from_str(&env, ""), &symbol),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &name, &String::from_str(&env, "")),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &over_name, &symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &name, &over_symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+
+    // Missing config fails closed with the documented typed error.
+    let uninitialized_id = env.register(OutcomeTokenContract, ());
+    let uninitialized = OutcomeTokenContractClient::new(&env, &uninitialized_id);
+    env.as_contract(&uninitialized_id, || {
+        env.storage().persistent().set(
+            &crate::storage::StorageKey::StorageVersion,
+            &crate::storage::STORAGE_VERSION,
+        );
+    });
+    assert_eq!(
+        uninitialized.try_set_metadata(&admin, &name, &symbol),
+        Err(Ok(ContractError::NotInitialized))
+    );
 }
 
 #[test]
