@@ -474,4 +474,54 @@ mod tests {
             "replay must not mint/burn"
         );
     }
+
+    /// Issue #1276: `assert_position_token_parity` is the fail-closed guard for
+    /// trading/settlement. A divergent pair must emit
+    /// `PositionTokenMismatchDetected` and reject with `PositionTokenMismatch`;
+    /// it must not silently re-sync. Once repaired, the same guard succeeds.
+    #[test]
+    fn test_assert_position_token_parity_rejects_divergence_and_passes_after_repair() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 1u32;
+
+        let ot_client = setup_outcome_token(&env, &contract_id, &admin);
+        env.as_contract(&contract_id, || {
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+
+        let (err, emitted, balances) = env.as_contract(&contract_id, || {
+            let before = env.events().all().len();
+            let err = assert_position_token_parity(&env, market_id, &user).unwrap_err();
+            (
+                err,
+                env.events().all().len() > before,
+                get_position_token_parity(&env, market_id, &user).unwrap(),
+            )
+        });
+        assert_eq!(err, ContractError::PositionTokenMismatch);
+        assert!(emitted, "divergence must emit PositionTokenMismatchDetected");
+        assert!(!balances.is_matched);
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            0,
+            "guard must not mint tokens to silently re-sync"
+        );
+
+        // The documented recovery path is the admin repair; afterwards the
+        // guard must let the user through again.
+        let correlation_id = BytesN::from_array(&env, &[17u8; 32]);
+        env.as_contract(&contract_id, || {
+            reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            assert_position_token_parity(&env, market_id, &user).unwrap()
+        });
+    }
 }
