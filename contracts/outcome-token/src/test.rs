@@ -411,6 +411,34 @@ fn pause_blocks_mint_burn_and_transfer_then_unpause_restores_mint_and_burn() {
     );
 }
 
+// Regression (#1283): `pause` is admin-only and sets the pause flag checked by
+// token-mutating entrypoints until `unpause` restores normal operation.
+#[test]
+fn pause_rejects_non_admin_and_sets_pause_flag() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let stranger = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &10i128);
+
+    assert_eq!(
+        client.try_pause(&stranger),
+        Err(Ok(ContractError::Unauthorized))
+    );
+    assert!(!client.is_paused());
+
+    client.pause(&admin);
+    assert!(client.is_paused());
+    assert_eq!(
+        client.try_mint(&1u32, &user, &TokenKind::Yes, &1i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+}
+
 // ── Issue #1036: transfer must assert_version before touching storage ─────
 
 #[test]
