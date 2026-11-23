@@ -1662,6 +1662,70 @@ mod adapter_fallback_tests {
         });
     }
 
+    /// Regression for #1273: once the Pyth adapter is explicitly enabled the
+    /// incomplete adapter must fail closed with `UnauthorizedOracle`, even when
+    /// the caller supplies a valid Ed25519 proof that would otherwise pass.
+    #[test]
+    fn pyth_enabled_rejects_even_valid_ed25519_proof() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use rand::rngs::OsRng;
+
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let market_id = 3u32;
+        let outcome = true;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let message = construct_oracle_message(&env, market_id, outcome);
+        let signature = signing_key.sign(message.to_array().as_slice());
+        let sig = BytesN::from_array(&env, &signature.to_bytes());
+        let market = Market {
+            id: market_id,
+            question: String::from_str(&env, "Pyth enabled misconfig regression"),
+            end_time: 9_999_999,
+            oracle_pubkey: BytesN::from_array(&env, &signing_key.verifying_key().to_bytes()),
+            status: MarketStatus::Active,
+            result: None,
+            creator: Address::generate(&env),
+            created_at: 0,
+            collateral_token: Address::generate(&env),
+            price_bps: 5_000,
+            resolver: None,
+            resolved_at: None,
+            adapter_type: AdapterType::Pyth,
+            outcome_count: 2,
+            closed_to_deposits: false,
+        };
+
+        env.as_contract(&contract_id, || {
+            // Sanity check: the same proof is accepted while the adapter is disabled.
+            assert_eq!(
+                verify_market_outcome(
+                    &env,
+                    market_id,
+                    &market,
+                    AdapterType::Pyth,
+                    outcome,
+                    &sig,
+                ),
+                Ok(())
+            );
+
+            crate::storage::set_adapter_enabled(&env, &AdapterType::Pyth, true);
+            assert_eq!(
+                verify_market_outcome(
+                    &env,
+                    market_id,
+                    &market,
+                    AdapterType::Pyth,
+                    outcome,
+                    &sig,
+                ),
+                Err(ContractError::UnauthorizedOracle)
+            );
+        });
+    }
+
     #[test]
     fn test_verify_fails_closed_when_adapters_enabled() {
         let env = Env::default();
