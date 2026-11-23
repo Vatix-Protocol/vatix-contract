@@ -411,6 +411,38 @@ fn pause_blocks_mint_burn_and_transfer_then_unpause_restores_mint_and_burn() {
     );
 }
 
+// ── #1284: unpause must stay admin-only and restore token operations ──────
+
+#[test]
+fn unpause_is_admin_only_and_restores_normal_operations() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // The documented failure path: a caller that is not the stored admin
+    // gets `Unauthorized`, and the pause flag must remain set.
+    let attacker = Address::generate(&env);
+    assert_eq!(
+        client.try_unpause(&attacker),
+        Err(Ok(ContractError::Unauthorized))
+    );
+    assert!(client.is_paused());
+    assert_eq!(
+        client.try_mint(&1u32, &user, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+
+    // The stored admin can unpause, which restores normal token operations.
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+    client.mint(&1u32, &user, &TokenKind::Yes, &10i128);
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 110i128);
+}
+
 // ── Issue #1036: transfer must assert_version before touching storage ─────
 
 #[test]
