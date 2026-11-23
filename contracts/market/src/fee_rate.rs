@@ -42,3 +42,49 @@ pub fn set_fee_rate_bps(env: &Env, caller: &Address, rate_bps: u32) -> Result<()
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as TestAddress;
+
+    /// Issue #1278: only the stored admin may change the rate, and values
+    /// outside `0..=MAX_FEE_RATE_BPS` are rejected without touching storage.
+    #[test]
+    fn test_set_fee_rate_bps_is_admin_only_and_bounded() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let other = <Address as TestAddress>::generate(&env);
+        env.as_contract(&contract_id, || {
+            crate::storage::set_version(&env);
+            crate::storage::set_admin(&env, &admin);
+        });
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_fee_rate_bps(&env), 0);
+
+            set_fee_rate_bps(&env, &admin, 250).unwrap();
+            assert_eq!(get_fee_rate_bps(&env), 250);
+            set_fee_rate_bps(&env, &admin, 0).unwrap();
+            assert_eq!(get_fee_rate_bps(&env), 0);
+            set_fee_rate_bps(&env, &admin, MAX_FEE_RATE_BPS).unwrap();
+            assert_eq!(get_fee_rate_bps(&env), MAX_FEE_RATE_BPS);
+
+            assert_eq!(
+                set_fee_rate_bps(&env, &admin, MAX_FEE_RATE_BPS + 1),
+                Err(ContractError::InvalidFeeRate)
+            );
+            assert_eq!(
+                set_fee_rate_bps(&env, &other, 500),
+                Err(ContractError::NotAdmin)
+            );
+            assert_eq!(
+                get_fee_rate_bps(&env),
+                MAX_FEE_RATE_BPS,
+                "rejected setters must not mutate stored rate"
+            );
+        });
+    }
+}
