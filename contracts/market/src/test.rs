@@ -2090,6 +2090,33 @@ mod test {
         });
     }
 
+    // Regression (#1280): `set_outcome_token` is an admin-only, deny-by-default
+    // privileged surface that configures the outcome-token contract for the
+    // mint-on-trade edge. Non-admin callers must be rejected, and a successful
+    // admin call must persist the configured address.
+    #[test]
+    fn test_set_outcome_token_admin_only_and_persists_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let outcome_token = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        // Deny-by-default: non-admin cannot configure the outcome token.
+        let err = client.try_set_outcome_token(&stranger, &outcome_token);
+        assert_eq!(err, Err(Ok(crate::StorageError::Unauthorized)));
+
+        // Admin configures the outcome-token contract for mint-on-trade.
+        client.set_outcome_token(&admin, &outcome_token);
+
+        env.as_contract(&contract_id, || {
+            let stored: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::OutcomeToken.symbol())
+                .expect("outcome token should be configured");
+            assert_eq!(stored, outcome_token);
+        });
+    }
+
     #[test]
     fn test_set_resolution_contract_records_contract_address() {
         let (env, admin, client, contract_id) = create_test_contract();
