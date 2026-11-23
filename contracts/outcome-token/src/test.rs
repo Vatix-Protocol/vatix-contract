@@ -3,7 +3,7 @@
 use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, Env, IntoVal, String};
 
 use crate::error::ContractError;
-use crate::types::TokenKind;
+use crate::types::{MarketStatus, TokenKind};
 use crate::{OutcomeTokenContract, OutcomeTokenContractClient};
 
 /// Minimal stand-in for the market contract's `get_market_status` surface
@@ -574,6 +574,53 @@ fn transfer_fails_closed_when_storage_version_is_missing() {
 /// #1069 audit coverage: `cancel_market_contract` clears pending rotation
 /// state, so it must call `assert_version` before touching storage and fail
 /// closed with `UpgradeRequired` on a stale layout.
+// ── #1286: transfer stays fail-closed before and after resolution ────────
+
+#[test]
+fn transfer_regression_rejects_direct_transfers_before_and_after_resolution() {
+    let env = Env::default();
+    let (client, admin, market) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+    let market_client = MockMarketClient::new(&env, &market);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+    assert_eq!(market_client.get_market_status(&1u32), MarketStatus::Active);
+
+    // Invalid amounts are rejected before the market status is consulted.
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &0i128),
+        Err(Ok(ContractError::InvalidAmount))
+    );
+
+    // Before resolution, direct peer-to-peer transfers are disabled so the
+    // price-discovery phase cannot create secondary-market claims.
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::TransfersDisabled))
+    );
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+    assert_eq!(client.balance(&1u32, &other, &TokenKind::Yes), 0i128);
+
+    // After resolution, transfers are still blocked, now with the dedicated
+    // code that protects settlement payouts to the original depositor.
+    market_client.set_status(&MarketStatus::Resolved);
+    assert_eq!(market_client.get_market_status(&1u32), MarketStatus::Resolved);
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::TransferBlockedAfterResolve))
+    );
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+    assert_eq!(client.balance(&1u32, &other, &TokenKind::Yes), 0i128);
+
+    // The pause gate runs before the settlement-status check.
+    client.pause(&admin);
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+}
+
 #[test]
 fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
     let env = Env::default();
