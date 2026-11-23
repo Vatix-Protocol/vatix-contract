@@ -597,6 +597,45 @@ mod tests {
     }
 
     #[test]
+    fn test_is_deposits_paused_defaults_false_and_reads_stored_flag() {
+        // Regression test for Issue #1294: an unset flag means deposits are
+        // allowed (pre-#959 behavior), and the getter must reflect the stored
+        // value rather than a fixed answer.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        env.as_contract(&contract_id, || {
+            assert!(
+                !env.storage()
+                    .instance()
+                    .has(&StorageKey::DepositsPaused),
+                "flag must be genuinely unset for the default case"
+            );
+            assert!(
+                !is_deposits_paused(&env),
+                "must default to false (deposits allowed) when never set"
+            );
+
+            // Write the storage key directly so this test isolates the getter
+            // from `set_deposits_paused` (covered separately in Issue #1295).
+            env.storage()
+                .instance()
+                .set(&StorageKey::DepositsPaused, &true);
+            assert!(
+                is_deposits_paused(&env),
+                "must report true when the flag is stored as true"
+            );
+
+            env.storage()
+                .instance()
+                .set(&StorageKey::DepositsPaused, &false);
+            assert!(
+                !is_deposits_paused(&env),
+                "must report false when the flag is stored as false"
+            );
+        });
+    }
+
+    #[test]
     fn test_deposits_paused_round_trip() {
         let env = Env::default();
         let contract_id = setup_versioned(&env);
