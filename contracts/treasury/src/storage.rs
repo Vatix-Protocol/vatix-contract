@@ -389,7 +389,7 @@ pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events as _};
     use soroban_sdk::Env;
 
     fn setup_versioned(env: &Env) -> Address {
@@ -593,6 +593,58 @@ mod tests {
         env.as_contract(&contract_id, || {
             assert!(!is_deposits_paused(&env));
             assert!(assert_deposits_not_paused(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_set_deposits_paused_is_idempotent() {
+        // Regression test for Issue #1295: replaying the same value must not
+        // toggle the flag or produce additional observable side effects.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        env.as_contract(&contract_id, || {
+            set_deposits_paused(&env, true);
+            assert!(is_deposits_paused(&env));
+            let events_after_first_pause = env.events().all().len();
+
+            set_deposits_paused(&env, true); // replay
+            assert!(
+                is_deposits_paused(&env),
+                "replayed pause must not toggle the flag"
+            );
+            assert_eq!(
+                env.events().all().len(),
+                events_after_first_pause,
+                "replayed pause must not emit more events"
+            );
+            assert_eq!(
+                assert_deposits_not_paused(&env),
+                Err(TreasuryError::DepositsPaused),
+                "replayed pause must keep deposits blocked"
+            );
+
+            set_deposits_paused(&env, false);
+            assert!(!is_deposits_paused(&env));
+            let events_after_first_unpause = env.events().all().len();
+
+            set_deposits_paused(&env, false); // replay
+            assert!(
+                !is_deposits_paused(&env),
+                "replayed unpause must not toggle the flag"
+            );
+            assert_eq!(
+                env.events().all().len(),
+                events_after_first_unpause,
+                "replayed unpause must not emit more events"
+            );
+            assert!(
+                assert_deposits_not_paused(&env).is_ok(),
+                "replayed unpause must keep deposits allowed"
+            );
+
+            // Idempotence must not prevent a genuine later change.
+            set_deposits_paused(&env, true);
+            assert!(is_deposits_paused(&env));
         });
     }
 
