@@ -472,6 +472,48 @@ mod tests {
     }
 
     #[test]
+    fn test_get_authorized_market_returns_first_registered_market() {
+        // Regression test for Issue #1293: this backwards-compatible getter
+        // must always return the first registered market, and must fail with
+        // NotInitialized when no market is registered.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_authorized_market(&env),
+                Err(TreasuryError::NotInitialized),
+                "no markets registered"
+            );
+
+            set_authorized_markets(&env, &soroban_sdk::vec![&env, first.clone(), second.clone()]);
+            assert_eq!(
+                get_authorized_market(&env).unwrap(),
+                first,
+                "must return the first registered market"
+            );
+            assert_ne!(
+                get_authorized_market(&env).unwrap(),
+                second,
+                "must not return a later market"
+            );
+
+            // Removing the original first market must make the new first
+            // element the answer, proving the getter is order-based.
+            set_authorized_markets(&env, &soroban_sdk::vec![&env, second.clone()]);
+            assert_eq!(get_authorized_market(&env).unwrap(), second);
+
+            set_authorized_markets(&env, &Vec::new(&env));
+            assert_eq!(
+                get_authorized_market(&env),
+                Err(TreasuryError::NotInitialized),
+                "empty registry"
+            );
+        });
+    }
+
+    #[test]
     fn test_token_balance_defaults_to_zero() {
         let env = Env::default();
         let contract_id = setup_versioned(&env);
