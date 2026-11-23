@@ -1087,6 +1087,26 @@ mod test {
         });
     }
 
+    /// Regression for #1274: the collateral balance is protocol-wide (keyed
+    /// only by user) and defaults to zero for a user who never deposited.
+    #[test]
+    fn test_get_collateral_balance_defaults_to_zero_and_reads_stored_balance() {
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let user = Address::generate(&env);
+        let other_user = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(get_collateral_balance(&env, &user), 0);
+
+            set_collateral_balance(&env, &user, 1_250);
+            set_collateral_balance(&env, &other_user, 77);
+
+            assert_eq!(get_collateral_balance(&env, &user), 1_250);
+            assert_eq!(get_collateral_balance(&env, &other_user), 77);
+        });
+    }
+
     /// Canary test for issue #764 — ensures that the four modules whose
     /// dead-code suppression is required only due to `#[contractimpl]` macro
     /// hiding call-sites (`positions`, `settlement`, `storage`, `validation`)
