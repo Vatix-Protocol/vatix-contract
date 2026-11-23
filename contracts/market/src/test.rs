@@ -3683,6 +3683,38 @@ mod test {
         assert_eq!(client.get_fee_waivers().len(), 1);
     }
 
+    // Regression (#1282): `get_fee_waiver` is a read-only view over
+    // fee-waiver status. It performs no auth and returns false for addresses
+    // never added and for addresses whose waiver was removed.
+    #[test]
+    fn test_get_fee_waiver_returns_false_for_unknown_and_removed_addresses() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let account = Address::generate(&env);
+
+        assert!(
+            !client.get_fee_waiver(&account),
+            "never-added address should not have a waiver"
+        );
+
+        env.as_contract(&contract_id, || {
+            crate::fee_waiver::add_fee_waiver(&env, &admin, &account)
+                .expect("admin should be able to add waiver");
+        });
+        assert!(
+            client.get_fee_waiver(&account),
+            "added address should report waived"
+        );
+
+        env.as_contract(&contract_id, || {
+            crate::fee_waiver::remove_fee_waiver(&env, &admin, &account)
+                .expect("admin should be able to remove waiver");
+        });
+        assert!(
+            !client.get_fee_waiver(&account),
+            "removed address should report not waived"
+        );
+    }
+
     // ========== GAP-2 regression: oracle V1 disabled fail-closed default ==========
 
     /// Verifies the full lifecycle of the `oracle_v1_disabled` flag:
