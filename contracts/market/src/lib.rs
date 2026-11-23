@@ -559,4 +559,33 @@ mod storage_key_tests {
             );
         }
     }
+
+    /// Issue #1279: pin the documented money-path classification key by key.
+    /// Liquidity, trading, settlement and fee keys must fail closed when
+    /// paused; administrative/oracle/framework keys must not be misclassified.
+    #[test]
+    fn is_money_path_flags_only_liquidity_trading_settlement_and_fee_keys() {
+        let classified = [
+            (StorageKey::Admin, false),
+            (StorageKey::Paused, false),
+            (StorageKey::MarketConfig, false),
+            (StorageKey::LiquidityPool, true),
+            (StorageKey::Position, true),
+            (StorageKey::Settlement, true),
+            (StorageKey::FeeAccrued, true),
+            (StorageKey::OraclePrice, false),
+            (StorageKey::ReentrancyGuard, false),
+            (StorageKey::OutcomeToken, false),
+            (StorageKey::MintOnTradeSeen, true),
+        ];
+        for (key, expected) in classified {
+            assert_eq!(
+                key.is_money_path(),
+                expected,
+                "StorageKey::{} must {}be a money path",
+                key.name(),
+                if expected { "" } else { "not " }
+            );
+        }
+    }
 }
