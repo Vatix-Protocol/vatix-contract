@@ -1107,6 +1107,41 @@ mod test {
         });
     }
 
+    /// Regression for #1275: a market has no adapter config until the admin
+    /// stores one, and the stored Reflector/Pyth config is read back per
+    /// market id.
+    #[test]
+    fn test_get_market_adapter_config_none_until_configured() {
+        use crate::types::{Asset, MarketAdapterConfig};
+
+        let env = Env::default();
+        let contract_id = env.register(crate::MarketContract, ());
+        let oracle_contract = Address::generate(&env);
+        let asset_address = Address::generate(&env);
+        let config = MarketAdapterConfig {
+            oracle_contract: oracle_contract.clone(),
+            asset: Asset::Stellar(asset_address.clone()),
+            resolution_price: 42,
+        };
+
+        env.as_contract(&contract_id, || {
+            assert!(get_market_adapter_config(&env, 11).is_none());
+
+            set_market_adapter_config(&env, 11, &config);
+            let stored = get_market_adapter_config(&env, 11)
+                .expect("configured market should return its adapter config");
+            assert_eq!(stored.oracle_contract, oracle_contract);
+            assert_eq!(stored.resolution_price, 42);
+            match stored.asset {
+                Asset::Stellar(addr) => assert_eq!(addr, asset_address),
+                Asset::Other(_) => panic!("expected the stored Stellar asset"),
+            }
+
+            // Config is scoped to the requested market id.
+            assert!(get_market_adapter_config(&env, 12).is_none());
+        });
+    }
+
     /// Canary test for issue #764 — ensures that the four modules whose
     /// dead-code suppression is required only due to `#[contractimpl]` macro
     /// hiding call-sites (`positions`, `settlement`, `storage`, `validation`)
