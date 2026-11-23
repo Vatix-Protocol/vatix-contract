@@ -248,6 +248,32 @@ proptest! {
         prop_assert_eq!(result, Err(DistributeError::Unauthorized));
         prop_assert_eq!(state, before);
     }
+
+    /// Authz negatives (deny-by-default): a wrong-role caller is rejected
+    /// with `Unauthorized` and leaves state untouched, even when the state is
+    /// already non-empty and the request would otherwise be valid.
+    #[test]
+    fn distribute_rejects_unauthorized(
+        total in 0i128..=i128::MAX / 1_000_000,
+        weights in weights_strategy(),
+        request_id in any::<u64>(),
+    ) {
+        let mut state = TreasuryState::default();
+        let before = state.clone();
+        let result = apply_distribute(&mut state, Role::Public, request_id, total, &weights);
+        prop_assert_eq!(result, Err(DistributeError::Unauthorized));
+        prop_assert_eq!(state, before);
+
+        let mut state = TreasuryState {
+            distributed_total: 25,
+            invocations: 4,
+            processed: std::vec![request_id.wrapping_sub(1)],
+        };
+        let before = state.clone();
+        let result = apply_distribute(&mut state, Role::Public, request_id, total, &weights);
+        prop_assert_eq!(result, Err(DistributeError::Unauthorized));
+        prop_assert_eq!(state, before);
+    }
 }
 
 /// Regression for the documented `apply_distribute` contract: checks are
