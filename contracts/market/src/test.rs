@@ -180,6 +180,49 @@ mod test {
         });
     }
 
+    // Regression (#1281): `initialize` stores admin under StorageKey::Admin and
+    // stamps storage version. A repeat call fails closed with
+    // StorageError::Unauthorized so an initialized admin can never be overwritten.
+    #[test]
+    fn test_initialize_regression_first_call_wins_and_repeat_fails_closed() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let other_admin = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        env.as_contract(&contract_id, || {
+            let stored_admin: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::Admin.symbol())
+                .expect("admin should be stored");
+            assert_eq!(stored_admin, admin);
+            assert!(
+                storage::assert_version(&env).is_ok(),
+                "storage version should be stamped"
+            );
+        });
+
+        assert_eq!(
+            client.try_initialize(&other_admin),
+            Err(Ok(crate::StorageError::Unauthorized))
+        );
+
+        env.as_contract(&contract_id, || {
+            let stored_admin: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::Admin.symbol())
+                .expect("admin should remain set");
+            assert_eq!(stored_admin, admin, "admin must not be overwritten");
+        });
+    }
+
     // ========== Initialize Market Function Tests ==========
 
     #[test]
