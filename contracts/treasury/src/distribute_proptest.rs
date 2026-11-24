@@ -248,4 +248,69 @@ proptest! {
         prop_assert_eq!(result, Err(DistributeError::Unauthorized));
         prop_assert_eq!(state, before);
     }
+
+    /// Authz negatives (deny-by-default): a wrong-role caller is rejected
+    /// with `Unauthorized` and leaves state untouched, even when the state is
+    /// already non-empty and the request would otherwise be valid.
+    #[test]
+    fn distribute_rejects_unauthorized(
+        total in 0i128..=i128::MAX / 1_000_000,
+        weights in weights_strategy(),
+        request_id in any::<u64>(),
+    ) {
+        let mut state = TreasuryState::default();
+        let before = state.clone();
+        let result = apply_distribute(&mut state, Role::Public, request_id, total, &weights);
+        prop_assert_eq!(result, Err(DistributeError::Unauthorized));
+        prop_assert_eq!(state, before);
+
+        let mut state = TreasuryState {
+            distributed_total: 25,
+            invocations: 4,
+            processed: std::vec![request_id.wrapping_sub(1)],
+        };
+        let before = state.clone();
+        let result = apply_distribute(&mut state, Role::Public, request_id, total, &weights);
+        prop_assert_eq!(result, Err(DistributeError::Unauthorized));
+        prop_assert_eq!(state, before);
+    }
+}
+
+/// Regression for the documented `apply_distribute` contract: checks are
+/// applied in order (authz -> replay -> math) and every failure path leaves
+/// the treasury state untouched (fail-closed).
+#[test]
+fn apply_distribute_checks_order_and_is_fail_closed() {
+    let mut state = TreasuryState {
+        distributed_total: 10,
+        invocations: 3,
+        processed: std::vec![42],
+    };
+    let before = state.clone();
+
+    // Authz wins even when the request is also a replay and has bad math.
+    let result = apply_distribute(&mut state, Role::Public, 42, -1, &[1]);
+    assert_eq!(result, Err(DistributeError::Unauthorized));
+    assert_eq!(state, before);
+
+    // Replay wins over malformed distribution inputs.
+    let result = apply_distribute(&mut state, Role::Treasurer, 42, -1, &[]);
+    assert_eq!(result, Err(DistributeError::Replay));
+    assert_eq!(state, before);
+
+    // Math failures do not mutate state either.
+    let result = apply_distribute(&mut state, Role::Treasurer, 43, -1, &[1]);
+    assert_eq!(result, Err(DistributeError::ArithmeticOverflow));
+    assert_eq!(state, before);
+    let result = apply_distribute(&mut state, Role::Treasurer, 43, 100, &[]);
+    assert_eq!(result, Err(DistributeError::InvalidWeights));
+    assert_eq!(state, before);
+
+    // A successful call is the only path that commits state changes.
+    let distribution = apply_distribute(&mut state, Role::Admin, 44, 100, &[1, 3])
+        .expect("valid distribute request must succeed");
+    assert_eq!(distribution.total, 100);
+    assert_eq!(state.distributed_total, 110);
+    assert_eq!(state.invocations, 4);
+    assert!(state.processed.contains(&44));
 }
