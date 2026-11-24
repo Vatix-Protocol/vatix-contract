@@ -1,9 +1,9 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, String};
+use soroban_sdk::{testutils::Address as _, testutils::Events as _, Address, Env, IntoVal, String};
 
 use crate::error::ContractError;
-use crate::types::TokenKind;
+use crate::types::{MarketStatus, TokenKind};
 use crate::{OutcomeTokenContract, OutcomeTokenContractClient};
 
 /// Minimal stand-in for the market contract's `get_market_status` surface
@@ -257,6 +257,86 @@ fn metadata_over_cap_does_not_mutate_state() {
     assert_eq!(client.symbol(), original_symbol);
 }
 
+// ── #1285: set_metadata regression for admin-only, idempotent policy ─────
+
+#[test]
+fn set_metadata_regression_covers_admin_idempotency_and_fail_closed_validation() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let attacker = Address::generate(&env);
+
+    let events_before_change = env.events().all().len();
+
+    let name = String::from_str(&env, "Vatix Outcome YES");
+    let symbol = String::from_str(&env, "vYES");
+    client.set_metadata(&admin, &name, &symbol);
+
+    let events_after_change = env.events().all().len();
+    assert!(
+        events_after_change > events_before_change,
+        "a real metadata change must emit a change event"
+    );
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+
+    // Idempotent replay succeeds without a state write or change event.
+    env.events().all(); // drain the change event before the replay
+    client.set_metadata(&admin, &name, &symbol);
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+    assert_eq!(
+        env.events().all().len(),
+        0,
+        "re-submitting the current metadata must not emit a change event"
+    );
+
+    // Deny-by-default: the stored admin check runs before any state write.
+    assert_eq!(
+        client.try_set_metadata(
+            &attacker,
+            &String::from_str(&env, "Hijacked"),
+            &String::from_str(&env, "HJK"),
+        ),
+        Err(Ok(ContractError::Unauthorized))
+    );
+
+    // Empty values and values over the #958 caps are rejected fail-closed.
+    let over_name = String::from_str(&env, &"N".repeat(crate::MAX_NAME_LEN as usize + 1));
+    let over_symbol = String::from_str(&env, &"S".repeat(crate::MAX_SYMBOL_LEN as usize + 1));
+    assert_eq!(
+        client.try_set_metadata(&admin, &String::from_str(&env, ""), &symbol),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &name, &String::from_str(&env, "")),
+        Err(Ok(ContractError::EmptyMetadata))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &over_name, &symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    assert_eq!(
+        client.try_set_metadata(&admin, &name, &over_symbol),
+        Err(Ok(ContractError::MetadataTooLong))
+    );
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+
+    // Missing config fails closed with the documented typed error.
+    let uninitialized_id = env.register(OutcomeTokenContract, ());
+    let uninitialized = OutcomeTokenContractClient::new(&env, &uninitialized_id);
+    env.as_contract(&uninitialized_id, || {
+        env.storage().persistent().set(
+            &crate::storage::StorageKey::StorageVersion,
+            &crate::storage::STORAGE_VERSION,
+        );
+    });
+    assert_eq!(
+        uninitialized.try_set_metadata(&admin, &name, &symbol),
+        Err(Ok(ContractError::NotInitialized))
+    );
+}
+
 #[test]
 fn non_admin_cannot_bypass_length_caps() {
     let env = Env::default();
@@ -411,6 +491,38 @@ fn pause_blocks_mint_burn_and_transfer_then_unpause_restores_mint_and_burn() {
     );
 }
 
+// ── #1284: unpause must stay admin-only and restore token operations ──────
+
+#[test]
+fn unpause_is_admin_only_and_restores_normal_operations() {
+    let env = Env::default();
+    let (client, admin, _market) = setup(&env);
+    let user = Address::generate(&env);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // The documented failure path: a caller that is not the stored admin
+    // gets `Unauthorized`, and the pause flag must remain set.
+    let attacker = Address::generate(&env);
+    assert_eq!(
+        client.try_unpause(&attacker),
+        Err(Ok(ContractError::Unauthorized))
+    );
+    assert!(client.is_paused());
+    assert_eq!(
+        client.try_mint(&1u32, &user, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+
+    // The stored admin can unpause, which restores normal token operations.
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+    client.mint(&1u32, &user, &TokenKind::Yes, &10i128);
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 110i128);
+}
+
 // ── Issue #1036: transfer must assert_version before touching storage ─────
 
 #[test]
@@ -462,6 +574,53 @@ fn transfer_fails_closed_when_storage_version_is_missing() {
 /// #1069 audit coverage: `cancel_market_contract` clears pending rotation
 /// state, so it must call `assert_version` before touching storage and fail
 /// closed with `UpgradeRequired` on a stale layout.
+// ── #1286: transfer stays fail-closed before and after resolution ────────
+
+#[test]
+fn transfer_regression_rejects_direct_transfers_before_and_after_resolution() {
+    let env = Env::default();
+    let (client, admin, market) = setup(&env);
+    let user = Address::generate(&env);
+    let other = Address::generate(&env);
+    let market_client = MockMarketClient::new(&env, &market);
+
+    client.mint(&1u32, &user, &TokenKind::Yes, &100i128);
+    assert_eq!(market_client.get_market_status(&1u32), MarketStatus::Active);
+
+    // Invalid amounts are rejected before the market status is consulted.
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &0i128),
+        Err(Ok(ContractError::InvalidAmount))
+    );
+
+    // Before resolution, direct peer-to-peer transfers are disabled so the
+    // price-discovery phase cannot create secondary-market claims.
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::TransfersDisabled))
+    );
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+    assert_eq!(client.balance(&1u32, &other, &TokenKind::Yes), 0i128);
+
+    // After resolution, transfers are still blocked, now with the dedicated
+    // code that protects settlement payouts to the original depositor.
+    market_client.set_status(&MarketStatus::Resolved);
+    assert_eq!(market_client.get_market_status(&1u32), MarketStatus::Resolved);
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::TransferBlockedAfterResolve))
+    );
+    assert_eq!(client.balance(&1u32, &user, &TokenKind::Yes), 100i128);
+    assert_eq!(client.balance(&1u32, &other, &TokenKind::Yes), 0i128);
+
+    // The pause gate runs before the settlement-status check.
+    client.pause(&admin);
+    assert_eq!(
+        client.try_transfer(&1u32, &user, &other, &TokenKind::Yes, &10i128),
+        Err(Ok(ContractError::ContractPaused))
+    );
+}
+
 #[test]
 fn cancel_market_contract_fails_closed_when_storage_version_is_stale() {
     let env = Env::default();
