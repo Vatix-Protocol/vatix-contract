@@ -180,6 +180,49 @@ mod test {
         });
     }
 
+    // Regression (#1281): `initialize` stores admin under StorageKey::Admin and
+    // stamps storage version. A repeat call fails closed with
+    // StorageError::Unauthorized so an initialized admin can never be overwritten.
+    #[test]
+    fn test_initialize_regression_first_call_wins_and_repeat_fails_closed() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(MarketContract, ());
+        let client = MarketContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let other_admin = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        env.as_contract(&contract_id, || {
+            let stored_admin: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::Admin.symbol())
+                .expect("admin should be stored");
+            assert_eq!(stored_admin, admin);
+            assert!(
+                storage::assert_version(&env).is_ok(),
+                "storage version should be stamped"
+            );
+        });
+
+        assert_eq!(
+            client.try_initialize(&other_admin),
+            Err(Ok(crate::StorageError::Unauthorized))
+        );
+
+        env.as_contract(&contract_id, || {
+            let stored_admin: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::Admin.symbol())
+                .expect("admin should remain set");
+            assert_eq!(stored_admin, admin, "admin must not be overwritten");
+        });
+    }
+
     // ========== Initialize Market Function Tests ==========
 
     #[test]
@@ -2090,6 +2133,33 @@ mod test {
         });
     }
 
+    // Regression (#1280): `set_outcome_token` is an admin-only, deny-by-default
+    // privileged surface that configures the outcome-token contract for the
+    // mint-on-trade edge. Non-admin callers must be rejected, and a successful
+    // admin call must persist the configured address.
+    #[test]
+    fn test_set_outcome_token_admin_only_and_persists_address() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let outcome_token = Address::generate(&env);
+        let stranger = Address::generate(&env);
+
+        // Deny-by-default: non-admin cannot configure the outcome token.
+        let err = client.try_set_outcome_token(&stranger, &outcome_token);
+        assert_eq!(err, Err(Ok(crate::StorageError::Unauthorized)));
+
+        // Admin configures the outcome-token contract for mint-on-trade.
+        client.set_outcome_token(&admin, &outcome_token);
+
+        env.as_contract(&contract_id, || {
+            let stored: Address = env
+                .storage()
+                .instance()
+                .get(&crate::StorageKey::OutcomeToken.symbol())
+                .expect("outcome token should be configured");
+            assert_eq!(stored, outcome_token);
+        });
+    }
+
     #[test]
     fn test_set_resolution_contract_records_contract_address() {
         let (env, admin, client, contract_id) = create_test_contract();
@@ -3611,6 +3681,38 @@ mod test {
 
         assert!(client.is_fee_waived(&account));
         assert_eq!(client.get_fee_waivers().len(), 1);
+    }
+
+    // Regression (#1282): `get_fee_waiver` is a read-only view over
+    // fee-waiver status. It performs no auth and returns false for addresses
+    // never added and for addresses whose waiver was removed.
+    #[test]
+    fn test_get_fee_waiver_returns_false_for_unknown_and_removed_addresses() {
+        let (env, admin, client, contract_id) = create_test_contract();
+        let account = Address::generate(&env);
+
+        assert!(
+            !client.get_fee_waiver(&account),
+            "never-added address should not have a waiver"
+        );
+
+        env.as_contract(&contract_id, || {
+            crate::fee_waiver::add_fee_waiver(&env, &admin, &account)
+                .expect("admin should be able to add waiver");
+        });
+        assert!(
+            client.get_fee_waiver(&account),
+            "added address should report waived"
+        );
+
+        env.as_contract(&contract_id, || {
+            crate::fee_waiver::remove_fee_waiver(&env, &admin, &account)
+                .expect("admin should be able to remove waiver");
+        });
+        assert!(
+            !client.get_fee_waiver(&account),
+            "removed address should report not waived"
+        );
     }
 
     // ========== GAP-2 regression: oracle V1 disabled fail-closed default ==========
