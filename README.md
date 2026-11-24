@@ -799,3 +799,6 @@ Part of the [Vatix Protocol](https://github.com/vatix-protocol)
 
 <!-- handsoff-issue-1271 -->
 - #1271: Add a regression test for validate_oracle_authorization in contracts/market/src/oracle.rs
+
+<!-- handsoff-issue-1296 -->
+- #1296: Add a regression test for assert_deposits_not_paused in contracts/treasury/src/storage.rs
