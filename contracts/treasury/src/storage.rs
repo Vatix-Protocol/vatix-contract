@@ -389,7 +389,7 @@ pub fn set_emergency_mode(env: &Env, mode: &EmergencyMode) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events as _};
     use soroban_sdk::Env;
 
     fn setup_versioned(env: &Env) -> Address {
@@ -468,6 +468,48 @@ mod tests {
             set_authorized_markets(&env, &markets);
             assert!(!is_authorized_market(&env, &market1));
             assert!(is_authorized_market(&env, &market2));
+        });
+    }
+
+    #[test]
+    fn test_get_authorized_market_returns_first_registered_market() {
+        // Regression test for Issue #1293: this backwards-compatible getter
+        // must always return the first registered market, and must fail with
+        // NotInitialized when no market is registered.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                get_authorized_market(&env),
+                Err(TreasuryError::NotInitialized),
+                "no markets registered"
+            );
+
+            set_authorized_markets(&env, &soroban_sdk::vec![&env, first.clone(), second.clone()]);
+            assert_eq!(
+                get_authorized_market(&env).unwrap(),
+                first,
+                "must return the first registered market"
+            );
+            assert_ne!(
+                get_authorized_market(&env).unwrap(),
+                second,
+                "must not return a later market"
+            );
+
+            // Removing the original first market must make the new first
+            // element the answer, proving the getter is order-based.
+            set_authorized_markets(&env, &soroban_sdk::vec![&env, second.clone()]);
+            assert_eq!(get_authorized_market(&env).unwrap(), second);
+
+            set_authorized_markets(&env, &Vec::new(&env));
+            assert_eq!(
+                get_authorized_market(&env),
+                Err(TreasuryError::NotInitialized),
+                "empty registry"
+            );
         });
     }
 
@@ -551,6 +593,97 @@ mod tests {
         env.as_contract(&contract_id, || {
             assert!(!is_deposits_paused(&env));
             assert!(assert_deposits_not_paused(&env).is_ok());
+        });
+    }
+
+    #[test]
+    fn test_set_deposits_paused_is_idempotent() {
+        // Regression test for Issue #1295: replaying the same value must not
+        // toggle the flag or produce additional observable side effects.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        env.as_contract(&contract_id, || {
+            set_deposits_paused(&env, true);
+            assert!(is_deposits_paused(&env));
+            let events_after_first_pause = env.events().all().len();
+
+            set_deposits_paused(&env, true); // replay
+            assert!(
+                is_deposits_paused(&env),
+                "replayed pause must not toggle the flag"
+            );
+            assert_eq!(
+                env.events().all().len(),
+                events_after_first_pause,
+                "replayed pause must not emit more events"
+            );
+            assert_eq!(
+                assert_deposits_not_paused(&env),
+                Err(TreasuryError::DepositsPaused),
+                "replayed pause must keep deposits blocked"
+            );
+
+            set_deposits_paused(&env, false);
+            assert!(!is_deposits_paused(&env));
+            let events_after_first_unpause = env.events().all().len();
+
+            set_deposits_paused(&env, false); // replay
+            assert!(
+                !is_deposits_paused(&env),
+                "replayed unpause must not toggle the flag"
+            );
+            assert_eq!(
+                env.events().all().len(),
+                events_after_first_unpause,
+                "replayed unpause must not emit more events"
+            );
+            assert!(
+                assert_deposits_not_paused(&env).is_ok(),
+                "replayed unpause must keep deposits allowed"
+            );
+
+            // Idempotence must not prevent a genuine later change.
+            set_deposits_paused(&env, true);
+            assert!(is_deposits_paused(&env));
+        });
+    }
+
+    #[test]
+    fn test_is_deposits_paused_defaults_false_and_reads_stored_flag() {
+        // Regression test for Issue #1294: an unset flag means deposits are
+        // allowed (pre-#959 behavior), and the getter must reflect the stored
+        // value rather than a fixed answer.
+        let env = Env::default();
+        let contract_id = setup_versioned(&env);
+        env.as_contract(&contract_id, || {
+            assert!(
+                !env.storage()
+                    .instance()
+                    .has(&StorageKey::DepositsPaused),
+                "flag must be genuinely unset for the default case"
+            );
+            assert!(
+                !is_deposits_paused(&env),
+                "must default to false (deposits allowed) when never set"
+            );
+
+            // Write the storage key directly so this test isolates the getter
+            // from `set_deposits_paused` (covered separately in Issue #1295).
+            env.storage()
+                .instance()
+                .set(&StorageKey::DepositsPaused, &true);
+            assert!(
+                is_deposits_paused(&env),
+                "must report true when the flag is stored as true"
+            );
+
+            env.storage()
+                .instance()
+                .set(&StorageKey::DepositsPaused, &false);
+            assert!(
+                !is_deposits_paused(&env),
+                "must report false when the flag is stored as false"
+            );
         });
     }
 

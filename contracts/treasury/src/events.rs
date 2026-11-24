@@ -520,6 +520,86 @@ mod tests {
     }
 
     #[test]
+    fn fees_distributed_publishes_one_summary_event() {
+        // Regression test for Issue #1292: `emit_fees_distributed` must emit
+        // exactly one event per call, summarizing the whole payout for `token`
+        // (not one event per stakeholder and not a partial summary).
+        let env = Env::default();
+        let contract_id = env.register(crate::TreasuryContract, ());
+        let token = Address::generate(&env);
+        let events_before = env.events().all().len();
+
+        let distributed_amount: i128 = 1_000;
+        let remaining_token_balance: i128 = 2_000;
+        let stakeholder_count: u32 = 3;
+
+        env.as_contract(&contract_id, || {
+            emit_fees_distributed(
+                &env,
+                &token,
+                distributed_amount,
+                remaining_token_balance,
+                stakeholder_count,
+            );
+        });
+
+        let all = env.events().all();
+        assert_eq!(
+            all.len(),
+            events_before + 1,
+            "emit_fees_distributed must publish exactly one event per call"
+        );
+        let (_, topics, data) = all.last().expect("fees_distributed published");
+
+        let name = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+        assert_eq!(name, Symbol::new(&env, "fees_distributed"), "name topic");
+        assert_eq!(topics.len(), 2, "topic count: name + token");
+        let got_token = Address::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
+        assert_eq!(got_token, token, "token topic");
+
+        let map = Map::<Symbol, Val>::try_from_val(&env, &data).expect("data is a map");
+        assert_eq!(map.len(), 4, "data field count");
+        for key in [
+            "distributed_amount",
+            "remaining_token_balance",
+            "stakeholder_count",
+            "distributed_at",
+        ] {
+            assert!(
+                map.contains_key(Symbol::new(&env, key)),
+                "missing data field '{}'",
+                key
+            );
+        }
+
+        let got_amount: i128 = i128::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "distributed_amount")).unwrap(),
+        )
+        .unwrap();
+        let got_remaining: i128 = i128::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "remaining_token_balance")).unwrap(),
+        )
+        .unwrap();
+        let got_count: u32 = u32::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "stakeholder_count")).unwrap(),
+        )
+        .unwrap();
+        let got_at: u64 = u64::try_from_val(
+            &env,
+            &map.get(Symbol::new(&env, "distributed_at")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(got_amount, distributed_amount, "distributed_amount");
+        assert_eq!(got_remaining, remaining_token_balance, "remaining balance");
+        assert_eq!(got_count, stakeholder_count, "stakeholder_count");
+        assert_eq!(got_at, env.ledger().timestamp(), "distributed_at");
+    }
+
+    #[test]
     fn fees_withdrawn_topics_and_data_shape() {
         let env = Env::default();
         let contract_id = env.register(crate::TreasuryContract, ());
