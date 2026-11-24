@@ -474,4 +474,124 @@ mod tests {
             "replay must not mint/burn"
         );
     }
+
+    /// Issue #1276: `assert_position_token_parity` is the fail-closed guard for
+    /// trading/settlement. A divergent pair must emit
+    /// `PositionTokenMismatchDetected` and reject with `PositionTokenMismatch`;
+    /// it must not silently re-sync. Once repaired, the same guard succeeds.
+    #[test]
+    fn test_assert_position_token_parity_rejects_divergence_and_passes_after_repair() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 1u32;
+
+        let ot_client = setup_outcome_token(&env, &contract_id, &admin);
+        env.as_contract(&contract_id, || {
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+
+        let (err, emitted, balances) = env.as_contract(&contract_id, || {
+            let before = env.events().all().len();
+            let err = assert_position_token_parity(&env, market_id, &user).unwrap_err();
+            (
+                err,
+                env.events().all().len() > before,
+                get_position_token_parity(&env, market_id, &user).unwrap(),
+            )
+        });
+        assert_eq!(err, ContractError::PositionTokenMismatch);
+        assert!(emitted, "divergence must emit PositionTokenMismatchDetected");
+        assert!(!balances.is_matched);
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            0,
+            "guard must not mint tokens to silently re-sync"
+        );
+
+        // The documented recovery path is the admin repair; afterwards the
+        // guard must let the user through again.
+        let correlation_id = BytesN::from_array(&env, &[17u8; 32]);
+        env.as_contract(&contract_id, || {
+            reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap()
+        });
+        env.as_contract(&contract_id, || {
+            assert_position_token_parity(&env, market_id, &user).unwrap()
+        });
+    }
+
+    /// Issue #1277: `reconcile_position_tokens` treats the stored `Position`
+    /// as the source of truth and burns/mints `OutcomeToken` balances to match
+    /// it. The repair consumes its `correlation_id`, emits an event, and a
+    /// later call against the now-consistent pair is a no-op.
+    #[test]
+    fn test_reconcile_position_tokens_burns_overmint_and_records_correlation_id() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::MarketContract, ());
+        let admin = <Address as TestAddress>::generate(&env);
+        let user = <Address as TestAddress>::generate(&env);
+        let market_id = 2u32;
+        let correlation_id = BytesN::from_array(&env, &[23u8; 32]);
+
+        let ot_client = setup_outcome_token(&env, &contract_id, &admin);
+        env.as_contract(&contract_id, || {
+            let mut position = Position::new_empty(market_id, user.clone());
+            position.yes_shares = 100;
+            position.no_shares = 50;
+            storage::set_position(&env, market_id, &user, &position).unwrap();
+        });
+        // Over-mint out-of-band: the token ledger must be burned back down.
+        ot_client.mint(&market_id, &user, &OutcomeTokenKind::Yes, &140);
+        ot_client.mint(&market_id, &user, &OutcomeTokenKind::No, &70);
+
+        let (repaired, emitted) = env.as_contract(&contract_id, || {
+            assert!(
+                !get_position_token_parity(&env, market_id, &user)
+                    .unwrap()
+                    .is_matched
+            );
+            let before = env.events().all().len();
+            let parity =
+                reconcile_position_tokens(&env, &admin, market_id, &user, &correlation_id).unwrap();
+            (parity, env.events().all().len() > before)
+        });
+        assert!(repaired.is_matched);
+        assert_eq!(repaired.yes_token_balance, 100);
+        assert_eq!(repaired.no_token_balance, 50);
+        assert!(emitted, "a genuine repair must emit PositionTokensReconciled");
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::Yes),
+            100
+        );
+        assert_eq!(
+            ot_client.balance(&market_id, &user, &OutcomeTokenKind::No),
+            50
+        );
+        assert!(
+            env.as_contract(&contract_id, || {
+                storage::get_reconciliation_record(&env, &correlation_id)
+            })
+            .is_some(),
+            "repair must record the caller-supplied correlation id"
+        );
+
+        // A second call with a fresh id is a no-op: no new event and the id
+        // is not consumed.
+        let fresh_id = BytesN::from_array(&env, &[24u8; 32]);
+        let before = env.events().all().len();
+        env.as_contract(&contract_id, || {
+            reconcile_position_tokens(&env, &admin, market_id, &user, &fresh_id).unwrap()
+        });
+        assert_eq!(env.events().all().len(), before, "no-op repair must not emit");
+        assert!(env.as_contract(&contract_id, || {
+            storage::get_reconciliation_record(&env, &fresh_id)
+        })
+        .is_none());
+    }
 }
